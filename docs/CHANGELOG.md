@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-22　Firebase 專案建立與正式部署上線
+
+### 需求 / 問題描述
+使用者要求系統直接部署上網，手機開網址即可使用，不需在電腦啟動任何程式。
+
+### 根本原因
+初始建置僅有程式碼，尚未綁定實際 Firebase 專案與部署。
+
+### 修改的檔案與內容摘要
+- 以 Firebase CLI（已登入帳號）自動完成：建立專案 `ems-system-su1220`、
+  註冊 Web 應用程式、產生設定碼寫入 `.env`（不進版控）、
+  建立 Firestore 資料庫（asia-east1 台灣）、部署安全規則與 Hosting。
+- `.firebaserc`：佔位字串改為實際專案 ID `ems-system-su1220`。
+- 上線網址：**https://ems-system-su1220.web.app**
+- GitHub 遠端建立並推送：https://github.com/seansu1220/EMS_System
+
+### 待使用者手動一次性操作（Firebase 無 CLI/API 可自動開通）
+1. 開 https://console.firebase.google.com/project/ems-system-su1220/authentication/providers
+2. 按「開始使用」→ 啟用「電子郵件/密碼」。
+3. （選用）同頁啟用「Google」登入（需選擇支援電子郵件）。
+
+---
+
 ## 2026-07-22　初始建置
 
 ### 需求 / 問題描述
