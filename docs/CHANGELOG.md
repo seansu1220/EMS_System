@@ -4,6 +4,51 @@
 
 ---
 
+## 2026-07-23　v1.1 功能調整
+
+### 問題描述
+依 SPEC v1.1 進行四項需求變更：
+1. 移除「優先度 priority」與「狀態 status」欄位，業務只分「進行中 / 已完成」。
+2. 業務表單屬性下拉可即時新增屬性並自動選取。
+3. 業務詳情頁新增「待辦事項（checklist）」區塊（獨立於進度紀錄）。
+4. 業務詳情頁新增「完成區塊」＋完成後整筆鎖定；首頁提醒卡納入未勾掉的待辦事項。
+
+### 根本原因
+需求變更（非缺陷修正）：使用者調整業務管理模型，改以待辦清單與完成鎖定取代優先度/狀態。
+
+### 修改的檔案與內容摘要
+- `src/types/task.ts`：刪除 `TaskPriority`/`TaskStatus`，`Task`/`TaskDraft` 移除 priority/status；
+  新增 `ChecklistItem` 型別與 `Task` 的 `checklistItems`、`completed`、`completionDate`、`completionNote`。
+- `src/config/constants.ts`：刪除優先度/狀態選項、`DONE_STATUS`、`DEFAULT_PRIORITY`、`DEFAULT_STATUS`、
+  `getPriorityOption`/`getStatusOption`、`Option` 型別；保留 `Tone`。
+- `src/lib/taskLogic.ts`：`isDone` 改判斷 `task.completed`；新增 `ReminderItem` 型別；
+  `getReminderTasks` 改回傳 `ReminderItem[]`（來源＝未完成業務期限＋未完成業務中未勾且有期限的待辦）。
+- `src/services/taskService.ts`：mapping 對舊資料相容（`completed` 取 `data.completed ?? (data.status === 'done')`、
+  checklistItems 預設 []、completionDate 預設 null、completionNote 預設 ''）；寫入不再含 priority/status；
+  `updateTask` 移除 prevStatus 參數；新增 `addChecklistItem`/`toggleChecklistItem`/`removeChecklistItem`、
+  `completeTask`、`reopenTask`。
+- `src/components/TaskForm.tsx`：移除優先度/狀態欄位；屬性下拉新增「＋ 新增屬性…」行內建立
+  （擋空白/重複、sortOrder 取最大值+1、帶入 ownerUid、成功後自動選取）；新增 `disabled` 鎖定與 `ownerUid` prop。
+- `src/components/ProgressSection.tsx`：新增 `locked` prop，鎖定時隱藏新增/刪除。
+- `src/components/ChecklistSection.tsx`（新增）：待辦清單新增/勾選/刪除，未勾在前（期限近到遠、無期限在後）、
+  已勾在後（刪除線淡色）；逾期紅、urgent 天數內橙。
+- `src/components/CompletionSection.tsx`（新增）：完成日期（預設今天）＋完成說明＋「標記完成」（二次確認）。
+- `src/components/ReminderPanel.tsx`：改用 `ReminderItem`；待辦項顯示「待辦」徽章與所屬業務名稱，點擊跳轉業務。
+- `src/pages/HomePage.tsx`：TaskRow 移除優先度/狀態徽章，改顯示「已完成」徽章與未完成待辦數（待辦 N）。
+- `src/pages/TaskDetailPage.tsx`：`updateTask` 改兩參數；新增待辦與完成區塊；完成後鎖定
+  （表單/進度/待辦停用、隱藏刪除與完成區塊、頂部綠色已完成橫幅＋「解除完成」二次確認）；傳入 ownerUid。
+- `src/pages/NewTaskPage.tsx`：`TaskForm` 傳入 `ownerUid={user.uid}`。
+
+### 與規格不同的決定
+- 完成表單另拆為獨立元件 `CompletionSection.tsx`（SPEC 僅明列 ChecklistSection），
+  以符合單一職責、與 ProgressSection 風格一致，未影響規格行為。
+
+### 驗收
+- `npm run build`（tsc -b && vite build）零錯誤（僅 Firebase bundle 體積 > 500kB 常規警告）。
+- 全案搜尋確認 priority/status 僅剩 taskService 舊資料相容 mapping 與其註解。
+
+---
+
 ## 2026-07-23　修正首次登入被誤判為未登入的競態問題
 
 ### 問題描述

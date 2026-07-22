@@ -62,28 +62,40 @@ export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
       </div>
 
       {reminders.length === 0 ? (
-        <p className="text-sm text-slate-400">目前沒有需要提醒的業務。</p>
+        <p className="text-sm text-slate-400">目前沒有需要提醒的項目。</p>
       ) : (
         <ul className="divide-y divide-slate-100">
-          {reminders.map((task) => {
-            const remaining = daysUntil(task.deadline as string);
+          {reminders.map((item, index) => {
+            const remaining = daysUntil(item.deadline);
             return (
-              <li key={task.id}>
+              <li key={`${item.kind}-${item.taskId}-${index}`}>
                 <button
-                  onClick={() => navigate(`/tasks/${task.id}`)}
+                  onClick={() => navigate(`/tasks/${item.taskId}`)}
                   className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-slate-50"
                 >
                   <span className={`w-24 shrink-0 font-mono text-sm ${toneClass(remaining)}`}>
-                    {task.deadline}
+                    {item.deadline}
                   </span>
                   <span className={`w-20 shrink-0 text-xs font-semibold ${toneClass(remaining)}`}>
                     {remainingLabel(remaining)}
                   </span>
-                  <span className="flex-1 truncate text-sm font-medium text-slate-800">
-                    {task.title}
+                  <span className="flex flex-1 items-center gap-2 truncate">
+                    {item.kind === 'checklist' && (
+                      <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        待辦
+                      </span>
+                    )}
+                    <span className="truncate text-sm font-medium text-slate-800">
+                      {item.title}
+                      {item.kind === 'checklist' && item.taskTitle && (
+                        <span className="ml-1 text-xs font-normal text-slate-400">
+                          （{item.taskTitle}）
+                        </span>
+                      )}
+                    </span>
                   </span>
                   <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-600">
-                    {categoryName(task.categoryId)}
+                    {categoryName(item.categoryId)}
                   </span>
                 </button>
               </li>

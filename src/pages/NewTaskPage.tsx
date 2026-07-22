@@ -28,6 +28,7 @@ export function NewTaskPage() {
         ) : (
           <TaskForm
             categories={categories}
+            ownerUid={user?.uid ?? ''}
             onSubmit={handleSubmit}
             onCancel={() => navigate('/')}
             submitLabel="建立業務"

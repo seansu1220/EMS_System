@@ -1,9 +1,27 @@
 /**
- * 業務清單的純邏輯（排序、篩選、期限計算）。
+ * 業務清單的純邏輯（排序、篩選、期限計算、提醒彙整）。
  * 不依賴 React 或 Firebase，皆為純函式（輸入 → 輸出，無副作用），方便獨立測試。
  */
 import type { Task } from '../types/task';
-import { DONE_STATUS } from '../config/constants';
+
+/**
+ * 首頁提醒項目（統一業務期限與待辦事項兩種來源）。
+ * - kind='task'：title 為業務名稱。
+ * - kind='checklist'：title 為待辦內容，taskTitle 為所屬業務名稱。
+ */
+export interface ReminderItem {
+  kind: 'task' | 'checklist';
+  /** 所屬業務的文件 ID（點擊跳轉用）。 */
+  taskId: string;
+  /** 顯示標題（業務名稱，或待辦內容）。 */
+  title: string;
+  /** 待辦項目所屬的業務名稱（僅 kind='checklist' 時有值）。 */
+  taskTitle?: string;
+  /** 期限（yyyy-MM-dd）。 */
+  deadline: string;
+  /** 所屬屬性 ID。 */
+  categoryId: string;
+}
 
 /** 取得今天的 yyyy-MM-dd 字串（以本地時區計）。 */
 export function today(): string {
@@ -26,7 +44,7 @@ export function daysUntil(deadline: string, from: string = today()): number {
 
 /** 業務是否已完成。 */
 export function isDone(task: Task): boolean {
-  return task.status === DONE_STATUS;
+  return task.completed;
 }
 
 /** 業務是否已逾期（有期限、未完成、期限早於今天）。 */
@@ -59,16 +77,43 @@ export function sortTasks(tasks: Task[]): Task[] {
 }
 
 /**
- * 取得提醒清單：未完成、有期限，且期限在 (今天 + withinDays) 之內（含逾期）。
- * 依期限由近到遠排序。
+ * 取得提醒清單（統一項目型別）：期限在 (今天 + withinDays) 之內（含逾期）者納入，依期限近到遠排序。
+ * 來源：①未完成業務的期限；②未完成業務中「未勾掉且有期限」的待辦事項。
+ * （已完成業務、已勾掉的待辦、無期限者皆不納入。）
  * @param withinDays 未來幾天內到期納入提醒（逾期一律納入）
  */
-export function getReminderTasks(tasks: Task[], withinDays: number): Task[] {
+export function getReminderTasks(tasks: Task[], withinDays: number): ReminderItem[] {
   const base = today();
-  return tasks
-    .filter((task) => {
-      if (isDone(task) || !task.deadline) return false;
-      return daysUntil(task.deadline, base) <= withinDays;
-    })
-    .sort((a, b) => (a.deadline ?? '').localeCompare(b.deadline ?? ''));
+  const items: ReminderItem[] = [];
+
+  for (const task of tasks) {
+    if (isDone(task)) continue;
+
+    // ① 業務本身的期限。
+    if (task.deadline && daysUntil(task.deadline, base) <= withinDays) {
+      items.push({
+        kind: 'task',
+        taskId: task.id,
+        title: task.title,
+        deadline: task.deadline,
+        categoryId: task.categoryId,
+      });
+    }
+
+    // ② 未勾掉且有期限的待辦事項。
+    for (const item of task.checklistItems) {
+      if (item.done || !item.deadline) continue;
+      if (daysUntil(item.deadline, base) > withinDays) continue;
+      items.push({
+        kind: 'checklist',
+        taskId: task.id,
+        title: item.content,
+        taskTitle: task.title,
+        deadline: item.deadline,
+        categoryId: task.categoryId,
+      });
+    }
+  }
+
+  return items.sort((a, b) => a.deadline.localeCompare(b.deadline));
 }

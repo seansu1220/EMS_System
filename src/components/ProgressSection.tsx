@@ -11,6 +11,8 @@ import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
 
 interface ProgressSectionProps {
   task: Task;
+  /** 是否鎖定（業務已完成，不可新增/刪除進度）。 */
+  locked?: boolean;
 }
 
 /** 進度排序鍵：先日期、後建立時間（皆新到舊）。 */
@@ -18,7 +20,7 @@ function sortKey(entry: { date: string; createdAt: string }): string {
   return `${entry.date} ${entry.createdAt}`;
 }
 
-export function ProgressSection({ task }: ProgressSectionProps) {
+export function ProgressSection({ task, locked = false }: ProgressSectionProps) {
   const [date, setDate] = useState(today());
   const [content, setContent] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -56,33 +58,35 @@ export function ProgressSection({ task }: ProgressSectionProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        <div className="sm:w-44">
-          <FieldLabel>日期</FieldLabel>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className={INPUT_CLASS}
-          />
+      {!locked && (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="sm:w-44">
+            <FieldLabel>日期</FieldLabel>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className={INPUT_CLASS}
+            />
+          </div>
+          <div className="flex-1">
+            <FieldLabel>進度內容</FieldLabel>
+            <input
+              type="text"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="例如：已詢價 / 已送簽 / 待廠商回覆…"
+              className={INPUT_CLASS}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleAdd();
+              }}
+            />
+          </div>
+          <Button onClick={handleAdd} disabled={saving}>
+            {saving ? '處理中…' : '新增進度'}
+          </Button>
         </div>
-        <div className="flex-1">
-          <FieldLabel>進度內容</FieldLabel>
-          <input
-            type="text"
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="例如：已詢價 / 已送簽 / 待廠商回覆…"
-            className={INPUT_CLASS}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleAdd();
-            }}
-          />
-        </div>
-        <Button onClick={handleAdd} disabled={saving}>
-          {saving ? '處理中…' : '新增進度'}
-        </Button>
-      </div>
+      )}
 
       <ErrorBanner message={error} />
 
@@ -96,12 +100,14 @@ export function ProgressSection({ task }: ProgressSectionProps) {
               <span className="flex-1 whitespace-pre-wrap text-sm text-slate-700">
                 {entry.content}
               </span>
-              <button
-                onClick={() => handleDelete(entry.id)}
-                className="shrink-0 text-xs text-red-500 hover:underline"
-              >
-                刪除
-              </button>
+              {!locked && (
+                <button
+                  onClick={() => handleDelete(entry.id)}
+                  className="shrink-0 text-xs text-red-500 hover:underline"
+                >
+                  刪除
+                </button>
+              )}
             </li>
           ))}
         </ul>

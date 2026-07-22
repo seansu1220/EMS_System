@@ -8,7 +8,6 @@ import { useNavigate } from 'react-router-dom';
 import { useTasks } from '../hooks/useTasks';
 import { useCategories } from '../hooks/useCategories';
 import type { Task } from '../types/task';
-import { getPriorityOption, getStatusOption } from '../config/constants';
 import { isDone, isOverdue } from '../lib/taskLogic';
 import { ReminderPanel } from '../components/ReminderPanel';
 import { Badge, Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
@@ -147,9 +146,9 @@ function TaskRow({
   categoryLabel: string;
   onClick: () => void;
 }) {
-  const priority = getPriorityOption(task.priority);
-  const status = getStatusOption(task.status);
+  const done = isDone(task);
   const overdue = isOverdue(task);
+  const pendingCount = task.checklistItems.filter((item) => !item.done).length;
   const latestProgress = [...task.progressEntries].sort((a, b) =>
     `${b.date} ${b.createdAt}`.localeCompare(`${a.date} ${a.createdAt}`),
   )[0];
@@ -162,8 +161,8 @@ function TaskRow({
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
             {categoryLabel}
           </span>
-          {status && <Badge tone={status.tone}>{status.label}</Badge>}
-          {priority && <Badge tone={priority.tone}>優先度：{priority.label}</Badge>}
+          {done && <Badge tone="green">已完成</Badge>}
+          {!done && pendingCount > 0 && <Badge tone="blue">待辦 {pendingCount}</Badge>}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
           {task.deadline ? (

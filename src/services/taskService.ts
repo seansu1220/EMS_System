@@ -1,5 +1,5 @@
 /**
- * 業務（task）業務邏輯：查詢、新增、更新、刪除、進度管理。
+ * 業務（task）業務邏輯：查詢、新增、更新、刪除、進度與待辦管理、完成/解除。
  * 不依賴 React。權限由 Firestore Security Rules 強制（僅 ownerUid 本人可存取）。
  * 清單排序/篩選於用戶端（見 lib/taskLogic.ts）完成，不需複合索引。
  */
@@ -18,8 +18,8 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { COLLECTIONS, DEFAULT_PRIORITY, DEFAULT_STATUS, DONE_STATUS } from '../config/constants';
-import type { ProgressEntry, Task, TaskDraft, TaskStatus } from '../types/task';
+import { COLLECTIONS } from '../config/constants';
+import type { ChecklistItem, ProgressEntry, Task, TaskDraft } from '../types/task';
 
 /** Firestore Timestamp / 字串 → ISO 字串。 */
 function toIso(value: unknown): string {
@@ -29,7 +29,11 @@ function toIso(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-/** 由文件 ID 與原始資料組出強型別 Task。 */
+/**
+ * 由文件 ID 與原始資料組出強型別 Task。
+ * 對舊資料（可能仍有 status/priority、尚無 checklistItems/completed 等欄位）提供預設值相容：
+ * completed 取 data.completed ?? (data.status === 'done')。
+ */
 function mapTaskData(id: string, data: DocumentData): Task {
   return {
     id,
@@ -37,12 +41,16 @@ function mapTaskData(id: string, data: DocumentData): Task {
     categoryId: data.categoryId ?? '',
     description: data.description ?? '',
     deadline: data.deadline ?? null,
-    priority: data.priority ?? DEFAULT_PRIORITY,
-    status: data.status ?? DEFAULT_STATUS,
     progressEntries: Array.isArray(data.progressEntries)
       ? (data.progressEntries as ProgressEntry[])
       : [],
+    checklistItems: Array.isArray(data.checklistItems)
+      ? (data.checklistItems as ChecklistItem[])
+      : [],
     note: data.note ?? '',
+    completed: data.completed ?? data.status === 'done',
+    completionDate: data.completionDate ?? null,
+    completionNote: data.completionNote ?? '',
     ownerUid: data.ownerUid ?? '',
     createdAt: toIso(data.createdAt),
     updatedAt: toIso(data.updatedAt),
@@ -90,14 +98,18 @@ export function subscribeTask(
   );
 }
 
-/** 新增業務；時間戳與擁有者由系統填入，狀態為已完成時記錄 completedAt。 */
+/** 新增業務；時間戳與擁有者由系統填入，初始為未完成、無進度/待辦。 */
 export async function createTask(draft: TaskDraft, ownerUid: string): Promise<string> {
   try {
     const payload = {
       ...draft,
       progressEntries: [],
+      checklistItems: [],
+      completed: false,
+      completionDate: null,
+      completionNote: '',
       ownerUid,
-      completedAt: draft.status === DONE_STATUS ? serverTimestamp() : null,
+      completedAt: null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -108,21 +120,10 @@ export async function createTask(draft: TaskDraft, ownerUid: string): Promise<st
   }
 }
 
-/**
- * 更新業務可編輯欄位。
- * 若本次更動了狀態：改為「已完成」時記錄 completedAt；改回其他狀態則清空。
- * @param prevStatus 更新前的狀態（用來判斷是否需要調整 completedAt）
- */
-export async function updateTask(
-  taskId: string,
-  fields: Partial<TaskDraft>,
-  prevStatus: TaskStatus,
-): Promise<void> {
+/** 更新業務可編輯欄位（不含完成狀態，完成/解除請用 completeTask/reopenTask）。 */
+export async function updateTask(taskId: string, fields: Partial<TaskDraft>): Promise<void> {
   try {
     const patch: DocumentData = { ...fields, updatedAt: serverTimestamp() };
-    if (fields.status && fields.status !== prevStatus) {
-      patch.completedAt = fields.status === DONE_STATUS ? serverTimestamp() : null;
-    }
     await updateDoc(doc(db, COLLECTIONS.tasks, taskId), patch);
   } catch (error) {
     throw new Error(`更新業務失敗（taskService.updateTask）：${(error as Error).message}`);
@@ -174,5 +175,92 @@ export async function deleteProgressEntry(existing: Task, entryId: string): Prom
     });
   } catch (error) {
     throw new Error(`刪除進度失敗（taskService.deleteProgressEntry）：${(error as Error).message}`);
+  }
+}
+
+/** 依輸入組出一筆待辦事項。 */
+function buildChecklistItem(input: { content: string; deadline: string | null }): ChecklistItem {
+  return {
+    id: crypto.randomUUID(),
+    content: input.content,
+    deadline: input.deadline,
+    done: false,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** 新增一筆待辦事項（內容 + 可選期限）。 */
+export async function addChecklistItem(
+  existing: Task,
+  input: { content: string; deadline: string | null },
+): Promise<void> {
+  try {
+    const next = [...existing.checklistItems, buildChecklistItem(input)];
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`新增待辦失敗（taskService.addChecklistItem）：${(error as Error).message}`);
+  }
+}
+
+/** 切換一筆待辦事項的完成狀態（勾選/取消）。 */
+export async function toggleChecklistItem(existing: Task, itemId: string): Promise<void> {
+  try {
+    const next = existing.checklistItems.map((item) =>
+      item.id === itemId ? { ...item, done: !item.done } : item,
+    );
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`更新待辦失敗（taskService.toggleChecklistItem）：${(error as Error).message}`);
+  }
+}
+
+/** 刪除一筆待辦事項。 */
+export async function removeChecklistItem(existing: Task, itemId: string): Promise<void> {
+  try {
+    const next = existing.checklistItems.filter((item) => item.id !== itemId);
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`刪除待辦失敗（taskService.removeChecklistItem）：${(error as Error).message}`);
+  }
+}
+
+/** 標記業務完成（鎖定）：記錄完成日期、說明與完成時間。 */
+export async function completeTask(
+  taskId: string,
+  completionDate: string,
+  completionNote: string,
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, COLLECTIONS.tasks, taskId), {
+      completed: true,
+      completionDate,
+      completionNote,
+      completedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`標記完成失敗（taskService.completeTask）：${(error as Error).message}`);
+  }
+}
+
+/** 解除完成（恢復可編輯）：completionDate / completionNote 保留供參考。 */
+export async function reopenTask(taskId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, COLLECTIONS.tasks, taskId), {
+      completed: false,
+      completedAt: null,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`解除完成失敗（taskService.reopenTask）：${(error as Error).message}`);
   }
 }
