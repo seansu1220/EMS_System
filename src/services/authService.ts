@@ -34,10 +34,11 @@ function toFriendlyMessage(error: unknown): string {
 }
 
 /**
- * 確保 users 文件存在；若不存在（例如首次以 Google 登入）則建立。
- * 已存在則不覆寫。
+ * 確保 users 文件存在；若不存在（例如首次登入）則建立。
+ * 已存在則不覆寫。由 AuthProvider 於登入狀態變化時呼叫，
+ * 避免「登入成功但文件尚未建立」的競態導致被誤判為未登入。
  */
-async function ensureUserDoc(uid: string, email: string, displayName: string): Promise<void> {
+export async function ensureUserDoc(uid: string, email: string, displayName: string): Promise<void> {
   const ref = doc(db, COLLECTIONS.users, uid);
   const snapshot = await getDoc(ref);
   if (snapshot.exists()) return;

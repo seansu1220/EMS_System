@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-23　修正首次登入被誤判為未登入的競態問題
+
+### 問題描述
+啟用 Authentication 後仍無法登入：登入成功卻停在登入頁（F12 的
+Cross-Origin-Opener-Policy 警告為 Firebase SDK 已知無害訊息，非原因）。
+
+### 根本原因
+登入成功瞬間 `onAuthStateChanged` 先觸發並讀取 `users/{uid}` 文件，
+但首次登入時該文件是在登入「之後」才由 register/loginWithGoogle 建立，
+讀到 null → `setUser(null)` → ProtectedRoute/LoginPage 判定未登入而踢回登入頁。
+
+### 修改的檔案與內容
+- `src/services/authService.ts`：`ensureUserDoc` 改為 export，供 AuthProvider 使用。
+- `src/context/AuthProvider.tsx`：登入狀態變化時先 `ensureUserDoc` 再讀 profile；
+  讀不到時以 Firebase 登入資訊組備援 profile，不再誤判未登入；
+  `ensureDefaultCategories` 改用 uid 直接呼叫並獨立 try-catch（失敗不影響登入）。
+
+### 驗收
+- `npm run build` 零錯誤；已重新部署 Hosting。
+- Email 註冊 API 實測正常（建立測試帳號後即刪除）；COOP 標頭確認部署正確。
+
+---
+
 ## 2026-07-22　Firebase 專案建立與正式部署上線
 
 ### 需求 / 問題描述
