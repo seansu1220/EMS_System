@@ -1,0 +1,18 @@
+@import 'tailwindcss';
+
+:root {
+  font-family: 'Noto Sans TC', system-ui, 'Microsoft JhengHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #f1f5f9; /* slate-100 */
+}

@@ -1,0 +1,39 @@
+{
+  "firestore": {
+    "rules": "firebase/firestore.rules",
+    "indexes": "firebase/firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "comment": "index.html 永不快取，確保每次都載入到最新版本（指向新的雜湊檔名資產）",
+        "source": "/index.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "comment": "帶內容雜湊的靜態資產可長期快取（檔名改變即視為新檔，不會抓到舊的）",
+        "source": "**/*.@(js|css|woff2|woff|ttf|png|jpg|jpeg|gif|svg|webp|ico)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      },
+      {
+        "comment": "讓 Google 登入彈出視窗能正常運作",
+        "source": "**",
+        "headers": [
+          { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" }
+        ]
+      }
+    ]
+  }
+}

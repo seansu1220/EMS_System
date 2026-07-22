@@ -1,0 +1,45 @@
+rules_version = '2';
+
+// Firestore 安全規則：權限的「最終防線」。
+// 即使前端被繞過，下列規則仍會在資料庫層阻擋未授權的讀寫。
+// 本系統為單一使用者多裝置使用，所有資料僅本人（ownerUid == auth.uid）可存取。
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // 讀寫既有文件：必須是該文件的擁有者。
+    function isOwner() {
+      return isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // 建立文件：強制 ownerUid 等於自己，避免替他人建立資料。
+    function isCreatingOwn() {
+      return isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+    }
+
+    // ── 使用者：僅本人文件 ──
+    match /users/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      // 建立/更新自己的文件，且 uid 欄位須與文件 ID 一致。
+      allow create, update: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── 屬性（分類）：僅擁有者可存取 ──
+    match /categories/{categoryId} {
+      allow read, update, delete: if isOwner();
+      allow create: if isCreatingOwn();
+    }
+
+    // ── 業務：僅擁有者可存取 ──
+    match /tasks/{taskId} {
+      allow read, update, delete: if isOwner();
+      allow create: if isCreatingOwn();
+    }
+  }
+}

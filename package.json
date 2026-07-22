@@ -1,0 +1,29 @@
+{
+  "name": "ems-system",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "救護科業務管理系統 - 業務 CRUD、期限提醒、進度管理、屬性分類、跨裝置雲端同步",
+  "scripts": {
+    "dev": "vite",
+    "start": "vite --open",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy"
+  },
+  "dependencies": {
+    "firebase": "^11.3.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.6",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.6",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

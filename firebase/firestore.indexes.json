@@ -1,0 +1,5 @@
+{
+  "comment": "業務列表與提醒的排序/篩選皆於用戶端完成（僅以 ownerUid 單欄位過濾），故不需複合索引。",
+  "indexes": [],
+  "fieldOverrides": []
+}

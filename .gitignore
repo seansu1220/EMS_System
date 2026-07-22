@@ -1,0 +1,31 @@
+# 依賴
+node_modules/
+
+# 建置輸出
+dist/
+dist-ssr/
+*.local
+
+# 環境變數與密鑰（CLAUDE.md 規範）
+.env
+.env.*
+!.env.example
+*.pkl
+
+# Firebase 服務帳號金鑰（絕不可進版控）
+serviceAccountKey.json
+firebase-service-account*.json
+.firebase/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 編輯器與系統
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.log

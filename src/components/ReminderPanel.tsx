@@ -1,0 +1,96 @@
+/**
+ * 首頁上方的近期任務提醒卡。
+ * 預設顯示「已逾期 + 7 天內到期」的未完成業務；點「展開」改為 30 天內。
+ * 顏色：已逾期＝紅、期限在 urgent 天數內＝橙、其餘＝一般色。點擊跳轉業務詳情。
+ *
+ * 純顯示元件：提醒清單的計算來自 lib/taskLogic（純函式），本元件不含資料存取邏輯。
+ */
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { Task } from '../types/task';
+import type { Category } from '../types/category';
+import { REMINDER_DAYS } from '../config/constants';
+import { daysUntil, getReminderTasks } from '../lib/taskLogic';
+import { Card } from './ui';
+
+interface ReminderPanelProps {
+  tasks: Task[];
+  categories: Category[];
+}
+
+/** 依剩餘天數決定文字顏色。 */
+function toneClass(remaining: number): string {
+  if (remaining < 0) return 'text-red-600';
+  if (remaining <= REMINDER_DAYS.urgent) return 'text-amber-600';
+  return 'text-slate-600';
+}
+
+/** 將剩餘天數轉為中文描述。 */
+function remainingLabel(remaining: number): string {
+  if (remaining < 0) return `逾期 ${Math.abs(remaining)} 天`;
+  if (remaining === 0) return '今天到期';
+  return `剩 ${remaining} 天`;
+}
+
+export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
+  const navigate = useNavigate();
+  const [expanded, setExpanded] = useState(false);
+
+  const withinDays = expanded ? REMINDER_DAYS.expanded : REMINDER_DAYS.default;
+  const categoryName = useMemo(() => {
+    const map = new Map(categories.map((category) => [category.id, category.name]));
+    return (id: string) => map.get(id) ?? '未分類';
+  }, [categories]);
+
+  const reminders = useMemo(() => getReminderTasks(tasks, withinDays), [tasks, withinDays]);
+
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-base font-bold text-slate-800">
+          近期提醒
+          <span className="ml-2 text-xs font-normal text-slate-400">
+            （逾期 + {withinDays} 天內到期）
+          </span>
+        </h2>
+        <button
+          onClick={() => setExpanded((prev) => !prev)}
+          className="text-sm font-medium text-slate-600 hover:underline"
+        >
+          {expanded ? '收合（7 天）' : '展開（30 天）'}
+        </button>
+      </div>
+
+      {reminders.length === 0 ? (
+        <p className="text-sm text-slate-400">目前沒有需要提醒的業務。</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {reminders.map((task) => {
+            const remaining = daysUntil(task.deadline as string);
+            return (
+              <li key={task.id}>
+                <button
+                  onClick={() => navigate(`/tasks/${task.id}`)}
+                  className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-slate-50"
+                >
+                  <span className={`w-24 shrink-0 font-mono text-sm ${toneClass(remaining)}`}>
+                    {task.deadline}
+                  </span>
+                  <span className={`w-20 shrink-0 text-xs font-semibold ${toneClass(remaining)}`}>
+                    {remainingLabel(remaining)}
+                  </span>
+                  <span className="flex-1 truncate text-sm font-medium text-slate-800">
+                    {task.title}
+                  </span>
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs text-slate-600">
+                    {categoryName(task.categoryId)}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
