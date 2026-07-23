@@ -118,15 +118,20 @@ export async function renameCategory(categoryId: string, name: string): Promise<
   }
 }
 
-/** 交換兩個屬性的 sortOrder（供上移/下移排序）。 */
-export async function swapCategoryOrder(a: Category, b: Category): Promise<void> {
+/**
+ * 依給定的屬性 ID 順序批次重寫 sortOrder（供拖曳排序）。
+ * 傳入的陣列即為期望的顯示順序，每筆的 sortOrder 會被設為其索引（0..n-1）。
+ * @param orderedIds 依目標順序排列的屬性 ID 陣列
+ */
+export async function reorderCategories(orderedIds: string[]): Promise<void> {
   try {
     const batch = writeBatch(db);
-    batch.update(doc(db, COLLECTIONS.categories, a.id), { sortOrder: b.sortOrder });
-    batch.update(doc(db, COLLECTIONS.categories, b.id), { sortOrder: a.sortOrder });
+    orderedIds.forEach((categoryId, index) => {
+      batch.update(doc(db, COLLECTIONS.categories, categoryId), { sortOrder: index });
+    });
     await batch.commit();
   } catch (error) {
-    throw new Error(`排序失敗（categoryService.swapCategoryOrder）：${(error as Error).message}`);
+    throw new Error(`排序失敗（categoryService.reorderCategories）：${(error as Error).message}`);
   }
 }
 

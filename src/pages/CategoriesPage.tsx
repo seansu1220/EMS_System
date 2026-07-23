@@ -1,9 +1,26 @@
 /**
  * 屬性管理頁。
- * 可新增、改名、上移/下移排序、刪除屬性。
+ * 可新增、改名、拖曳排序、刪除屬性。
+ * 排序改為拖曳（桌機滑鼠、手機長按），放開後依新順序批次寫入 sortOrder（0..n-1）。
  * 刪除仍被業務使用的屬性前，須先選擇轉移目標屬性，批次轉移後再刪除。
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useAuth } from '../hooks/useAuth';
 import { useCategories } from '../hooks/useCategories';
 import {
@@ -12,7 +29,7 @@ import {
   deleteCategory,
   reassignTasksCategory,
   renameCategory,
-  swapCategoryOrder,
+  reorderCategories,
 } from '../services/categoryService';
 import type { Category } from '../types/category';
 import { Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
@@ -34,6 +51,23 @@ export function CategoriesPage() {
   const [deleteFlow, setDeleteFlow] = useState<DeleteFlow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 本地排序 state：拖曳時樂觀更新，避免等待 Firestore 回波。
+  const [orderedCategories, setOrderedCategories] = useState<Category[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
+
+  // 非拖曳且非儲存中時，才與即時訂閱資料同步，避免寫入回波把畫面閃回舊順序。
+  useEffect(() => {
+    if (isDragging || savingOrder) return;
+    setOrderedCategories(categories);
+  }, [categories, isDragging, savingOrder]);
+
+  // 感測器：滑鼠移動 5px 才啟動；觸控需長按 200ms（避免與捲動衝突）。
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+  );
 
   async function handleAdd() {
     if (!user) return;
@@ -75,15 +109,27 @@ export function CategoriesPage() {
     }
   }
 
-  async function handleMove(index: number, direction: -1 | 1) {
-    const neighbor = categories[index + direction];
-    const current = categories[index];
-    if (!neighbor || !current) return;
+  /** 拖曳結束：算出新順序 → 樂觀更新本地 state → 批次寫入 sortOrder。 */
+  async function handleDragEnd(event: DragEndEvent) {
+    setIsDragging(false);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = orderedCategories.findIndex((item) => item.id === active.id);
+    const newIndex = orderedCategories.findIndex((item) => item.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(orderedCategories, oldIndex, newIndex);
+    setOrderedCategories(reordered); // 樂觀更新，畫面立即反映新順序
+    setSavingOrder(true);
     setError(null);
     try {
-      await swapCategoryOrder(current, neighbor);
+      await reorderCategories(reordered.map((item) => item.id));
     } catch (err) {
       setError((err as Error).message);
+      setOrderedCategories(categories); // 失敗還原為訂閱資料的順序
+    } finally {
+      setSavingOrder(false);
     }
   }
 
@@ -151,74 +197,47 @@ export function CategoriesPage() {
         </div>
       </Card>
 
-      {/* 屬性清單 */}
+      {/* 屬性清單（拖曳排序） */}
       <Card>
-        <h2 className="mb-3 text-base font-bold text-slate-700">現有屬性</h2>
+        <h2 className="mb-1 text-base font-bold text-slate-700">現有屬性</h2>
+        <p className="mb-3 text-xs text-slate-400">拖曳左側把手可調整順序（手機請長按把手）。</p>
         {loading ? (
           <CenteredSpinner />
-        ) : categories.length === 0 ? (
+        ) : orderedCategories.length === 0 ? (
           <p className="text-sm text-slate-400">尚無屬性。</p>
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {categories.map((category, index) => (
-              <li key={category.id} className="flex items-center gap-2 py-3">
-                {editingId === category.id ? (
-                  <>
-                    <input
-                      type="text"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      className={`${INPUT_CLASS} flex-1`}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleRename(category);
-                      }}
-                    />
-                    <Button onClick={() => handleRename(category)} disabled={busy}>
-                      儲存
-                    </Button>
-                    <Button variant="secondary" onClick={() => setEditingId(null)} disabled={busy}>
-                      取消
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <span className="flex-1 font-medium text-slate-800">{category.name}</span>
-                    <div className="flex items-center gap-1">
-                      <IconButton
-                        label="上移"
-                        disabled={index === 0}
-                        onClick={() => handleMove(index, -1)}
-                      >
-                        ↑
-                      </IconButton>
-                      <IconButton
-                        label="下移"
-                        disabled={index === categories.length - 1}
-                        onClick={() => handleMove(index, 1)}
-                      >
-                        ↓
-                      </IconButton>
-                      <button
-                        onClick={() => {
-                          setEditingId(category.id);
-                          setEditingName(category.name);
-                        }}
-                        className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-                      >
-                        改名
-                      </button>
-                      <button
-                        onClick={() => handleDeleteClick(category)}
-                        className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
-                      >
-                        刪除
-                      </button>
-                    </div>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => setIsDragging(true)}
+            onDragCancel={() => setIsDragging(false)}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={orderedCategories.map((item) => item.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ul className="divide-y divide-slate-100">
+                {orderedCategories.map((category) => (
+                  <SortableCategoryRow
+                    key={category.id}
+                    category={category}
+                    isEditing={editingId === category.id}
+                    editingName={editingName}
+                    busy={busy}
+                    onEditingNameChange={setEditingName}
+                    onStartEdit={() => {
+                      setEditingId(category.id);
+                      setEditingName(category.name);
+                    }}
+                    onCancelEdit={() => setEditingId(null)}
+                    onRename={() => handleRename(category)}
+                    onDelete={() => handleDeleteClick(category)}
+                  />
+                ))}
+              </ul>
+            </SortableContext>
+          </DndContext>
         )}
       </Card>
 
@@ -261,27 +280,95 @@ export function CategoriesPage() {
   );
 }
 
-/** 小型圖示按鈕（上移/下移）。 */
-function IconButton({
-  label,
-  disabled,
-  onClick,
-  children,
+/** 單列屬性（可拖曳）。顯示模式含拖曳把手；編輯模式顯示輸入框與儲存/取消。 */
+function SortableCategoryRow({
+  category,
+  isEditing,
+  editingName,
+  busy,
+  onEditingNameChange,
+  onStartEdit,
+  onCancelEdit,
+  onRename,
+  onDelete,
 }: {
-  label: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
+  category: Category;
+  isEditing: boolean;
+  editingName: string;
+  busy: boolean;
+  onEditingNameChange: (name: string) => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onRename: () => void;
+  onDelete: () => void;
 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: category.id,
+  });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
   return (
-    <button
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+    <li
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center gap-2 bg-white py-1"
     >
-      {children}
-    </button>
+      {isEditing ? (
+        <>
+          <input
+            type="text"
+            value={editingName}
+            onChange={(e) => onEditingNameChange(e.target.value)}
+            className={`${INPUT_CLASS} flex-1`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onRename();
+            }}
+          />
+          <Button onClick={onRename} disabled={busy}>
+            儲存
+          </Button>
+          <Button variant="secondary" onClick={onCancelEdit} disabled={busy}>
+            取消
+          </Button>
+        </>
+      ) : (
+        <>
+          {/* 拖曳把手：觸控目標至少 40px、touch-action:none 避免與捲動衝突。 */}
+          <button
+            type="button"
+            aria-label="拖曳排序"
+            title="拖曳排序"
+            {...attributes}
+            {...listeners}
+            className="flex h-10 w-10 flex-shrink-0 touch-none cursor-grab items-center justify-center rounded-lg text-lg text-slate-400 select-none hover:bg-slate-100 hover:text-slate-600 active:cursor-grabbing"
+          >
+            ⠿
+          </button>
+          <span className="flex-1 font-medium text-slate-800">{category.name}</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onStartEdit}
+              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+            >
+              改名
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
+            >
+              刪除
+            </button>
+          </div>
+        </>
+      )}
+    </li>
   );
 }

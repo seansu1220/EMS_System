@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-07-23　v1.3 屬性排序改拖曳
+
+### 問題描述
+依 SPEC v1.3（2.4 節）將屬性管理頁 `/categories` 的排序方式，
+由「上移 ↑ / 下移 ↓」按鈕改為拖曳排序：桌機滑鼠拖曳、手機長按拖曳，
+每列前方設拖曳把手，放開後依新順序批次寫入 `sortOrder`（0..n-1）。
+
+### 根本原因
+需求變更（非缺陷）：使用者調整排序操作模型，改用直覺的拖曳取代逐格移動。
+
+### 修改的檔案與內容摘要
+- `package.json`：新增依賴 `@dnd-kit/core`、`@dnd-kit/sortable`、`@dnd-kit/utilities`。
+- `src/services/categoryService.ts`：移除 `swapCategoryOrder`（上移/下移用），
+  新增 `reorderCategories(orderedIds: string[])`——以 `writeBatch` 將每筆屬性的
+  `sortOrder` 依陣列索引重寫為 0..n-1，try-catch 中文錯誤含函式位置。
+- `src/pages/CategoriesPage.tsx`：移除上移/下移按鈕與 `handleMove`、`IconButton`；
+  以 `DndContext` + `SortableContext`（`verticalListSortingStrategy`）包住清單，
+  抽出 `SortableCategoryRow` 元件（`useSortable`），每列加拖曳把手
+  （⠿ 圖示、觸控目標 40px、`touch-none`、`cursor-grab`）。
+  感測器：`PointerSensor`（distance 5）＋ `TouchSensor`（delay 200ms、tolerance 8），
+  手機長按 200ms 才啟動拖曳以避免與捲動衝突。
+  新增本地順序 state `orderedCategories`：`onDragEnd` 以 `arrayMove` 算新順序後
+  樂觀更新畫面，再呼叫 `reorderCategories`；失敗顯示中文錯誤並還原為訂閱資料順序。
+  以 `useEffect` 在「非拖曳且非儲存中」時才與 `useCategories` 即時訂閱同步，
+  避免 Firestore 寫入回波把畫面閃回舊順序。改名／刪除／新增等既有功能維持不變。
+
+### 驗收
+- `npm install` 成功新增 4 個套件；`npm run build`（tsc -b && vite build）零錯誤
+  （僅 Firebase bundle 體積 > 500kB 常規警告）。
+
+---
+
 ## 2026-07-23　v1.2 功能調整與儲存按鈕修正
 
 ### 問題描述
