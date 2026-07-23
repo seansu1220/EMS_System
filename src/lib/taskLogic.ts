@@ -17,8 +17,8 @@ export interface ReminderItem {
   title: string;
   /** 待辦項目所屬的業務名稱（僅 kind='checklist' 時有值）。 */
   taskTitle?: string;
-  /** 期限（yyyy-MM-dd）。 */
-  deadline: string;
+  /** 期限（yyyy-MM-dd）；null 代表無期限業務（永遠顯示於提醒卡末段）。 */
+  deadline: string | null;
   /** 所屬屬性 ID。 */
   categoryId: string;
 }
@@ -109,10 +109,13 @@ export function sortTasks(tasks: Task[]): Task[] {
     const doneB = isDone(b);
     if (doneA !== doneB) return doneA ? 1 : -1;
 
-    // 2) 期限近到遠；無期限（null）排在有期限之後。
+    // 2) 期限排序（此時 a、b 完成狀態相同）：
+    //    未完成 → 無期限在前（易遺忘，優先曝光），其後依期限近到遠；
+    //    已完成 → 維持原規則（有期限依近到遠，無期限排最後）。
     if (a.deadline && b.deadline) {
       if (a.deadline !== b.deadline) return a.deadline.localeCompare(b.deadline);
     } else if (a.deadline || b.deadline) {
+      if (!doneA) return a.deadline ? 1 : -1;
       return a.deadline ? -1 : 1;
     }
 
@@ -122,9 +125,13 @@ export function sortTasks(tasks: Task[]): Task[] {
 }
 
 /**
- * 取得提醒清單（統一項目型別）：期限在 (今天 + withinDays) 之內（含逾期）者納入，依期限近到遠排序。
+ * 取得提醒清單（統一項目型別）。
  * 來源：①未完成業務的期限；②未完成業務中「未勾掉且有期限」的待辦事項。
- * （已完成業務、已勾掉的待辦、無期限者皆不納入。）
+ * 納入規則：
+ * - 有期限者：期限在 (今天 + withinDays) 之內（含逾期）才納入。
+ * - 未完成且「無期限」的業務：一律納入（不受 withinDays 限制，deadline 為 null），避免被遺忘。
+ * - 已完成業務、已勾掉的待辦、無期限的待辦事項皆不納入。
+ * 排序：有期限者在前（依期限近到遠），無期限者集中在最後。
  * @param withinDays 未來幾天內到期納入提醒（逾期一律納入）
  */
 export function getReminderTasks(tasks: Task[], withinDays: number): ReminderItem[] {
@@ -134,8 +141,16 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
   for (const task of tasks) {
     if (isDone(task)) continue;
 
-    // ① 業務本身的期限。
-    if (task.deadline && daysUntil(task.deadline, base) <= withinDays) {
+    // ① 業務本身：無期限一律納入（deadline=null）；有期限則須在視窗內。
+    if (task.deadline === null) {
+      items.push({
+        kind: 'task',
+        taskId: task.id,
+        title: task.title,
+        deadline: null,
+        categoryId: task.categoryId,
+      });
+    } else if (daysUntil(task.deadline, base) <= withinDays) {
       items.push({
         kind: 'task',
         taskId: task.id,
@@ -145,7 +160,7 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
       });
     }
 
-    // ② 未勾掉且有期限的待辦事項。
+    // ② 未勾掉且有期限的待辦事項（無期限待辦不納入）。
     for (const item of task.checklistItems) {
       if (item.done || !item.deadline) continue;
       if (daysUntil(item.deadline, base) > withinDays) continue;
@@ -160,5 +175,10 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
     }
   }
 
-  return items.sort((a, b) => a.deadline.localeCompare(b.deadline));
+  // 有期限者在前（近到遠）；無期限者（null）集中排在最後。
+  return items.sort((a, b) => {
+    if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+    if (a.deadline || b.deadline) return a.deadline ? -1 : 1;
+    return 0;
+  });
 }
