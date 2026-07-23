@@ -3,6 +3,16 @@
  * 對應 Firestore `tasks/{id}` 文件。
  */
 
+/**
+ * 定期業務的週期規則；null 代表單次業務。
+ * 以可辨識聯集（discriminated union）表示四種週期型態，type 為判別欄位。
+ */
+export type RecurrenceRule =
+  | { type: 'monthly'; day: number } // 每月 day 號（1-31）
+  | { type: 'weekly'; weekday: number } // 每週星期幾（0=日 … 6=六）
+  | { type: 'everyNDays'; n: number } // 每 N 天一次（n >= 1）
+  | { type: 'yearly'; month: number; day: number }; // 每年 month 月 day 日
+
 /** 單筆進度紀錄：使用者選一個日期 + 填寫當下進度內容。 */
 export interface ProgressEntry {
   /** 前端產生的唯一 ID（用於 React key 與刪除）。 */
@@ -43,6 +53,8 @@ export interface Task {
   description: string;
   /** 期限（yyyy-MM-dd）；null 代表無期限。 */
   deadline: string | null;
+  /** 週期規則；null 代表單次業務。完成一期後期限自動跳至下一期。 */
+  recurrence: RecurrenceRule | null;
   /** 進度紀錄列表（顯示時由新到舊）。 */
   progressEntries: ProgressEntry[];
   /** 待辦事項清單。 */
@@ -76,5 +88,7 @@ export interface TaskDraft {
   categoryId: string;
   description: string;
   deadline: string | null;
+  /** 週期規則；null 代表單次業務。 */
+  recurrence: RecurrenceRule | null;
   note: string;
 }

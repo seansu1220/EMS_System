@@ -20,6 +20,7 @@ import {
 import { db } from '../lib/firebase';
 import { COLLECTIONS } from '../config/constants';
 import type { ChecklistItem, ProgressEntry, Task, TaskDraft } from '../types/task';
+import { nextOccurrence } from '../lib/recurrence';
 
 /** Firestore Timestamp / 字串 → ISO 字串。 */
 function toIso(value: unknown): string {
@@ -41,6 +42,8 @@ function mapTaskData(id: string, data: DocumentData): Task {
     categoryId: data.categoryId ?? '',
     description: data.description ?? '',
     deadline: data.deadline ?? null,
+    // 舊資料無 recurrence 欄位，預設 null（單次業務）。
+    recurrence: data.recurrence ?? null,
     progressEntries: Array.isArray(data.progressEntries)
       ? (data.progressEntries as ProgressEntry[]).map((entry) => ({
           ...entry,
@@ -301,6 +304,47 @@ export async function completeTask(
     });
   } catch (error) {
     throw new Error(`標記完成失敗（taskService.completeTask）：${(error as Error).message}`);
+  }
+}
+
+/**
+ * 完成定期業務的本期：同一次 updateDoc 完成兩件事（不鎖定業務）：
+ *  1. append 一筆進度紀錄（content=「本期完成」或「本期完成：<note>」）。
+ *  2. 將 deadline 更新為下一個週期日。
+ * 下一期起算基準 base = existing.deadline 與 input.date 兩者較大者（避免補登舊日期時期限倒退）；
+ * existing.deadline 為 null 時以 input.date 起算。
+ * @param existing 目前業務（recurrence 不可為 null）
+ * @param input 本期完成的日期、時間與備註
+ */
+export async function completeRecurringCycle(
+  existing: Task,
+  input: { date: string; time: string | null; note: string },
+): Promise<void> {
+  if (existing.recurrence === null) {
+    throw new Error(
+      '完成本期失敗（taskService.completeRecurringCycle）：此業務非定期業務（recurrence 為 null）。',
+    );
+  }
+  try {
+    const trimmedNote = input.note.trim();
+    const content = trimmedNote ? `本期完成：${trimmedNote}` : '本期完成';
+    const nextProgress = [
+      ...existing.progressEntries,
+      buildProgressEntry({ date: input.date, time: input.time, content }),
+    ];
+    // 起算基準取現有期限與本期完成日期的較大者（localeCompare 比較 yyyy-MM-dd）。
+    const base =
+      existing.deadline && existing.deadline.localeCompare(input.date) > 0
+        ? existing.deadline
+        : input.date;
+    const nextDeadline = nextOccurrence(existing.recurrence, base);
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      progressEntries: nextProgress,
+      deadline: nextDeadline,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`完成本期失敗（taskService.completeRecurringCycle）：${(error as Error).message}`);
   }
 }
 

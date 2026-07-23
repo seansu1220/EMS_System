@@ -4,6 +4,67 @@
 
 ---
 
+## 2026-07-24　v1.5 定期業務 + 小工具區（表格轉 Excel）
+
+### 需求描述
+兩項新功能：
+1. **定期業務（週期性業務）**：業務可設定週期規則（每月固定日 / 每週固定星期 / 每 N 天 / 每年固定日期）。
+   完成一期後同一筆業務的期限自動跳至下一期，並在進度紀錄自動寫一筆「本期完成」，歷史都留在同一張卡。
+2. **小工具區**：新增 `/tools` 頁面，第一個工具「表格轉 Excel」——貼上從網頁 / 內部系統複製的表格文字即可匯出 .xlsx；
+   另放一張「內部系統資料匯出（規劃中）」佔位卡。
+
+### 根本原因
+需求變更（非缺陷）：原 `Task` 僅支援單次 `deadline`，無法表達週期性業務；使用者另需一個匯出小工具集中區。
+
+### 修改的檔案與內容摘要
+
+**功能 A：定期業務**
+- `src/types/task.ts`：新增可辨識聯集 `RecurrenceRule`（monthly/weekly/everyNDays/yearly）；
+  `Task` 與 `TaskDraft` 各新增 `recurrence: RecurrenceRule | null`。
+- `src/lib/recurrence.ts`（新增，純函式）：`nextOccurrence(rule, fromDate, {inclusive})` 回傳下一個週期日
+  （monthly/yearly 以字串比較決定當期或次期、day 超界夾為月底、2/29 平年夾 2/28；weekly 取下一個該星期幾；
+  everyNDays 一律 `addDaysToDate(fromDate, n)`）；`describeRecurrence(rule)` 中文描述；`isRecurring(task)`。
+  日期運算重用 `taskLogic.addDaysToDate`（以 `T00:00:00` 建本地日期避免時區偏移）。
+- `src/services/taskService.ts`：`mapTaskData` 加 `recurrence: data.recurrence ?? null`（舊資料相容）；
+  新增 `completeRecurringCycle(existing, {date,time,note})`——單次 `updateDoc` 同時 append「本期完成 / 本期完成：<note>」
+  進度並將 `deadline` 更新為 `nextOccurrence`（起算基準取現有期限與完成日期較大者），不設 completed；
+  `recurrence` 為 null 時 throw 中文錯誤（標明位置）。
+- `src/components/TaskForm.tsx`：`buildInitialDraft` 加 `recurrence`；新增「週期」區塊
+  （select 型別 + 依選擇顯示 monthly 日 / weekly 星期 / everyNDays 天數 / yearly 月+日 輸入）；
+  週期參數以字串狀態管理、送出時 `resolveRecurrence` 驗證（空 / 非正整數 / 超界擋下並顯示中文錯誤）；
+  選了週期但期限留空時自動帶入 `nextOccurrence(rule, today(), {inclusive:true})`，並顯示提示小字；展期流程一併帶入週期。
+- `src/components/CompletionSection.tsx`：依 `task.recurrence` 分流——定期業務主按鈕「完成本期」
+  （`completeRecurringCycle`，confirm 說明期限將跳下一期，成功後清空 note、date/time 重設）＋次要 ghost 按鈕
+  「結束定期並鎖定」（走原 `completeTask`）；單次業務維持原「標記完成」。
+- `src/pages/TaskDetailPage.tsx`：`TaskForm` 的 initial 帶入 `recurrence`；完成卡標題 / 說明依是否定期切換文案。
+- `src/lib/taskLogic.ts`：`ReminderItem` 新增選填 `recurrenceLabel?`；`getReminderTasks` 對 kind='task' 且
+  定期業務帶入 `describeRecurrence` 結果（排序不變）。
+- `src/pages/HomePage.tsx`、`src/components/ReminderPanel.tsx`：定期業務 / 提醒項顯示紫色（violet）「定期」徽章，
+  HomePage 後綴顯示週期描述、ReminderPanel 以 title tooltip 顯示。
+
+**功能 B：小工具區**
+- `package.json`：新增依賴 `xlsx`（SheetJS 官方 CDN tarball `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`，
+  版本 0.20.3；官方 registry 已停更，故用 CDN 版）。
+- `src/lib/tableParse.ts`（新增，純函式）：`parseClipboardTable(text)` 依換行拆列（去尾端空列）、
+  有 Tab 以 \t 拆欄，否則多數列含逗號時以逗號做簡易 CSV 拆（不處理引號跳脫，已註明限制），其餘每列單欄。
+- `src/pages/ToolsPage.tsx`（新增）：頁首「小工具」；卡片一「表格轉 Excel」（可展開收合、貼上 textarea 為 monospace、
+  前 20 列預覽 + 欄列統計、檔名輸入預設「匯出資料」、`XLSX.utils.aoa_to_sheet` + `XLSX.writeFile` 匯出、
+  空資料 / 例外以 `ErrorBanner` 顯示）；卡片二「內部系統資料匯出（規劃中）」灰色佔位。
+- `src/App.tsx`：受保護路由新增 `tools`；`src/components/Layout.tsx`：導覽列「屬性管理」後加「小工具」NavLink。
+
+### 規格外決定
+- `RecurrenceRule` 的 monthly `day` 於當月超界（如 2 月選 31 號）時，`nextOccurrence` 夾為該月最後一天，
+  對應每年 2/29 於平年夾為 2/28；此為 SPEC 所要求的邊界處理，於此明記。
+- 「定期」徽章使用 Tailwind violet 色系；因既有 `Badge` 元件的 `Tone` 未含 purple/violet，改以行內 `<span>` 呈現
+  （比照 ReminderPanel 既有「待辦」藍色徽章寫法），未擴充 `Tone` 型別以免影響其他元件。
+- xlsx 併入主 bundle 使其體積增大（>500kB 警告仍為常規警告，非錯誤）；未另做 code-split。
+
+### 驗收
+- `npm install`（xlsx 0.20.3 自 SheetJS CDN）成功；`npm run build`（tsc -b && vite build）零錯誤
+  （僅 bundle 體積 >500kB 常規警告）。
+
+---
+
 ## 2026-07-23　v1.4 無期限業務永遠顯示於提醒與列表頂端
 
 ### 問題描述

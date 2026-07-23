@@ -153,6 +153,7 @@ export function TaskDetailPage() {
             categoryId: task.categoryId,
             description: task.description,
             deadline: task.deadline,
+            recurrence: task.recurrence,
             note: task.note,
           }}
           onSubmit={handleSave}
@@ -175,8 +176,14 @@ export function TaskDetailPage() {
 
       {!locked && (
         <Card>
-          <h2 className="mb-1 text-base font-bold text-slate-700">完成業務</h2>
-          <p className="mb-4 text-sm text-slate-500">標記完成後將鎖定此業務，可日後解除。</p>
+          <h2 className="mb-1 text-base font-bold text-slate-700">
+            {task.recurrence ? '完成本期 / 完成業務' : '完成業務'}
+          </h2>
+          <p className="mb-4 text-sm text-slate-500">
+            {task.recurrence
+              ? '「完成本期」會記錄本期並將期限跳至下一期；「結束定期並鎖定」則結束此定期業務。'
+              : '標記完成後將鎖定此業務，可日後解除。'}
+          </p>
           <CompletionSection task={task} />
         </Card>
       )}

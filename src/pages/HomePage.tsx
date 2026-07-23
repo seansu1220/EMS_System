@@ -9,6 +9,7 @@ import { useTasks } from '../hooks/useTasks';
 import { useCategories } from '../hooks/useCategories';
 import type { Task } from '../types/task';
 import { isDone, isOverdue, sortProgressEntries } from '../lib/taskLogic';
+import { describeRecurrence } from '../lib/recurrence';
 import { ReminderPanel } from '../components/ReminderPanel';
 import { Badge, Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
@@ -161,6 +162,14 @@ function TaskRow({
           </span>
           {done && <Badge tone="green">已完成</Badge>}
           {!done && pendingCount > 0 && <Badge tone="blue">待辦 {pendingCount}</Badge>}
+          {task.recurrence && (
+            <span
+              className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700"
+              title={describeRecurrence(task.recurrence)}
+            >
+              定期 · {describeRecurrence(task.recurrence)}
+            </span>
+          )}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
           {task.deadline ? (

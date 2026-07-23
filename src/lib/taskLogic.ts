@@ -3,6 +3,7 @@
  * 不依賴 React 或 Firebase，皆為純函式（輸入 → 輸出，無副作用），方便獨立測試。
  */
 import type { ProgressEntry, Task } from '../types/task';
+import { describeRecurrence } from './recurrence';
 
 /**
  * 首頁提醒項目（統一業務期限與待辦事項兩種來源）。
@@ -21,6 +22,8 @@ export interface ReminderItem {
   deadline: string | null;
   /** 所屬屬性 ID。 */
   categoryId: string;
+  /** 定期業務的週期中文描述（僅 kind='task' 且為定期業務時有值）。 */
+  recurrenceLabel?: string;
 }
 
 /** 取得今天的 yyyy-MM-dd 字串（以本地時區計）。 */
@@ -141,6 +144,9 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
   for (const task of tasks) {
     if (isDone(task)) continue;
 
+    // 定期業務的週期中文描述（單次業務為 undefined）。
+    const recurrenceLabel = task.recurrence ? describeRecurrence(task.recurrence) : undefined;
+
     // ① 業務本身：無期限一律納入（deadline=null）；有期限則須在視窗內。
     if (task.deadline === null) {
       items.push({
@@ -149,6 +155,7 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
         title: task.title,
         deadline: null,
         categoryId: task.categoryId,
+        recurrenceLabel,
       });
     } else if (daysUntil(task.deadline, base) <= withinDays) {
       items.push({
@@ -157,6 +164,7 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
         title: task.title,
         deadline: task.deadline,
         categoryId: task.categoryId,
+        recurrenceLabel,
       });
     }
 

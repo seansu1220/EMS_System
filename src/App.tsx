@@ -8,6 +8,7 @@ import { HomePage } from './pages/HomePage';
 import { NewTaskPage } from './pages/NewTaskPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 import { CategoriesPage } from './pages/CategoriesPage';
+import { ToolsPage } from './pages/ToolsPage';
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="tasks/new" element={<NewTaskPage />} />
         <Route path="tasks/:taskId" element={<TaskDetailPage />} />
         <Route path="categories" element={<CategoriesPage />} />
+        <Route path="tools" element={<ToolsPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

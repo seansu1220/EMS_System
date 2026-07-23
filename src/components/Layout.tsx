@@ -40,6 +40,9 @@ export function Layout() {
             <NavLink to="/categories" className={navItemClass}>
               屬性管理
             </NavLink>
+            <NavLink to="/tools" className={navItemClass}>
+              小工具
+            </NavLink>
           </nav>
           <div className="flex items-center gap-2 text-sm text-slate-600">
             <span className="hidden sm:inline">{user?.displayName}</span>

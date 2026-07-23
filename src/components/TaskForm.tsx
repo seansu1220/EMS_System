@@ -5,13 +5,115 @@
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Category } from '../types/category';
-import type { TaskDraft } from '../types/task';
+import type { RecurrenceRule, TaskDraft } from '../types/task';
 import { createCategory } from '../services/categoryService';
-import { addDaysToDate } from '../lib/taskLogic';
+import { addDaysToDate, today } from '../lib/taskLogic';
+import { nextOccurrence } from '../lib/recurrence';
 import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
 
 /** 下拉選單中「＋ 新增屬性…」的特殊值。 */
 const NEW_CATEGORY_VALUE = '__new_category__';
+
+/** 週期型別選項（含「單次業務」＝無週期）。 */
+type RecurrenceKind = 'none' | RecurrenceRule['type'];
+
+const RECURRENCE_OPTIONS: readonly { value: RecurrenceKind; label: string }[] = [
+  { value: 'none', label: '單次業務' },
+  { value: 'monthly', label: '每月固定日' },
+  { value: 'weekly', label: '每週固定星期' },
+  { value: 'everyNDays', label: '每 N 天一次' },
+  { value: 'yearly', label: '每年固定日期' },
+];
+
+/** 星期下拉選項（0=日 … 6=六）。 */
+const WEEKDAY_OPTIONS: readonly { value: number; label: string }[] = [
+  { value: 0, label: '星期日' },
+  { value: 1, label: '星期一' },
+  { value: 2, label: '星期二' },
+  { value: 3, label: '星期三' },
+  { value: 4, label: '星期四' },
+  { value: 5, label: '星期五' },
+  { value: 6, label: '星期六' },
+];
+
+/** 週期表單的字串型輸入狀態（允許暫時為空，送出時才驗證/轉型）。 */
+interface RecurrenceFormState {
+  kind: RecurrenceKind;
+  /** monthly：每月第幾號（字串）。 */
+  monthlyDay: string;
+  /** weekly：星期幾（0-6）。 */
+  weeklyWeekday: number;
+  /** everyNDays：每 N 天（字串）。 */
+  everyNDays: string;
+  /** yearly：月份（字串）。 */
+  yearlyMonth: string;
+  /** yearly：日（字串）。 */
+  yearlyDay: string;
+}
+
+/** 由既有週期規則建立週期表單狀態（缺漏時套用預設值）。 */
+function buildRecurrenceState(rule: RecurrenceRule | null | undefined): RecurrenceFormState {
+  const base: RecurrenceFormState = {
+    kind: 'none',
+    monthlyDay: '1',
+    weeklyWeekday: 1,
+    everyNDays: '7',
+    yearlyMonth: '1',
+    yearlyDay: '1',
+  };
+  if (!rule) return base;
+  switch (rule.type) {
+    case 'monthly':
+      return { ...base, kind: 'monthly', monthlyDay: String(rule.day) };
+    case 'weekly':
+      return { ...base, kind: 'weekly', weeklyWeekday: rule.weekday };
+    case 'everyNDays':
+      return { ...base, kind: 'everyNDays', everyNDays: String(rule.n) };
+    case 'yearly':
+      return { ...base, kind: 'yearly', yearlyMonth: String(rule.month), yearlyDay: String(rule.day) };
+    default:
+      return base;
+  }
+}
+
+/**
+ * 由週期表單狀態解析出週期規則，並做參數驗證。
+ * 回傳 { ok:true, rule } 或 { ok:false, message }（message 為中文錯誤，供 setError 顯示）。
+ */
+function resolveRecurrence(
+  state: RecurrenceFormState,
+): { ok: true; rule: RecurrenceRule | null } | { ok: false; message: string } {
+  const parseIntInRange = (raw: string, min: number, max: number): number | null => {
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min || value > max) return null;
+    return value;
+  };
+  switch (state.kind) {
+    case 'none':
+      return { ok: true, rule: null };
+    case 'monthly': {
+      const day = parseIntInRange(state.monthlyDay, 1, 31);
+      if (day === null) return { ok: false, message: '每月的日期請輸入 1 到 31 的整數。' };
+      return { ok: true, rule: { type: 'monthly', day } };
+    }
+    case 'weekly':
+      return { ok: true, rule: { type: 'weekly', weekday: state.weeklyWeekday } };
+    case 'everyNDays': {
+      const n = Number(state.everyNDays);
+      if (!Number.isInteger(n) || n < 1) return { ok: false, message: '「每 N 天」請輸入 1 以上的正整數。' };
+      return { ok: true, rule: { type: 'everyNDays', n } };
+    }
+    case 'yearly': {
+      const month = parseIntInRange(state.yearlyMonth, 1, 12);
+      if (month === null) return { ok: false, message: '每年的月份請輸入 1 到 12 的整數。' };
+      const day = parseIntInRange(state.yearlyDay, 1, 31);
+      if (day === null) return { ok: false, message: '每年的日期請輸入 1 到 31 的整數。' };
+      return { ok: true, rule: { type: 'yearly', month, day } };
+    }
+    default:
+      return { ok: true, rule: null };
+  }
+}
 
 interface TaskFormProps {
   categories: Category[];
@@ -41,6 +143,7 @@ function buildInitialDraft(initial?: Partial<TaskDraft>): TaskDraft {
     categoryId: initial?.categoryId ?? '',
     description: initial?.description ?? '',
     deadline: initial?.deadline ?? null,
+    recurrence: initial?.recurrence ?? null,
     note: initial?.note ?? '',
   };
 }
@@ -56,6 +159,10 @@ export function TaskForm({
   showExtend = false,
 }: TaskFormProps) {
   const [draft, setDraft] = useState<TaskDraft>(() => buildInitialDraft(initial));
+  // 週期表單以獨立字串狀態管理（允許輸入中暫時為空），送出時才解析為 RecurrenceRule。
+  const [recurrence, setRecurrence] = useState<RecurrenceFormState>(() =>
+    buildRecurrenceState(initial?.recurrence),
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -80,6 +187,31 @@ export function TaskForm({
 
   function update<K extends keyof TaskDraft>(key: K, value: TaskDraft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /** 更新週期表單的單一欄位。 */
+  function updateRecurrence<K extends keyof RecurrenceFormState>(
+    key: K,
+    value: RecurrenceFormState[K],
+  ) {
+    setRecurrence((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /**
+   * 解析週期並套用到草稿：驗證失敗時設錯誤並回傳 null；
+   * 若選了週期且期限留空，自動帶入下一個週期日（含當天）作為本期期限。
+   */
+  function applyRecurrenceToDraft(target: TaskDraft): TaskDraft | null {
+    const resolved = resolveRecurrence(recurrence);
+    if (!resolved.ok) {
+      setError(resolved.message);
+      return null;
+    }
+    let next: TaskDraft = { ...target, recurrence: resolved.rule };
+    if (resolved.rule && !next.deadline) {
+      next = { ...next, deadline: nextOccurrence(resolved.rule, today(), { inclusive: true }) };
+    }
+    return next;
   }
 
   /** 屬性下拉選擇：選到「＋ 新增屬性…」時開啟行內輸入。 */
@@ -155,13 +287,20 @@ export function TaskForm({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    await submitDraft(draft);
+    const resolved = applyRecurrenceToDraft(draft);
+    if (!resolved) return;
+    await submitDraft(resolved);
   }
 
   /** 展期確認：新期限 = 目前期限 + N 天，更新草稿並立即送出整張表單。 */
   async function handleExtendConfirm(days: number) {
     if (!draft.deadline || days <= 0) return;
-    const nextDraft: TaskDraft = { ...draft, deadline: addDaysToDate(draft.deadline, days) };
+    const withRecurrence = applyRecurrenceToDraft(draft);
+    if (!withRecurrence) return;
+    const nextDraft: TaskDraft = {
+      ...withRecurrence,
+      deadline: addDaysToDate(draft.deadline, days),
+    };
     setDraft(nextDraft);
     setExtending(false);
     setExtendDays('');
@@ -315,6 +454,101 @@ export function TaskForm({
             </div>
           )}
         </div>
+      </div>
+
+      <div>
+        <FieldLabel optional>週期</FieldLabel>
+        <select
+          value={recurrence.kind}
+          onChange={(e) => updateRecurrence('kind', e.target.value as RecurrenceKind)}
+          className={INPUT_CLASS}
+          disabled={disabled}
+        >
+          {RECURRENCE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+
+        {/* 依所選週期型別顯示對應參數輸入。 */}
+        {recurrence.kind === 'monthly' && (
+          <div className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+            <span>每月</span>
+            <input
+              type="number"
+              min={1}
+              max={31}
+              step={1}
+              value={recurrence.monthlyDay}
+              onChange={(e) => updateRecurrence('monthlyDay', e.target.value)}
+              className={`${INPUT_CLASS} w-24`}
+              disabled={disabled}
+            />
+            <span>號</span>
+          </div>
+        )}
+        {recurrence.kind === 'weekly' && (
+          <div className="mt-2">
+            <select
+              value={recurrence.weeklyWeekday}
+              onChange={(e) => updateRecurrence('weeklyWeekday', Number(e.target.value))}
+              className={INPUT_CLASS}
+              disabled={disabled}
+            >
+              {WEEKDAY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {recurrence.kind === 'everyNDays' && (
+          <div className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+            <span>每</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={recurrence.everyNDays}
+              onChange={(e) => updateRecurrence('everyNDays', e.target.value)}
+              className={`${INPUT_CLASS} w-24`}
+              disabled={disabled}
+            />
+            <span>天一次</span>
+          </div>
+        )}
+        {recurrence.kind === 'yearly' && (
+          <div className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+            <span>每年</span>
+            <input
+              type="number"
+              min={1}
+              max={12}
+              step={1}
+              value={recurrence.yearlyMonth}
+              onChange={(e) => updateRecurrence('yearlyMonth', e.target.value)}
+              className={`${INPUT_CLASS} w-20`}
+              disabled={disabled}
+            />
+            <span>月</span>
+            <input
+              type="number"
+              min={1}
+              max={31}
+              step={1}
+              value={recurrence.yearlyDay}
+              onChange={(e) => updateRecurrence('yearlyDay', e.target.value)}
+              className={`${INPUT_CLASS} w-20`}
+              disabled={disabled}
+            />
+            <span>日</span>
+          </div>
+        )}
+        {recurrence.kind !== 'none' && !draft.deadline && (
+          <p className="mt-1 text-xs text-slate-400">期限留空將自動帶入下一個週期日。</p>
+        )}
       </div>
 
       <div>
