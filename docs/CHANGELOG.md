@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-24　v1.6 版本號顯示 + 小工具區改為保留區域
+
+### 需求描述
+1. **右上角顯示版本號**：使用者無法確認線上是否為最新版本，需在頁面右上角標註版本號（滑過顯示建置時間），確保有載入到最新版本。
+2. **小工具區暫緩實作**：使用者希望先「保留區域」，待內部系統匯出規格確定後再評估作法，故移除先前的「表格轉 Excel」工具與 xlsx 依賴。
+
+### 根本原因
+需求變更（非缺陷）：v1.5 僅 commit 未部署，使用者線上看不到新版；且需一個可視的版本標記自我驗證。小工具的實際工具尚無確定規格。
+
+### 修改的檔案與內容摘要
+- `package.json`：版本號 `0.1.0` → `1.6.0`；移除 `xlsx` 依賴（bundle 由 ~1.15MB 降至 ~816KB）。
+- `vite.config.ts`：建置期由 package.json 讀版本號、記錄建置時間，以 `define` 注入全域常數 `__APP_VERSION__`、`__BUILD_TIME__`。
+- `src/vite-env.d.ts`：宣告上述兩個注入常數的型別。
+- `src/config/constants.ts`：新增 `APP_VERSION`、`APP_BUILD_TIME`（ISO → 本地 yyyy-MM-dd HH:mm）。
+- `src/components/Layout.tsx`：導覽列右側顯示 `v<版本>`（等寬字、灰色，title 顯示建置時間）。
+- `src/pages/ToolsPage.tsx`：改寫為「保留區域」，僅列出規劃中的工具佔位卡（配置驅動的 `PLANNED_TOOLS`）。
+- `src/lib/tableParse.ts`：移除（隨表格轉 Excel 工具一併移除）。
+
+---
+
 ## 2026-07-24　v1.5 定期業務 + 小工具區（表格轉 Excel）
 
 ### 需求描述

@@ -5,7 +5,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { logout } from '../services/authService';
-import { APP_NAME } from '../config/constants';
+import { APP_BUILD_TIME, APP_NAME, APP_VERSION } from '../config/constants';
 import { Button } from './ui';
 
 export function Layout() {
@@ -45,6 +45,12 @@ export function Layout() {
             </NavLink>
           </nav>
           <div className="flex items-center gap-2 text-sm text-slate-600">
+            <span
+              className="hidden font-mono text-xs text-slate-400 sm:inline"
+              title={APP_BUILD_TIME ? `建置時間：${APP_BUILD_TIME}` : undefined}
+            >
+              v{APP_VERSION}
+            </span>
             <span className="hidden sm:inline">{user?.displayName}</span>
             <Button variant="ghost" onClick={handleLogout}>
               登出
