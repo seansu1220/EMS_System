@@ -121,6 +121,7 @@ export function TaskDetailPage() {
                 {task.completionDate && (
                   <span className="ml-2 text-sm font-normal text-green-700">
                     完成日期：{task.completionDate}
+                    {task.completionTime && ` ${task.completionTime}`}
                   </span>
                 )}
               </p>
@@ -158,6 +159,7 @@ export function TaskDetailPage() {
           onCancel={() => navigate('/')}
           submitLabel="儲存變更"
           disabled={locked}
+          showExtend
         />
       </Card>
 

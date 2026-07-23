@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-07-23　v1.2 功能調整與儲存按鈕修正
+
+### 問題描述
+依 SPEC v1.2 進行六項變更：
+1. 進度紀錄新增「時間（時:分）」欄位，並調整排序（日期新→舊、同日時間新→舊、無時間排該日最後）。
+2. 勾選待辦（false→true）時跳出確認框，可將該待辦一併寫入進度紀錄。
+3. 完成區塊新增「完成時間（時:分）」，詳情頁已完成橫幅顯示「完成日期＋時間」。
+4. 修正「儲存變更」按鈕成功後仍卡在「儲存中」的 bug，並新增「已儲存」提示。
+5. 待辦清單已勾項目預設隱藏，底部提供「顯示已完成（N）」切換。
+6. 期限新增「展期」按鈕（+1/+3/+7 天與自訂天數），確認後立即儲存整張表單。
+
+### 根本原因
+1、2、3、5、6 為需求變更（非缺陷）：使用者調整進度/待辦/完成的操作模型與時間顆粒度。
+4 為缺陷：`TaskForm.handleSubmit` 僅在 catch 分支 `setSubmitting(false)`，成功路徑未重設 submitting 狀態，導致送出成功後按鈕永久停留在「儲存中」。
+
+### 修改的檔案與內容摘要
+- `src/types/task.ts`：`ProgressEntry` 新增 `time: string | null`；`Task` 新增 `completionTime: string | null`。
+- `src/lib/taskLogic.ts`：新增純函式 `nowTime()`（當下 HH:mm）、`addDaysToDate(dateStr, days)`（字串安全加日、避免時區偏移）、
+  `sortProgressEntries(entries)`（日期→時間→createdAt 排序，共用於 ProgressSection 與 HomePage）。
+- `src/services/taskService.ts`：mapping 對舊資料 `progressEntries[].time` 與 `completionTime` 預設 null；
+  `buildProgressEntry`/`addProgressEntry` 加入 time；`completeTask` 簽名新增 `completionTime`；
+  新增 `completeChecklistItemWithProgress`（同一次 updateDoc 寫入 done=true 與一筆「完成待辦：…」進度）；
+  `reopenTask` 維持不清 completionTime；createTask payload 補 `completionTime: null`。
+- `src/components/ProgressSection.tsx`：新增列加 `<input type="time">`（可空）；改用 `sortProgressEntries`；顯示「日期 時間」。
+- `src/components/ChecklistSection.tsx`：勾選（false→true）跳 `window.confirm`，確定走 `completeChecklistItemWithProgress`、
+  取消走 `toggleChecklistItem`；取消勾選（true→false）不跳框；已勾項目預設隱藏，底部「顯示已完成（N）」切換。
+- `src/components/CompletionSection.tsx`：新增「完成時間」`<input type="time">`（預設 `nowTime()`、可空），傳入 `completeTask`。
+- `src/components/TaskForm.tsx`：修正成功路徑 `setSubmitting(false)` 並顯示 2 秒「已儲存」提示（useRef 計時器＋unmount clearTimeout）；
+  重構 `submitDraft` 共用驗證/送出；新增 `showExtend` prop 與期限「展期」行內選單（快選/自訂天數→addDaysToDate→立即送出）。
+- `src/pages/TaskDetailPage.tsx`：`TaskForm` 傳入 `showExtend`；已完成橫幅顯示完成日期＋時間。
+- `src/pages/HomePage.tsx`：最新進度摘要改用 `sortProgressEntries`。
+
+---
+
 ## 2026-07-23　v1.1 功能調整
 
 ### 問題描述

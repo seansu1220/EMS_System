@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { completeTask } from '../services/taskService';
 import type { Task } from '../types/task';
-import { today } from '../lib/taskLogic';
+import { nowTime, today } from '../lib/taskLogic';
 import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
 
 interface CompletionSectionProps {
@@ -15,6 +15,7 @@ interface CompletionSectionProps {
 
 export function CompletionSection({ task }: CompletionSectionProps) {
   const [date, setDate] = useState(today());
+  const [time, setTime] = useState(nowTime());
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -24,7 +25,7 @@ export function CompletionSection({ task }: CompletionSectionProps) {
     setSaving(true);
     setError(null);
     try {
-      await completeTask(task.id, date, note.trim());
+      await completeTask(task.id, date, time || null, note.trim());
     } catch (err) {
       setError((err as Error).message);
       setSaving(false);
@@ -40,6 +41,15 @@ export function CompletionSection({ task }: CompletionSectionProps) {
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value)}
+            className={INPUT_CLASS}
+          />
+        </div>
+        <div className="sm:w-32">
+          <FieldLabel optional>完成時間</FieldLabel>
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
             className={INPUT_CLASS}
           />
         </div>

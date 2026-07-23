@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { addProgressEntry, deleteProgressEntry } from '../services/taskService';
 import type { Task } from '../types/task';
-import { today } from '../lib/taskLogic';
+import { sortProgressEntries, today } from '../lib/taskLogic';
 import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
 
 interface ProgressSectionProps {
@@ -15,18 +15,14 @@ interface ProgressSectionProps {
   locked?: boolean;
 }
 
-/** 進度排序鍵：先日期、後建立時間（皆新到舊）。 */
-function sortKey(entry: { date: string; createdAt: string }): string {
-  return `${entry.date} ${entry.createdAt}`;
-}
-
 export function ProgressSection({ task, locked = false }: ProgressSectionProps) {
   const [date, setDate] = useState(today());
+  const [time, setTime] = useState('');
   const [content, setContent] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const sorted = [...task.progressEntries].sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  const sorted = sortProgressEntries(task.progressEntries);
 
   async function handleAdd() {
     if (!content.trim()) {
@@ -36,9 +32,10 @@ export function ProgressSection({ task, locked = false }: ProgressSectionProps) 
     setSaving(true);
     setError(null);
     try {
-      await addProgressEntry(task, { date, content: content.trim() });
+      await addProgressEntry(task, { date, time: time || null, content: content.trim() });
       setContent('');
       setDate(today());
+      setTime('');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -69,6 +66,15 @@ export function ProgressSection({ task, locked = false }: ProgressSectionProps) 
               className={INPUT_CLASS}
             />
           </div>
+          <div className="sm:w-32">
+            <FieldLabel optional>時間</FieldLabel>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className={INPUT_CLASS}
+            />
+          </div>
           <div className="flex-1">
             <FieldLabel>進度內容</FieldLabel>
             <input
@@ -96,7 +102,10 @@ export function ProgressSection({ task, locked = false }: ProgressSectionProps) 
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
           {sorted.map((entry) => (
             <li key={entry.id} className="flex items-start gap-3 px-4 py-3">
-              <span className="w-24 shrink-0 font-mono text-sm text-slate-500">{entry.date}</span>
+              <span className="w-32 shrink-0 font-mono text-sm text-slate-500">
+                {entry.date}
+                {entry.time && <span className="ml-1">{entry.time}</span>}
+              </span>
               <span className="flex-1 whitespace-pre-wrap text-sm text-slate-700">
                 {entry.content}
               </span>

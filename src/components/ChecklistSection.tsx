@@ -8,11 +8,12 @@
 import { useState } from 'react';
 import {
   addChecklistItem,
+  completeChecklistItemWithProgress,
   removeChecklistItem,
   toggleChecklistItem,
 } from '../services/taskService';
 import type { ChecklistItem, Task } from '../types/task';
-import { daysUntil } from '../lib/taskLogic';
+import { daysUntil, nowTime, today } from '../lib/taskLogic';
 import { REMINDER_DAYS } from '../config/constants';
 import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
 
@@ -48,8 +49,12 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
   const [deadline, setDeadline] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showDone, setShowDone] = useState(false);
 
   const sorted = [...task.checklistItems].sort(compareChecklist);
+  const doneCount = task.checklistItems.filter((item) => item.done).length;
+  // 已勾項目預設隱藏；展開時才連同已勾一起顯示。
+  const visible = showDone ? sorted : sorted.filter((item) => !item.done);
 
   async function handleAdd() {
     if (!content.trim()) {
@@ -69,10 +74,20 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
     }
   }
 
-  async function handleToggle(itemId: string) {
+  async function handleToggle(item: ChecklistItem) {
     setError(null);
     try {
-      await toggleChecklistItem(task, itemId);
+      // 取消勾選（true→false）：直接切換，不跳對話框。
+      if (item.done) {
+        await toggleChecklistItem(task, item.id);
+        return;
+      }
+      // 勾選完成（false→true）：詢問是否一併寫入進度紀錄。
+      if (window.confirm(`是否將「${item.content}」寫入進度紀錄？`)) {
+        await completeChecklistItemWithProgress(task, item.id, today(), nowTime());
+      } else {
+        await toggleChecklistItem(task, item.id);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -124,16 +139,18 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
 
       {sorted.length === 0 ? (
         <p className="text-sm text-slate-400">尚無待辦事項。</p>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-slate-400">未完成待辦皆已勾除。</p>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-          {sorted.map((item) => (
+          {visible.map((item) => (
             <li key={item.id} className="flex items-center gap-3 px-4 py-3">
               <input
                 type="checkbox"
                 className="h-4 w-4 shrink-0"
                 checked={item.done}
                 disabled={locked}
-                onChange={() => handleToggle(item.id)}
+                onChange={() => handleToggle(item)}
               />
               <span
                 className={`flex-1 whitespace-pre-wrap text-sm ${
@@ -162,6 +179,16 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
             </li>
           ))}
         </ul>
+      )}
+
+      {doneCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowDone((prev) => !prev)}
+          className="text-xs text-slate-500 hover:underline"
+        >
+          {showDone ? '隱藏已完成' : `顯示已完成（${doneCount}）`}
+        </button>
       )}
     </div>
   );

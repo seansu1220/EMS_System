@@ -9,6 +9,8 @@ export interface ProgressEntry {
   id: string;
   /** 進度日期（yyyy-MM-dd）。 */
   date: string;
+  /** 進度時間（HH:mm）；null 代表未填時間。 */
+  time: string | null;
   /** 進度內容描述。 */
   content: string;
   /** 紀錄建立時間（ISO 字串）。 */
@@ -51,6 +53,8 @@ export interface Task {
   completed: boolean;
   /** 完成日期（yyyy-MM-dd）；未完成為 null。 */
   completionDate: string | null;
+  /** 完成時間（HH:mm）；未填為 null。 */
+  completionTime: string | null;
   /** 完成說明。 */
   completionNote: string;
   /** 擁有者 uid。 */

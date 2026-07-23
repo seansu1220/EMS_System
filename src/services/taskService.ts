@@ -42,7 +42,11 @@ function mapTaskData(id: string, data: DocumentData): Task {
     description: data.description ?? '',
     deadline: data.deadline ?? null,
     progressEntries: Array.isArray(data.progressEntries)
-      ? (data.progressEntries as ProgressEntry[])
+      ? (data.progressEntries as ProgressEntry[]).map((entry) => ({
+          ...entry,
+          // 舊資料無 time 欄位，預設 null。
+          time: entry.time ?? null,
+        }))
       : [],
     checklistItems: Array.isArray(data.checklistItems)
       ? (data.checklistItems as ChecklistItem[])
@@ -50,6 +54,7 @@ function mapTaskData(id: string, data: DocumentData): Task {
     note: data.note ?? '',
     completed: data.completed ?? data.status === 'done',
     completionDate: data.completionDate ?? null,
+    completionTime: data.completionTime ?? null,
     completionNote: data.completionNote ?? '',
     ownerUid: data.ownerUid ?? '',
     createdAt: toIso(data.createdAt),
@@ -107,6 +112,7 @@ export async function createTask(draft: TaskDraft, ownerUid: string): Promise<st
       checklistItems: [],
       completed: false,
       completionDate: null,
+      completionTime: null,
       completionNote: '',
       ownerUid,
       completedAt: null,
@@ -140,19 +146,24 @@ export async function deleteTask(taskId: string): Promise<void> {
 }
 
 /** 依輸入組出一筆進度紀錄。 */
-function buildProgressEntry(input: { date: string; content: string }): ProgressEntry {
+function buildProgressEntry(input: {
+  date: string;
+  time: string | null;
+  content: string;
+}): ProgressEntry {
   return {
     id: crypto.randomUUID(),
     date: input.date,
+    time: input.time,
     content: input.content,
     createdAt: new Date().toISOString(),
   };
 }
 
-/** 新增一筆進度紀錄（日期 + 內容）。 */
+/** 新增一筆進度紀錄（日期 + 時間 + 內容）。 */
 export async function addProgressEntry(
   existing: Task,
-  input: { date: string; content: string },
+  input: { date: string; time: string | null; content: string },
 ): Promise<void> {
   try {
     const next = [...existing.progressEntries, buildProgressEntry(input)];
@@ -220,6 +231,45 @@ export async function toggleChecklistItem(existing: Task, itemId: string): Promi
   }
 }
 
+/**
+ * 勾選待辦完成並同時寫入一筆進度紀錄（同一次 updateDoc，避免兩次寫入）。
+ * 將指定待辦 done=true，並 append 一筆進度（date=今天、time=當下、content=「完成待辦：<內容>」）。
+ * @param existing 目前業務
+ * @param itemId 要勾選完成的待辦 ID
+ * @param today 今天日期（yyyy-MM-dd，由呼叫端以純函式取得）
+ * @param nowTime 當下時間（HH:mm，由呼叫端以純函式取得）
+ */
+export async function completeChecklistItemWithProgress(
+  existing: Task,
+  itemId: string,
+  today: string,
+  nowTime: string,
+): Promise<void> {
+  try {
+    const target = existing.checklistItems.find((item) => item.id === itemId);
+    const nextChecklist = existing.checklistItems.map((item) =>
+      item.id === itemId ? { ...item, done: true } : item,
+    );
+    const nextProgress = [
+      ...existing.progressEntries,
+      buildProgressEntry({
+        date: today,
+        time: nowTime,
+        content: `完成待辦：${target?.content ?? ''}`,
+      }),
+    ];
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: nextChecklist,
+      progressEntries: nextProgress,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(
+      `勾選待辦並寫入進度失敗（taskService.completeChecklistItemWithProgress）：${(error as Error).message}`,
+    );
+  }
+}
+
 /** 刪除一筆待辦事項。 */
 export async function removeChecklistItem(existing: Task, itemId: string): Promise<void> {
   try {
@@ -233,16 +283,18 @@ export async function removeChecklistItem(existing: Task, itemId: string): Promi
   }
 }
 
-/** 標記業務完成（鎖定）：記錄完成日期、說明與完成時間。 */
+/** 標記業務完成（鎖定）：記錄完成日期、完成時間與說明。 */
 export async function completeTask(
   taskId: string,
   completionDate: string,
+  completionTime: string | null,
   completionNote: string,
 ): Promise<void> {
   try {
     await updateDoc(doc(db, COLLECTIONS.tasks, taskId), {
       completed: true,
       completionDate,
+      completionTime,
       completionNote,
       completedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),

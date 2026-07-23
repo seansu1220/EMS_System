@@ -2,7 +2,7 @@
  * 業務清單的純邏輯（排序、篩選、期限計算、提醒彙整）。
  * 不依賴 React 或 Firebase，皆為純函式（輸入 → 輸出，無副作用），方便獨立測試。
  */
-import type { Task } from '../types/task';
+import type { ProgressEntry, Task } from '../types/task';
 
 /**
  * 首頁提醒項目（統一業務期限與待辦事項兩種來源）。
@@ -28,6 +28,51 @@ export function today(): string {
   const now = new Date();
   const offsetMs = now.getTimezoneOffset() * 60 * 1000;
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+/** 取得當下的 HH:mm 字串（以本地時區計），比照 today()。 */
+export function nowTime(): string {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+/**
+ * 日期字串加上 N 天，回傳 yyyy-MM-dd。
+ * 以 T00:00:00 建立本地日期後用 setDate 位移，再取本地年月日，避免時區偏移。
+ * @param dateStr 起始日期（yyyy-MM-dd）
+ * @param days 位移天數（可為負）
+ */
+export function addDaysToDate(dateStr: string, days: number): string {
+  const base = new Date(`${dateStr}T00:00:00`);
+  base.setDate(base.getDate() + days);
+  const year = base.getFullYear();
+  const month = String(base.getMonth() + 1).padStart(2, '0');
+  const day = String(base.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * 進度紀錄排序：日期新→舊；同日有時間者優先於無時間者，
+ * 皆有時間時依時間新→舊；最後依 createdAt 新→舊。
+ * 回傳新陣列，不改動輸入。
+ */
+export function sortProgressEntries(entries: ProgressEntry[]): ProgressEntry[] {
+  return [...entries].sort((a, b) => {
+    // 1) 日期新到舊。
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    // 2) 同日：有時間者排前面（無時間排該日最後）。
+    const aHasTime = Boolean(a.time);
+    const bHasTime = Boolean(b.time);
+    if (aHasTime !== bHasTime) return aHasTime ? -1 : 1;
+    // 3) 皆有時間：時間新到舊。
+    if (aHasTime && bHasTime && a.time !== b.time) {
+      return (b.time as string).localeCompare(a.time as string);
+    }
+    // 4) 最後依建立時間新到舊。
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
 }
 
 /**

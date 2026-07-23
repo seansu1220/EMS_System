@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTasks } from '../hooks/useTasks';
 import { useCategories } from '../hooks/useCategories';
 import type { Task } from '../types/task';
-import { isDone, isOverdue } from '../lib/taskLogic';
+import { isDone, isOverdue, sortProgressEntries } from '../lib/taskLogic';
 import { ReminderPanel } from '../components/ReminderPanel';
 import { Badge, Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
@@ -149,9 +149,7 @@ function TaskRow({
   const done = isDone(task);
   const overdue = isOverdue(task);
   const pendingCount = task.checklistItems.filter((item) => !item.done).length;
-  const latestProgress = [...task.progressEntries].sort((a, b) =>
-    `${b.date} ${b.createdAt}`.localeCompare(`${a.date} ${a.createdAt}`),
-  )[0];
+  const latestProgress = sortProgressEntries(task.progressEntries)[0];
 
   return (
     <li>
