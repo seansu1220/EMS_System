@@ -40,6 +40,16 @@ export function canDeleteTask(user: AppUser | null): boolean {
   return isAdmin(user);
 }
 
+/** 是否可刪除屬性（僅管理員；一般使用者仍可新增、改名、排序）。 */
+export function canDeleteCategory(user: AppUser | null): boolean {
+  return isAdmin(user);
+}
+
+/** 是否可刪除待辦公版（僅管理員；一般使用者仍可新增公版與編輯其項目）。 */
+export function canDeleteTemplate(user: AppUser | null): boolean {
+  return isAdmin(user);
+}
+
 /** 是否可管理使用者帳號（核准 / 停用；僅管理員）。 */
 export function canManageUsers(user: AppUser | null): boolean {
   return isAdmin(user);

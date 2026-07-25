@@ -8,8 +8,8 @@
  * 執行方式：npm run test:rules
  *
  * 驗證重點（對應 SPEC 2.7 權限模型）：
- * 1. 管理員（email 白名單）可讀寫全部資料，並可刪除業務、核准帳號。
- * 2. 已核准的一般使用者可讀、可新增、可編輯，但**不可刪除業務**。
+ * 1. 管理員（email 白名單）可讀寫全部資料，並可刪除業務/屬性/公版、核准帳號。
+ * 2. 已核准的一般使用者可讀、可新增、可編輯，但**不可刪除業務、屬性、待辦公版**。
  * 3. 待審核 / 未通過的帳號完全不能存取業務資料。
  * 4. 一般使用者不可自行把自己改成 approved 或 admin（不可自我提權）。
  */
@@ -93,6 +93,12 @@ await seed(async (db) => {
     completed: false,
   });
   await setDoc(doc(db, 'categories/cat-1'), { name: '採購', sortOrder: 0, ownerUid: 'admin-uid' });
+  await setDoc(doc(db, 'categories/cat-2'), { name: '待刪屬性', sortOrder: 1, ownerUid: 'admin-uid' });
+  await setDoc(doc(db, 'checklistTemplates/tpl-1'), {
+    name: '標案標準流程',
+    items: [{ id: 'i1', content: '簽陳核准', sortOrder: 0 }],
+    ownerUid: 'admin-uid',
+  });
 });
 
 const admin = dbFor('admin-uid', ADMIN_EMAIL);
@@ -107,6 +113,7 @@ await check(
   assertSucceeds(updateDoc(doc(admin, 'users/pending-uid'), { status: 'approved' })),
 );
 await check('管理員可刪除業務', assertSucceeds(deleteDoc(doc(admin, 'tasks/task-2'))));
+await check('管理員可刪除屬性', assertSucceeds(deleteDoc(doc(admin, 'categories/cat-2'))));
 
 // 復原 pending 狀態供後續測試
 await seed(async (db) => {
@@ -150,7 +157,19 @@ await check(
   '成員可改自己的顯示名稱',
   assertSucceeds(updateDoc(doc(member, 'users/member-uid'), { displayName: '新名字' })),
 );
-await check('成員可管理屬性', assertSucceeds(updateDoc(doc(member, 'categories/cat-1'), { name: '採購2' })));
+await check(
+  '成員可改屬性名稱',
+  assertSucceeds(updateDoc(doc(member, 'categories/cat-1'), { name: '採購2' })),
+);
+await check('成員不可刪除屬性', assertFails(deleteDoc(doc(member, 'categories/cat-1'))));
+await check(
+  '成員可編輯待辦公版內容',
+  assertSucceeds(updateDoc(doc(member, 'checklistTemplates/tpl-1'), { name: '標案流程 v2' })),
+);
+await check(
+  '成員不可刪除待辦公版',
+  assertFails(deleteDoc(doc(member, 'checklistTemplates/tpl-1'))),
+);
 
 // ── 3. 待審核帳號 ──
 await check('待審核者不可讀業務', assertFails(getDoc(doc(pending, 'tasks/task-1'))));

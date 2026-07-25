@@ -32,7 +32,7 @@ import type { ChecklistTemplate, ChecklistTemplateItem } from '../types/checklis
 import { Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
 export function ChecklistTemplatesPage() {
-  const { user } = useAuth();
+  const { user, isAdmin: canDelete } = useAuth();
   const { templates, loading, error: loadError } = useChecklistTemplates();
 
   const [newName, setNewName] = useState('');
@@ -100,14 +100,25 @@ export function ChecklistTemplatesPage() {
       ) : templates.length === 0 ? (
         <p className="text-sm text-slate-400">尚無待辦公版。</p>
       ) : (
-        templates.map((template) => <TemplateCard key={template.id} template={template} />)
+        templates.map((template) => (
+          <TemplateCard key={template.id} template={template} canDelete={canDelete} />
+        ))
       )}
     </div>
   );
 }
 
-/** 單張公版卡片：改名、刪除、項目管理（新增/改內容/刪除/拖曳排序）。 */
-function TemplateCard({ template }: { template: ChecklistTemplate }) {
+/**
+ * 單張公版卡片：改名、刪除（僅管理員）、項目管理（新增/改內容/刪除/拖曳排序）。
+ * @param canDelete 是否顯示「刪除公版」按鈕（僅管理員）
+ */
+function TemplateCard({
+  template,
+  canDelete,
+}: {
+  template: ChecklistTemplate;
+  canDelete: boolean;
+}) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(template.name);
   const [newItemContent, setNewItemContent] = useState('');
@@ -236,13 +247,16 @@ function TemplateCard({ template }: { template: ChecklistTemplate }) {
             >
               改名
             </button>
-            <button
-              type="button"
-              onClick={handleDeleteTemplate}
-              className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
-            >
-              刪除
-            </button>
+            {/* 刪除公版僅管理員可執行（Firestore 規則同樣會擋下一般使用者）。 */}
+            {canDelete && (
+              <button
+                type="button"
+                onClick={handleDeleteTemplate}
+                className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
+              >
+                刪除
+              </button>
+            )}
           </>
         )}
       </div>

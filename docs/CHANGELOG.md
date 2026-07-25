@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-07-26　v1.8.1 屬性與待辦公版的刪除一併限管理員
+
+### 需求描述
+v1.8 只鎖了「刪除業務」，使用者確認實測正常後要求：**屬性管理與待辦公版的刪除也要鎖成只有管理員能做**。
+
+### 根本原因
+需求變更（非缺陷）：v1.8 依當時指示僅鎖業務刪除，屬性與公版為共用設定，
+一般使用者誤刪會影響所有人（刪屬性還會連帶把底下業務批次轉移），故一併收緊。
+
+### 修改的檔案與內容摘要
+- `firebase/firestore.rules`：`categories` 與 `checklistTemplates` 由 `allow update, delete: if isApproved()`
+  拆為 `allow update: if isApproved()` + `allow delete: if isAdmin()`；檔頭權限模型註解同步更新。
+- `src/lib/permissions.ts`：新增純函式 `canDeleteCategory`、`canDeleteTemplate`（皆等同 isAdmin）。
+- `src/pages/CategoriesPage.tsx`：由 `useAuth()` 取得 isAdmin，透過新增的 `canDelete` prop 傳入
+  `SortableCategoryRow`；非管理員不顯示「刪除」按鈕（改名、拖曳排序、新增不受影響）。
+- `src/pages/ChecklistTemplatesPage.tsx`：同上，`TemplateCard` 新增 `canDelete` prop，
+  非管理員不顯示「刪除」公版按鈕（改名、加項目、改項目、刪項目、拖曳排序不受影響）。
+- `scripts/rules.test.mjs`：補上「管理員可刪除屬性」「成員不可刪除屬性」「成員可編輯公版」
+  「成員不可刪除公版」四項測試，並在預置資料加入 cat-2 與 tpl-1。
+- `package.json`：版本 `1.8.0` → `1.8.1`。
+
+### 規格外決定
+- 公版內「單一項目」的新增/修改/刪除仍屬編輯（Firestore 的 update），一般使用者可操作；
+  受限的是刪除整份公版。若日後也要鎖項目層級，需改為由規則比對 items 陣列長度或改資料結構。
+
+### 驗收
+- `npm run build` 零錯誤；規則以 `firebase deploy` 編譯通過並發布。
+- 線上實測（臨時非管理員帳號）：待審核者對 categories / checklistTemplates 的刪除皆回 403。
+
+---
+
 ## 2026-07-25　v1.8 登入管制：帳號審核制 + 角色權限 + 資料改為多人共用
 
 ### 需求描述

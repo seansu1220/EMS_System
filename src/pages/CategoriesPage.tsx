@@ -42,7 +42,7 @@ interface DeleteFlow {
 }
 
 export function CategoriesPage() {
-  const { user } = useAuth();
+  const { user, isAdmin: canDelete } = useAuth();
   const { categories, loading, error: loadError } = useCategories();
 
   const [newName, setNewName] = useState('');
@@ -225,6 +225,7 @@ export function CategoriesPage() {
                     isEditing={editingId === category.id}
                     editingName={editingName}
                     busy={busy}
+                    canDelete={canDelete}
                     onEditingNameChange={setEditingName}
                     onStartEdit={() => {
                       setEditingId(category.id);
@@ -286,6 +287,7 @@ function SortableCategoryRow({
   isEditing,
   editingName,
   busy,
+  canDelete,
   onEditingNameChange,
   onStartEdit,
   onCancelEdit,
@@ -296,6 +298,8 @@ function SortableCategoryRow({
   isEditing: boolean;
   editingName: string;
   busy: boolean;
+  /** 是否顯示刪除按鈕（僅管理員）。 */
+  canDelete: boolean;
   onEditingNameChange: (name: string) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
@@ -359,13 +363,16 @@ function SortableCategoryRow({
             >
               改名
             </button>
-            <button
-              type="button"
-              onClick={onDelete}
-              className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
-            >
-              刪除
-            </button>
+            {/* 刪除屬性僅管理員可執行（Firestore 規則同樣會擋下一般使用者）。 */}
+            {canDelete && (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50"
+              >
+                刪除
+              </button>
+            )}
           </div>
         </>
       )}

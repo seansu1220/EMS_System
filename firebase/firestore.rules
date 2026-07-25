@@ -4,8 +4,9 @@ rules_version = '2';
 // 即使前端被繞過，下列規則仍會在資料庫層阻擋未授權的讀寫。
 //
 // 權限模型（v1.8 起，多人共用同一批資料）：
-// - 管理員（email 白名單）：可做所有事，包含核准帳號與「刪除業務」。
-// - 一般使用者（已核准）：可讀取、新增、編輯業務/屬性/待辦公版，但不可刪除業務。
+// - 管理員（email 白名單）：可做所有事，包含核准帳號與所有「刪除」動作。
+// - 一般使用者（已核准）：可讀取、新增、編輯業務/屬性/待辦公版，
+//   但**不可刪除**業務、屬性、待辦公版（v1.8.1 起三者皆鎖）。
 // - 待審核 / 未通過的帳號：完全不能存取業務資料，只能讀寫自己的 users 文件。
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -62,11 +63,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ── 屬性（分類）：已核准者共用 ──
+    // ── 屬性（分類）：已核准者共用；只有管理員可刪除 ──
     match /categories/{categoryId} {
       allow read: if isApproved();
       allow create: if isCreatingOwn();
-      allow update, delete: if isApproved();
+      allow update: if isApproved();
+      allow delete: if isAdmin();
     }
 
     // ── 業務：已核准者共用；只有管理員可刪除 ──
@@ -77,11 +79,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ── 待辦公版（範本）：已核准者共用 ──
+    // ── 待辦公版（範本）：已核准者共用；只有管理員可刪除 ──
     match /checklistTemplates/{templateId} {
       allow read: if isApproved();
       allow create: if isCreatingOwn();
-      allow update, delete: if isApproved();
+      allow update: if isApproved();
+      allow delete: if isAdmin();
     }
   }
 }
