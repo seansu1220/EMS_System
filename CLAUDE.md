@@ -2,6 +2,9 @@
 
 - **模型分工（省 token，預設執行、不需使用者每次交代）**：主模型（Fable）只負責「規劃任務規格」與「最終驗收」（讀 diff、核對引用、跑編譯/自測、抓邏輯洞）；**實際程式修改一律用 Agent tool 交給 Opus 5 子代理執行**（subagent_type: general-purpose, model: opus，規格需寫明檔案錨點、專案規範與實盤安全禁令）。例外：改動極小（幾行內）或任務特別複雜高風險（實盤下單核心、需要主對話大量上下文的除錯）才由主模型直接改。**若當前主模型本身即為 Opus 5，則不需分工，規劃、實作、驗收全部由 Opus 5 從頭做到尾。**
 - **完成修改程式後，務必幫使用者 commit 到 GitHub**（除非使用者明確表示不需要）
+- **完成 commit 後一律自動部署，不需詢問、不需通知**：執行 `npm run build` 後 `npx firebase-tools deploy`
+  （同時更新 Firestore 安全規則與 Hosting）。使用者只看線上網址 https://ems-system-su1220.web.app 使用，
+  程式沒部署等於沒做完。部署失敗才需回報。
 - 預設 `.gitignore` 排除：`.env`、`*.pkl`、`__pycache__/`、`*.pyc`
 - 請用繁體中文與使用者對話
 - 需要下載的依賴，請直接寫在requirement.txt，並在第一次運行的時候自動檢查並下載
