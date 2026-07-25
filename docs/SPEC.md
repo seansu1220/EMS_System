@@ -1,8 +1,9 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.2　建立日期：2026-07-22　最後更新：2026-07-23
+> 版本：v1.7　建立日期：2026-07-22　最後更新：2026-07-25
 > v1.1：移除優先度/狀態欄位、新增待辦清單（checklist）、完成鎖定區塊、表單內快速新增屬性
 > v1.2：進度/完成加時間（時:分）、勾待辦可寫入進度、待辦已完成預設隱藏、期限展期按鈕
+> v1.7：業務說明欄位加大、待辦可編輯期限/內容與拖曳排流程順序、完成進度條、待辦公版（範本）
 > 使用者：救護科股長（單一使用者，多裝置使用）
 
 輔助救護科股長辦公的業務與行程管理網頁系統。可新增業務、註記期限、更新處理進度、
@@ -80,14 +81,21 @@
 **progressEntries 項目**：`{ id, date (yyyy-MM-dd, 日期選擇器), time (HH:mm | null, 時間選擇器可空), content, createdAt }`
 - 由新到舊顯示（日期新→舊，同日依時間新→舊，無時間排該日最後），可新增 / 刪除單筆。
 
-**checklistItems 項目（待辦清單）**：`{ id, content, deadline (yyyy-MM-dd | null), done, createdAt }`
-- 主進度之外的小問題 / 支線事項；可新增（內容 + 可選期限）、勾選完成、刪除。
+**checklistItems 項目（待辦清單）**：`{ id, content, deadline (yyyy-MM-dd | null), done, sortOrder, createdAt }`
+- 主進度之外的小問題 / 支線事項，亦用於拆解**標案等多流程業務**的每個關卡。
+- 可新增（內容 + 可選期限）、**編輯（內容與期限，v1.7 起）**、勾選完成、刪除。
+  期限可先留空（一開始不知道期限），之後按「編輯」補上或清除。
 - **勾選完成時跳出確認對話框**「是否將此待辦寫入進度紀錄？」：確定則同一次寫入中
   將該項 done=true 並新增一筆進度（date=今天、time=當下時:分、content=「完成待辦：<內容>」）；
   取消則僅勾選。取消勾選（復原）不跳對話框。
 - **已勾掉的項目預設隱藏**，區塊底部提供「顯示已完成（N）」切換按鈕展開/收合。
 - 未勾掉且有期限者進首頁提醒卡（標註「待辦」）。
-- 排列：未勾在前（依期限近到遠，無期限在後），已勾在後（打勾顯示刪除線）。
+- **排序模式（v1.7 起）**可切換：
+  - 「流程順序」（預設）：依 sortOrder，已勾項目留在原位；未鎖定時可**拖曳左側把手**調整
+    （桌機滑鼠、手機長按 200ms），放開後批次寫入 sortOrder（0..n-1）。
+  - 「依期限」：未勾在前（期限近到遠，無期限在後），已勾在後（顯示刪除線）。
+- **完成進度條（v1.7 起）**：區塊上方顯示「已完成 N / 總數（百分比）」與進度條。
+- 逾期未勾以紅色、3 天內以橙色標示期限；無期限者顯示灰色「未定期限」。
 
 **期限展期（業務詳情頁編輯表單，期限欄旁）**
 - 已有期限且未鎖定時顯示「展期」按鈕；點擊展開天數選擇（快選 +1 / +3 / +7 天與自訂天數）。
@@ -111,14 +119,30 @@
   放開後依新順序批次寫入 sortOrder（0..n-1）；不使用上移/下移按鈕。（v1.3 起）
 - 刪除前檢查：若仍有業務使用該屬性，須先選擇轉移目標屬性（將該屬性業務批次轉移後再刪除）。
 
-### 2.5 路由
+### 2.5 待辦公版 `/templates`（v1.7 起）
+
+把常做的一套流程（例如標案的各關卡）存成公版，重複套用到新業務，不必每次重打。
+
+- **資料**：`checklistTemplates/{id}` = `{ name, items: [{ id, content, sortOrder }], ownerUid, createdAt, updatedAt }`。
+  公版**只保存項目內容與順序，不含期限與勾選狀態**（期限於套用後個別編輯）。
+- **管理頁**：新增公版（名稱）、改名、刪除；公版底下項目可新增、改內容、刪除、拖曳排序。
+- **建立公版的兩種方式**：①管理頁新增空白公版後逐筆加項目；
+  ②業務詳情頁待辦區塊「另存為公版」，把目前待辦內容（依流程順序）存成新公版。
+- **套用公版**：
+  - 新增業務頁：選一個公版，建立業務時自動帶入為初始待辦（期限留空）。
+  - 業務詳情頁待辦區塊：選公版按「套用公版」，**附加**到現有待辦之後（不覆蓋既有項目），二次確認。
+- 刪除公版不影響已套用到業務上的待辦事項。
+
+### 2.6 路由
 | 路徑 | 頁面 | 權限 |
 | --- | --- | --- |
 | `/login` | 登入 / 註冊 | 公開 |
 | `/` | 首頁（提醒 + 列表） | 需登入 |
-| `/tasks/new` | 新增業務 | 需登入 |
-| `/tasks/:taskId` | 業務詳情 / 編輯 / 進度 | 需登入 |
+| `/tasks/new` | 新增業務（可選待辦公版） | 需登入 |
+| `/tasks/:taskId` | 業務詳情 / 編輯 / 進度 / 待辦 | 需登入 |
 | `/categories` | 屬性管理 | 需登入 |
+| `/templates` | 待辦公版管理 | 需登入 |
+| `/tools` | 小工具（保留區域） | 需登入 |
 
 ---
 
@@ -127,9 +151,10 @@
 - `users/{uid}`：{ uid, email, displayName, createdAt }
 - `categories/{id}`：{ name, sortOrder, ownerUid, createdAt }
 - `tasks/{id}`：見 2.3 欄位表
+- `checklistTemplates/{id}`：見 2.5（待辦公版）
 
 ### 安全規則
-- 三個集合的讀寫皆要求 `request.auth.uid == resource.data.ownerUid`（users 為本人文件）。
+- 四個集合的讀寫皆要求 `request.auth.uid == resource.data.ownerUid`（users 為本人文件）。
 - 建立時強制 `ownerUid == request.auth.uid`。
 
 ---
@@ -139,16 +164,17 @@
 ```
 EMS_System/
 ├─ src/
-│  ├─ types/        task.ts、category.ts、user.ts
+│  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts
 │  ├─ config/       constants.ts（提醒天數 7/30、預設屬性、集合名稱）
-│  ├─ lib/          firebase.ts
-│  ├─ services/     authService、taskService、categoryService
-│  ├─ hooks/        useAuth、useTasks、useCategories
+│  ├─ lib/          firebase.ts、taskLogic.ts、recurrence.ts、checklistLogic.ts
+│  ├─ services/     authService、taskService、categoryService、checklistTemplateService
+│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、
-│  │                ProgressSection、ui
+│  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
+│  │                CompletionSection、ui
 │  └─ pages/        LoginPage、HomePage、NewTaskPage、TaskDetailPage、
-│                   CategoriesPage
+│                   CategoriesPage、ChecklistTemplatesPage、ToolsPage
 ├─ firebase/        firestore.rules
 ├─ docs/            SPEC.md、CHANGELOG.md
 ├─ firebase.json / .firebaserc

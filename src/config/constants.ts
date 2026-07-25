@@ -28,6 +28,7 @@ export const COLLECTIONS = {
   users: 'users',
   categories: 'categories',
   tasks: 'tasks',
+  checklistTemplates: 'checklistTemplates',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */

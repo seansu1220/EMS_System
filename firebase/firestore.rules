@@ -41,5 +41,11 @@ service cloud.firestore {
       allow read, update, delete: if isOwner();
       allow create: if isCreatingOwn();
     }
+
+    // ── 待辦公版（範本）：僅擁有者可存取 ──
+    match /checklistTemplates/{templateId} {
+      allow read, update, delete: if isOwner();
+      allow create: if isCreatingOwn();
+    }
   }
 }

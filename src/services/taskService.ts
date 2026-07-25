@@ -20,7 +20,9 @@ import {
 import { db } from '../lib/firebase';
 import { COLLECTIONS } from '../config/constants';
 import type { ChecklistItem, ProgressEntry, Task, TaskDraft } from '../types/task';
+import type { ChecklistTemplate, ChecklistTemplateItem } from '../types/checklistTemplate';
 import { nextOccurrence } from '../lib/recurrence';
+import { nextChecklistSortOrder, sortChecklistItems, withChecklistOrder } from '../lib/checklistLogic';
 
 /** Firestore Timestamp / 字串 → ISO 字串。 */
 function toIso(value: unknown): string {
@@ -51,8 +53,9 @@ function mapTaskData(id: string, data: DocumentData): Task {
           time: entry.time ?? null,
         }))
       : [],
+    // 舊資料的待辦無 sortOrder 欄位，以陣列索引遞補（見 checklistLogic.withChecklistOrder）。
     checklistItems: Array.isArray(data.checklistItems)
-      ? (data.checklistItems as ChecklistItem[])
+      ? withChecklistOrder(data.checklistItems as ChecklistItem[])
       : [],
     note: data.note ?? '',
     completed: data.completed ?? data.status === 'done',
@@ -106,13 +109,20 @@ export function subscribeTask(
   );
 }
 
-/** 新增業務；時間戳與擁有者由系統填入，初始為未完成、無進度/待辦。 */
-export async function createTask(draft: TaskDraft, ownerUid: string): Promise<string> {
+/**
+ * 新增業務；時間戳與擁有者由系統填入，初始為未完成、無進度。
+ * @param initialChecklistItems 初始待辦事項（由待辦公版帶入時使用；預設為空清單）
+ */
+export async function createTask(
+  draft: TaskDraft,
+  ownerUid: string,
+  initialChecklistItems: ChecklistItem[] = [],
+): Promise<string> {
   try {
     const payload = {
       ...draft,
       progressEntries: [],
-      checklistItems: [],
+      checklistItems: initialChecklistItems,
       completed: false,
       completionDate: null,
       completionTime: null,
@@ -193,23 +203,52 @@ export async function deleteProgressEntry(existing: Task, entryId: string): Prom
 }
 
 /** 依輸入組出一筆待辦事項。 */
-function buildChecklistItem(input: { content: string; deadline: string | null }): ChecklistItem {
+function buildChecklistItem(input: {
+  content: string;
+  deadline: string | null;
+  sortOrder: number;
+}): ChecklistItem {
   return {
     id: crypto.randomUUID(),
     content: input.content,
     deadline: input.deadline,
     done: false,
+    sortOrder: input.sortOrder,
     createdAt: new Date().toISOString(),
   };
 }
 
-/** 新增一筆待辦事項（內容 + 可選期限）。 */
+/**
+ * 由待辦公版的項目組出可寫入業務的待辦事項（期限一律留空，之後個別編輯）。
+ * 供新增業務時帶入公版，或既有業務套用公版使用。
+ * @param templateItems 公版項目（依 sortOrder 由小到大）
+ * @param startSortOrder 起始流程順序（接在既有待辦之後時傳入 nextChecklistSortOrder 的結果）
+ */
+export function buildChecklistItemsFromTemplate(
+  templateItems: ChecklistTemplateItem[],
+  startSortOrder = 0,
+): ChecklistItem[] {
+  return [...templateItems]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((item, index) =>
+      buildChecklistItem({
+        content: item.content,
+        deadline: null,
+        sortOrder: startSortOrder + index,
+      }),
+    );
+}
+
+/** 新增一筆待辦事項（內容 + 可選期限）；流程順序接在現有項目之後。 */
 export async function addChecklistItem(
   existing: Task,
   input: { content: string; deadline: string | null },
 ): Promise<void> {
   try {
-    const next = [...existing.checklistItems, buildChecklistItem(input)];
+    const next = [
+      ...existing.checklistItems,
+      buildChecklistItem({ ...input, sortOrder: nextChecklistSortOrder(existing.checklistItems) }),
+    ];
     await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
       checklistItems: next,
       updatedAt: serverTimestamp(),
@@ -217,6 +256,88 @@ export async function addChecklistItem(
   } catch (error) {
     throw new Error(`新增待辦失敗（taskService.addChecklistItem）：${(error as Error).message}`);
   }
+}
+
+/**
+ * 編輯一筆待辦事項的內容與期限（不動勾選狀態與流程順序）。
+ * 期限可由 null 改為日期（新增時未定期限、事後補上），亦可清空回 null。
+ */
+export async function updateChecklistItem(
+  existing: Task,
+  itemId: string,
+  patch: { content: string; deadline: string | null },
+): Promise<void> {
+  try {
+    const next = existing.checklistItems.map((item) =>
+      item.id === itemId ? { ...item, content: patch.content, deadline: patch.deadline } : item,
+    );
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(`編輯待辦失敗（taskService.updateChecklistItem）：${(error as Error).message}`);
+  }
+}
+
+/**
+ * 依給定的待辦 ID 順序重寫 sortOrder（0..n-1，供拖曳排序）。
+ * 不在 orderedIds 內的項目（理論上不應發生）維持原 sortOrder 並排在最後。
+ * @param orderedIds 依目標順序排列的待辦 ID 陣列
+ */
+export async function reorderChecklistItems(
+  existing: Task,
+  orderedIds: string[],
+): Promise<void> {
+  try {
+    const orderById = new Map(orderedIds.map((itemId, index) => [itemId, index]));
+    const next = existing.checklistItems.map((item) => {
+      const order = orderById.get(item.id);
+      return order === undefined ? item : { ...item, sortOrder: order };
+    });
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(
+      `待辦排序失敗（taskService.reorderChecklistItems）：${(error as Error).message}`,
+    );
+  }
+}
+
+/**
+ * 將待辦公版的項目附加到既有業務的待辦清單末端（不覆蓋既有項目）。
+ * 帶入的項目期限留空、未勾選，流程順序接在現有項目之後。
+ */
+export async function appendChecklistFromTemplate(
+  existing: Task,
+  template: ChecklistTemplate,
+): Promise<void> {
+  if (template.items.length === 0) {
+    throw new Error(
+      `套用公版失敗（taskService.appendChecklistFromTemplate）：公版「${template.name}」沒有任何項目。`,
+    );
+  }
+  try {
+    const appended = buildChecklistItemsFromTemplate(
+      template.items,
+      nextChecklistSortOrder(existing.checklistItems),
+    );
+    await updateDoc(doc(db, COLLECTIONS.tasks, existing.id), {
+      checklistItems: [...existing.checklistItems, ...appended],
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    throw new Error(
+      `套用公版失敗（taskService.appendChecklistFromTemplate）：${(error as Error).message}`,
+    );
+  }
+}
+
+/** 取出業務目前待辦的內容（依流程順序），供「另存為公版」使用。 */
+export function extractChecklistContents(existing: Task): string[] {
+  return sortChecklistItems(existing.checklistItems, 'custom').map((item) => item.content);
 }
 
 /** 切換一筆待辦事項的完成狀態（勾選/取消）。 */

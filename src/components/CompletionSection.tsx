@@ -10,7 +10,7 @@ import { completeRecurringCycle, completeTask } from '../services/taskService';
 import type { Task } from '../types/task';
 import { describeRecurrence } from '../lib/recurrence';
 import { nowTime, today } from '../lib/taskLogic';
-import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
+import { Button, ErrorBanner, FieldLabel, INPUT_CLASS, TEXTAREA_CLASS } from './ui';
 
 interface CompletionSectionProps {
   task: Task;
@@ -92,11 +92,11 @@ export function CompletionSection({ task }: CompletionSectionProps) {
         <div className="flex-1">
           <FieldLabel optional>{isRecurring ? '本期說明' : '完成說明'}</FieldLabel>
           <textarea
-            rows={2}
+            rows={3}
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder={isRecurring ? '本期處理結果…' : '結案摘要 / 處理結果…'}
-            className={INPUT_CLASS}
+            className={TEXTAREA_CLASS}
           />
         </div>
       </div>

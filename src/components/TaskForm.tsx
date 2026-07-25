@@ -9,7 +9,7 @@ import type { RecurrenceRule, TaskDraft } from '../types/task';
 import { createCategory } from '../services/categoryService';
 import { addDaysToDate, today } from '../lib/taskLogic';
 import { nextOccurrence } from '../lib/recurrence';
-import { Button, ErrorBanner, FieldLabel, INPUT_CLASS } from './ui';
+import { Button, ErrorBanner, FieldLabel, INPUT_CLASS, TEXTAREA_CLASS } from './ui';
 
 /** 下拉選單中「＋ 新增屬性…」的特殊值。 */
 const NEW_CATEGORY_VALUE = '__new_category__';
@@ -553,12 +553,13 @@ export function TaskForm({
 
       <div>
         <FieldLabel optional>業務說明</FieldLabel>
+        {/* 說明常需記錄較長內容，預設給足高度並可自行拖曳右下角調整。 */}
         <textarea
-          rows={3}
+          rows={10}
           value={draft.description}
           onChange={(e) => update('description', e.target.value)}
-          className={INPUT_CLASS}
-          placeholder="業務的詳細說明…"
+          className={TEXTAREA_CLASS}
+          placeholder="業務的詳細說明…（可拖曳右下角調整高度）"
           disabled={disabled}
         />
       </div>
@@ -566,10 +567,10 @@ export function TaskForm({
       <div>
         <FieldLabel optional>備註</FieldLabel>
         <textarea
-          rows={2}
+          rows={4}
           value={draft.note}
           onChange={(e) => update('note', e.target.value)}
-          className={INPUT_CLASS}
+          className={TEXTAREA_CLASS}
           placeholder="其他備註…"
           disabled={disabled}
         />

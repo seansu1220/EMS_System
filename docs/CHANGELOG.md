@@ -4,6 +4,82 @@
 
 ---
 
+## 2026-07-25　v1.7 說明欄加大 + 待辦流程控管（編輯期限/拖曳排序/進度）+ 待辦公版
+
+### 需求描述
+1. **業務詳情的「業務說明」欄位太小**，輸入長內容不好看也不好編輯。
+2. **多流程業務（如標案）需要控管**：使用者希望把流程列成待辦事項逐項打勾，
+   但一開始不知道各關卡期限，**待辦必須能事後編輯期限**。
+3. **待辦公版**：能把做過的一套流程存成公版，之後新增業務時自動匯入成待辦，不必每次重打。
+
+### 根本原因
+需求變更（非缺陷）：
+- 說明欄原為 `rows={3}` 且未開放調整高度。
+- 原待辦（v1.1 起）只能新增/勾選/刪除，**無法編輯**，排序固定依期限，
+  無法表達「流程先後」，也沒有整體完成度視覺回饋。
+- 系統原無範本概念，重複性流程需逐筆重打。
+
+### 修改的檔案與內容摘要
+
+**功能 A：業務說明欄位加大**
+- `src/components/ui.tsx`：新增 `TEXTAREA_CLASS`（＝`INPUT_CLASS` + `resize-y leading-relaxed`），
+  多行欄位可自行拖曳右下角調整高度。
+- `src/components/TaskForm.tsx`：業務說明 `rows` 3 → 10、備註 2 → 4，兩者改用 `TEXTAREA_CLASS`。
+- `src/components/CompletionSection.tsx`：完成說明 `rows` 2 → 3、改用 `TEXTAREA_CLASS`。
+
+**功能 B：待辦事項強化（多流程業務控管）**
+- `src/types/task.ts`：`ChecklistItem` 新增 `sortOrder: number`（流程順序）。
+- `src/lib/checklistLogic.ts`（新增，純函式）：`ChecklistSortMode`（'custom' | 'deadline'）與
+  `CHECKLIST_SORT_MODES` 標籤配置；`withChecklistOrder`（舊資料無 sortOrder 時以索引遞補）、
+  `nextChecklistSortOrder`、`sortChecklistItems(items, mode)`、`checklistProgress`（total/done/percent）、
+  `checklistDeadlineToneClass`（逾期紅 / urgent 橙 / 其餘灰，沿用 `REMINDER_DAYS.urgent`）。
+- `src/services/taskService.ts`：
+  - `mapTaskData` 以 `withChecklistOrder` 補 sortOrder（舊資料相容）。
+  - `buildChecklistItem` 加 `sortOrder`；`addChecklistItem` 以 `nextChecklistSortOrder` 接在最後。
+  - 新增 `updateChecklistItem(existing, itemId, {content, deadline})`——編輯內容與期限
+    （期限可由 null 補上，或清空回 null），不動勾選狀態與順序。
+  - 新增 `reorderChecklistItems(existing, orderedIds)`——依給定順序重寫 sortOrder（0..n-1）。
+- `src/components/ChecklistSection.tsx`：改寫。上方顯示**完成進度條**（已完成 N / 總數 + 百分比）；
+  新增**排序模式切換**（流程順序 / 依期限）；「流程順序」模式且未鎖定、未編輯中時可**拖曳把手**排序
+  （@dnd-kit，桌機滑鼠 5px、手機長按 200ms；本地 state 樂觀更新，失敗還原）；
+  每列新增「編輯」進入行內編輯（內容 input + 期限 date + 儲存/取消）；
+  無期限未勾項目顯示灰字「未定期限」；列拆為子元件 `ChecklistRow`（`useSortable`）。
+
+**功能 C：待辦公版（範本）**
+- `src/types/checklistTemplate.ts`（新增）：`ChecklistTemplateItem { id, content, sortOrder }`、
+  `ChecklistTemplate { id, name, items, ownerUid, createdAt, updatedAt }`。
+- `src/config/constants.ts`：`COLLECTIONS` 新增 `checklistTemplates`。
+- `firebase/firestore.rules`：新增 `checklistTemplates/{templateId}` 規則（比照 tasks，僅 ownerUid 本人可存取）。
+- `src/services/checklistTemplateService.ts`（新增）：`subscribeChecklistTemplates`（依名稱排序）、
+  `createChecklistTemplate(name, contents, ownerUid)`、`renameChecklistTemplate`、
+  `updateChecklistTemplateItems`（覆寫整份項目並重編 sortOrder 為 0..n-1）、`deleteChecklistTemplate`、
+  `buildTemplateItems`；讀取時對缺 sortOrder 的項目以索引遞補。
+- `src/hooks/useChecklistTemplates.ts`（新增）：比照 `useCategories` 的訂閱 hook。
+- `src/services/taskService.ts`：新增 `buildChecklistItemsFromTemplate(templateItems, startSortOrder)`
+  （期限一律 null）、`appendChecklistFromTemplate(existing, template)`（附加至現有待辦之後，
+  空公版擋下並回中文錯誤）、`extractChecklistContents(existing)`（依流程順序取內容，供另存公版）；
+  `createTask` 新增第三參數 `initialChecklistItems`（預設 `[]`）。
+- `src/components/ChecklistTemplateBar.tsx`（新增）：待辦區塊上方工具列——選公版「套用公版」（二次確認）、
+  「另存為公版」（名稱擋空白與重複、無待辦時擋下），並連結至 `/templates`。
+- `src/pages/ChecklistTemplatesPage.tsx`（新增）：`/templates` 公版管理頁——新增/改名/刪除公版，
+  公版項目可新增、就地改內容、刪除、拖曳排序（子元件 `TemplateCard`、`SortableTemplateItemRow`）。
+- `src/pages/NewTaskPage.tsx`：新增「待辦公版」下拉（有公版時才顯示），建立業務時帶入初始待辦。
+- `src/App.tsx`：新增受保護路由 `templates`；`src/components/Layout.tsx`：導覽列加「待辦公版」。
+- `package.json`：版本 `1.6.0` → `1.7.0`。
+
+### 規格外決定
+- 「流程順序」模式下**已勾選項目不移到最後**（維持流程先後的閱讀順序）；「依期限」模式才把已勾項目排最後。
+- 公版**不含期限欄位**（含相對天數亦未實作）：使用者建立流程時通常尚未確定各關卡日期，
+  套用後於待辦列以「編輯」逐項補期限。
+- 套用公版採**附加**而非覆蓋，避免誤刪既有待辦。
+
+### 驗收
+- `npm run build`（tsc -b && vite build）零錯誤（僅 bundle 體積 >500kB 常規警告）。
+- 舊資料相容：既有待辦無 `sortOrder` 時以陣列索引遞補，不需資料遷移。
+- **注意**：新集合 `checklistTemplates` 的安全規則需部署後才可使用（`npx firebase-tools deploy`）。
+
+---
+
 ## 2026-07-24　v1.6 版本號顯示 + 小工具區改為保留區域
 
 ### 需求描述

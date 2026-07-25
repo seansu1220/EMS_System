@@ -40,6 +40,9 @@ export function Layout() {
             <NavLink to="/categories" className={navItemClass}>
               屬性管理
             </NavLink>
+            <NavLink to="/templates" className={navItemClass}>
+              待辦公版
+            </NavLink>
             <NavLink to="/tools" className={navItemClass}>
               小工具
             </NavLink>

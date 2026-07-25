@@ -27,16 +27,21 @@ export interface ProgressEntry {
   createdAt: string;
 }
 
-/** 單筆待辦事項（checklist）：主進度之外的小問題 / 支線事項。 */
+/**
+ * 單筆待辦事項（checklist）：主進度之外的小問題 / 支線事項，
+ * 亦可用來拆解標案等多流程業務的每個關卡。
+ */
 export interface ChecklistItem {
   /** 前端產生的唯一 ID（用於 React key、勾選、刪除）。 */
   id: string;
   /** 待辦內容。 */
   content: string;
-  /** 期限（yyyy-MM-dd）；null 代表無期限。 */
+  /** 期限（yyyy-MM-dd）；null 代表無期限（可事後編輯補上）。 */
   deadline: string | null;
   /** 是否已完成（勾選）。 */
   done: boolean;
+  /** 流程順序（0..n-1，越小越前面）；供「流程順序」模式與拖曳排序使用。 */
+  sortOrder: number;
   /** 紀錄建立時間（ISO 字串）。 */
   createdAt: string;
 }

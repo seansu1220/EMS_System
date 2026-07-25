@@ -95,3 +95,9 @@ export function FieldLabel({
 /** 統一樣式的輸入框 class（供 input/select/textarea 共用）。 */
 export const INPUT_CLASS =
   'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none';
+
+/**
+ * 多行文字輸入框 class：在 INPUT_CLASS 之上加寬鬆行距與垂直可拖曳調整高度。
+ * 供業務說明、備註等需要輸入較長內容的欄位使用。
+ */
+export const TEXTAREA_CLASS = `${INPUT_CLASS} resize-y leading-relaxed`;
