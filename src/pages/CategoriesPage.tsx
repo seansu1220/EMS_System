@@ -138,7 +138,7 @@ export function CategoriesPage() {
     if (!user) return;
     setError(null);
     try {
-      const count = await countTasksInCategory(category.id, user.uid);
+      const count = await countTasksInCategory(category.id);
       if (count === 0) {
         if (!window.confirm(`確定刪除屬性「${category.name}」？`)) return;
         await deleteCategory(category.id);
@@ -162,7 +162,7 @@ export function CategoriesPage() {
     setBusy(true);
     setError(null);
     try {
-      await reassignTasksCategory(deleteFlow.category.id, deleteFlow.targetId, user.uid);
+      await reassignTasksCategory(deleteFlow.category.id, deleteFlow.targetId);
       await deleteCategory(deleteFlow.category.id);
       setDeleteFlow(null);
     } catch (err) {

@@ -2,7 +2,11 @@ rules_version = '2';
 
 // Firestore 安全規則：權限的「最終防線」。
 // 即使前端被繞過，下列規則仍會在資料庫層阻擋未授權的讀寫。
-// 本系統為單一使用者多裝置使用，所有資料僅本人（ownerUid == auth.uid）可存取。
+//
+// 權限模型（v1.8 起，多人共用同一批資料）：
+// - 管理員（email 白名單）：可做所有事，包含核准帳號與「刪除業務」。
+// - 一般使用者（已核准）：可讀取、新增、編輯業務/屬性/待辦公版，但不可刪除業務。
+// - 待審核 / 未通過的帳號：完全不能存取業務資料，只能讀寫自己的 users 文件。
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -10,42 +14,74 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // 讀寫既有文件：必須是該文件的擁有者。
-    function isOwner() {
-      return isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    // 管理員以「登入 token 內的 email」認定，而非 users 文件，
+    // 避免使用者自行竄改文件提權。
+    // ⚠️ 須與 src/config/constants.ts 的 ADMIN_EMAILS 一致。
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'seansu1220@gmail.com';
     }
 
-    // 建立文件：強制 ownerUid 等於自己，避免替他人建立資料。
+    // 讀取自己的 users 文件狀態（管理員不需查文件，見 isApproved）。
+    function myStatus() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status;
+    }
+
+    // 已核准的正式帳號（管理員一律視為已核准，避免文件缺欄位時把自己鎖在外面）。
+    function isApproved() {
+      return isAdmin() || (isSignedIn() && myStatus() == 'approved');
+    }
+
+    // 建立資料時記錄建立者，強制等於自己。
     function isCreatingOwn() {
-      return isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      return isApproved() && request.resource.data.ownerUid == request.auth.uid;
     }
 
-    // ── 使用者：僅本人文件 ──
+    // ── 使用者帳號 ──
     match /users/{uid} {
-      allow read: if isSignedIn() && request.auth.uid == uid;
-      // 建立/更新自己的文件，且 uid 欄位須與文件 ID 一致。
-      allow create, update: if isSignedIn()
+      // 讀自己的文件；管理員可讀任何人（審核用）。
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      // 列出全部帳號僅限管理員（使用者管理頁）。
+      allow list: if isAdmin();
+
+      // 註冊時只能建立自己的文件，且 role/status 必須是系統認定的值：
+      // 管理員 email → admin/approved；其他人 → member/pending（須經核准）。
+      allow create: if isSignedIn()
         && request.auth.uid == uid
-        && request.resource.data.uid == uid;
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+        && request.resource.data.uid == uid
+        && request.resource.data.role == (isAdmin() ? 'admin' : 'member')
+        && request.resource.data.status == (isAdmin() ? 'approved' : 'pending');
+
+      // 管理員可調整任何人的角色/狀態；
+      // 本人只能改自己的其他欄位（role 與 status 不可自行變更＝不可自我核准）。
+      allow update: if isAdmin()
+        || (isSignedIn()
+            && request.auth.uid == uid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.status == resource.data.status);
+
+      allow delete: if isAdmin();
     }
 
-    // ── 屬性（分類）：僅擁有者可存取 ──
+    // ── 屬性（分類）：已核准者共用 ──
     match /categories/{categoryId} {
-      allow read, update, delete: if isOwner();
+      allow read: if isApproved();
       allow create: if isCreatingOwn();
+      allow update, delete: if isApproved();
     }
 
-    // ── 業務：僅擁有者可存取 ──
+    // ── 業務：已核准者共用；只有管理員可刪除 ──
     match /tasks/{taskId} {
-      allow read, update, delete: if isOwner();
+      allow read: if isApproved();
       allow create: if isCreatingOwn();
+      allow update: if isApproved();
+      allow delete: if isAdmin();
     }
 
-    // ── 待辦公版（範本）：僅擁有者可存取 ──
+    // ── 待辦公版（範本）：已核准者共用 ──
     match /checklistTemplates/{templateId} {
-      allow read, update, delete: if isOwner();
+      allow read: if isApproved();
       allow create: if isCreatingOwn();
+      allow update, delete: if isApproved();
     }
   }
 }

@@ -24,7 +24,6 @@ export function useChecklistTemplates(): UseChecklistTemplatesResult {
     }
     setLoading(true);
     const unsubscribe = subscribeChecklistTemplates(
-      user.uid,
       (list) => {
         setTemplates(list);
         setError(null);

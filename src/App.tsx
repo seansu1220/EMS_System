@@ -10,6 +10,7 @@ import { TaskDetailPage } from './pages/TaskDetailPage';
 import { CategoriesPage } from './pages/CategoriesPage';
 import { ChecklistTemplatesPage } from './pages/ChecklistTemplatesPage';
 import { ToolsPage } from './pages/ToolsPage';
+import { UsersPage } from './pages/UsersPage';
 
 export default function App() {
   return (
@@ -30,6 +31,8 @@ export default function App() {
         <Route path="categories" element={<CategoriesPage />} />
         <Route path="templates" element={<ChecklistTemplatesPage />} />
         <Route path="tools" element={<ToolsPage />} />
+        {/* 使用者管理：頁面內再檢查管理員身分，非管理員導回首頁。 */}
+        <Route path="users" element={<UsersPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

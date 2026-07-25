@@ -24,7 +24,6 @@ export function useCategories(): UseCategoriesResult {
     }
     setLoading(true);
     const unsubscribe = subscribeCategories(
-      user.uid,
       (list) => {
         setCategories(list);
         setError(null);

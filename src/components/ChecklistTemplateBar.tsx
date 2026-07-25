@@ -6,6 +6,7 @@
  */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import { useChecklistTemplates } from '../hooks/useChecklistTemplates';
 import { createChecklistTemplate } from '../services/checklistTemplateService';
 import { appendChecklistFromTemplate, extractChecklistContents } from '../services/taskService';
@@ -17,6 +18,7 @@ interface ChecklistTemplateBarProps {
 }
 
 export function ChecklistTemplateBar({ task }: ChecklistTemplateBarProps) {
+  const { user } = useAuth();
   const { templates, loading, error: loadError } = useChecklistTemplates();
 
   const [selectedId, setSelectedId] = useState('');
@@ -63,10 +65,15 @@ export function ChecklistTemplateBar({ task }: ChecklistTemplateBarProps) {
       setError('目前沒有待辦事項可存成公版。');
       return;
     }
+    if (!user) {
+      setError('尚未登入，無法建立公版。');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await createChecklistTemplate(name, contents, task.ownerUid);
+      // 建立者記為目前登入者（安全規則要求 ownerUid 等於自己）。
+      await createChecklistTemplate(name, contents, user.uid);
       setSavingAsTemplate(false);
       setNewTemplateName('');
     } catch (err) {

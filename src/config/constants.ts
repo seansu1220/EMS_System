@@ -48,3 +48,24 @@ export const REMINDER_DAYS = {
 
 /** 首次登入自動建立的預設屬性名稱（依此順序即為初始 sortOrder）。 */
 export const DEFAULT_CATEGORIES: readonly string[] = ['採購', '系統', '其他'];
+
+/**
+ * 管理員 email 白名單（不分大小寫）。
+ * 管理員可核准/停用帳號、刪除業務；其餘已核准使用者僅可新增與編輯。
+ * ⚠️ 修改時必須同步更新 `firebase/firestore.rules` 的 `isAdmin()`——
+ * 規則無法引用本檔，權限的最終防線在資料庫層。
+ */
+export const ADMIN_EMAILS: readonly string[] = ['seansu1220@gmail.com'];
+
+/** 帳號狀態的中文標籤與色調（配置驅動，供使用者管理頁顯示）。 */
+export const USER_STATUS_LABELS: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: '待審核', tone: 'amber' },
+  approved: { label: '已核准', tone: 'green' },
+  rejected: { label: '未通過', tone: 'red' },
+};
+
+/** 角色的中文標籤。 */
+export const USER_ROLE_LABELS: Record<string, string> = {
+  admin: '管理員',
+  member: '一般使用者',
+};

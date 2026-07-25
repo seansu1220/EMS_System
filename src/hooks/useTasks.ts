@@ -1,5 +1,5 @@
 /**
- * 訂閱目前登入者全部業務的 hook。
+ * 訂閱全部業務的 hook（全體已核准使用者共用同一批資料）。
  * 回傳的清單依 SPEC 排序規則（未完成在前、期限近到遠、無期限最後、再依 updatedAt）排序。
  */
 import { useEffect, useMemo, useState } from 'react';
@@ -28,7 +28,6 @@ export function useTasks(): UseTasksResult {
     }
     setLoading(true);
     const unsubscribe = subscribeTasks(
-      user.uid,
       (list) => {
         setTasks(list);
         setError(null);

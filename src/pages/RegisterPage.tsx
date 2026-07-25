@@ -40,7 +40,10 @@ export function RegisterPage() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <h1 className="mb-1 text-center text-xl font-bold text-slate-800">{APP_NAME}</h1>
-        <p className="mb-5 text-center text-sm text-slate-500">建立新帳號</p>
+        <p className="mb-3 text-center text-sm text-slate-500">建立新帳號</p>
+        <p className="mb-5 rounded-lg bg-amber-50 px-3 py-2 text-center text-xs text-amber-700">
+          新帳號需經管理員核准後才能使用系統；註冊後請等待通知。
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <FieldLabel>顯示名稱</FieldLabel>

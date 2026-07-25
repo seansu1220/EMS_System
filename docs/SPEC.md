@@ -1,10 +1,11 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.7　建立日期：2026-07-22　最後更新：2026-07-25
+> 版本：v1.8　建立日期：2026-07-22　最後更新：2026-07-25
 > v1.1：移除優先度/狀態欄位、新增待辦清單（checklist）、完成鎖定區塊、表單內快速新增屬性
 > v1.2：進度/完成加時間（時:分）、勾待辦可寫入進度、待辦已完成預設隱藏、期限展期按鈕
 > v1.7：業務說明欄位加大、待辦可編輯期限/內容與拖曳排流程順序、完成進度條、待辦公版（範本）
-> 使用者：救護科股長（單一使用者，多裝置使用）
+> v1.8：多人共用同一批資料 + 帳號審核制 + 角色權限（僅管理員可刪除業務）
+> 使用者：救護科股長（管理員）＋經核准的代理同事，多裝置使用
 
 輔助救護科股長辦公的業務與行程管理網頁系統。可新增業務、註記期限、更新處理進度、
 備註；首頁提供近期任務提醒與依屬性分類的業務列表。桌機 / 手機皆可使用，資料雲端同步。
@@ -33,9 +34,30 @@
 
 ## 2. 功能規格
 
-### 2.1 登入
-- Email/密碼註冊登入 + Google 一鍵登入（同 Case_Control）。
-- 所有資料掛 `ownerUid`，僅本人可讀寫（單人使用，但保留安全隔離）。
+### 2.1 登入與帳號審核（v1.8 起）
+- Email/密碼註冊登入 + Google 一鍵登入。
+- **帳號審核制**：新註冊的帳號狀態為 `pending`（待審核），登入後只看得到「等待管理員核准」畫面，
+  **完全無法讀取任何業務資料**（安全規則層阻擋）。管理員核准後畫面**自動解鎖**（即時訂閱 users 文件），
+  不需重新登入。管理員可將帳號改為 `rejected`（拒絕/停用），該帳號即無法再進入系統（資料不刪除）。
+- 註冊頁明示「新帳號需經管理員核准後才能使用」。
+- **管理員以 email 白名單認定**（`ADMIN_EMAILS`，目前為 `seansu1220@gmail.com`），
+  不是靠資料庫欄位，避免有人竄改自己的文件提權；該 email 註冊/登入時自動為 `admin` + `approved`。
+
+### 2.1.1 權限模型（v1.8 起）
+**資料範圍：全體已核准使用者共用同一批業務 / 屬性 / 待辦公版**（代理職務時可互相接手）。
+`ownerUid` 欄位語意自 v1.8 起改為「**建立者**」，不再用於資料隔離。
+
+| 動作 | 管理員 | 一般使用者（已核准） | 待審核 / 未通過 |
+| --- | --- | --- | --- |
+| 讀取業務、屬性、待辦公版 | ✅ | ✅ | ❌ |
+| 新增 / 編輯業務（含進度、待辦、完成/解除） | ✅ | ✅ | ❌ |
+| **刪除業務** | ✅ | ❌ | ❌ |
+| 管理屬性、待辦公版（含刪除） | ✅ | ✅ | ❌ |
+| 使用者管理（核准 / 停用帳號） | ✅ | ❌ | ❌ |
+
+- 一般使用者的「刪除業務」按鈕**不顯示**，且即使繞過前端也會被 Firestore 規則擋下。
+- 屬性與待辦公版的刪除目前**未**限管理員（依使用者指示，只鎖業務刪除）；日後如需收緊只需改規則與 `lib/permissions.ts`。
+- 前端判斷集中於 `src/lib/permissions.ts`（純函式），最終防線為 `firebase/firestore.rules`，兩者須一致。
 
 ### 2.2 首頁 `/`
 **上方：近期任務提醒卡**
@@ -133,29 +155,47 @@
   - 業務詳情頁待辦區塊：選公版按「套用公版」，**附加**到現有待辦之後（不覆蓋既有項目），二次確認。
 - 刪除公版不影響已套用到業務上的待辦事項。
 
-### 2.6 路由
+### 2.6 使用者管理 `/users`（v1.8 起，僅管理員）
+- 列出所有註冊帳號（**待審核排最前**，其次已核准、未通過；同組內依註冊時間新到舊）。
+- 每列顯示：顯示名稱、email、角色、狀態徽章（待審核＝橙、已核准＝綠、未通過＝紅）。
+- 動作（皆二次確認）：`核准`（→ approved）、`拒絕 / 停用`（→ rejected）。
+- 管理員自己的帳號與其他白名單 email 不可在此調整（權限來自 email 白名單）。
+- 頁首顯示待審核數量提醒；非管理員進入此路徑一律導回首頁。
+
+### 2.7 路由
 | 路徑 | 頁面 | 權限 |
 | --- | --- | --- |
 | `/login` | 登入 / 註冊 | 公開 |
-| `/` | 首頁（提醒 + 列表） | 需登入 |
-| `/tasks/new` | 新增業務（可選待辦公版） | 需登入 |
-| `/tasks/:taskId` | 業務詳情 / 編輯 / 進度 / 待辦 | 需登入 |
-| `/categories` | 屬性管理 | 需登入 |
-| `/templates` | 待辦公版管理 | 需登入 |
-| `/tools` | 小工具（保留區域） | 需登入 |
+| `/` | 首頁（提醒 + 列表） | 需登入且**已核准** |
+| `/tasks/new` | 新增業務（可選待辦公版） | 需登入且已核准 |
+| `/tasks/:taskId` | 業務詳情 / 編輯 / 進度 / 待辦 | 需登入且已核准（刪除僅管理員） |
+| `/categories` | 屬性管理 | 需登入且已核准 |
+| `/templates` | 待辦公版管理 | 需登入且已核准 |
+| `/tools` | 小工具（保留區域） | 需登入且已核准 |
+| `/users` | 使用者管理 | 僅管理員 |
+
+未核准的登入者不論進入哪個受保護路徑，一律顯示「等待管理員核准」畫面。
 
 ---
 
 ## 3. 資料模型（Firestore）
 
-- `users/{uid}`：{ uid, email, displayName, createdAt }
-- `categories/{id}`：{ name, sortOrder, ownerUid, createdAt }
-- `tasks/{id}`：見 2.3 欄位表
+- `users/{uid}`：{ uid, email, displayName, **role**（admin/member）, **status**（pending/approved/rejected）,
+  **reviewedAt**, **reviewedBy**, createdAt }（粗體為 v1.8 新增）
+- `categories/{id}`：{ name, sortOrder, ownerUid（建立者）, createdAt }
+- `tasks/{id}`：見 2.3 欄位表（ownerUid 為建立者）
 - `checklistTemplates/{id}`：見 2.5（待辦公版）
 
-### 安全規則
-- 四個集合的讀寫皆要求 `request.auth.uid == resource.data.ownerUid`（users 為本人文件）。
-- 建立時強制 `ownerUid == request.auth.uid`。
+### 安全規則（v1.8 改版）
+- 管理員以 `request.auth.token.email` 比對白名單認定（**不讀資料庫欄位**，避免竄改文件提權）；
+  白名單須與 `src/config/constants.ts` 的 `ADMIN_EMAILS` 手動保持一致。
+- `tasks` / `categories` / `checklistTemplates`：
+  讀取與更新須為「已核准使用者」；建立另強制 `ownerUid == request.auth.uid`（記錄建立者）；
+  **`tasks` 的 delete 僅管理員**。
+- `users`：本人可讀自己的文件、可改自己的一般欄位，但 **role 與 status 不可自行變更**（不可自我核准/提權）；
+  列出全部帳號與變更他人狀態僅限管理員；建立時強制
+  `role/status == (管理員 email ? admin/approved : member/pending)`。
+- 規則測試腳本置於 `scripts/rules.test.mjs`（需 JDK 21 + `@firebase/rules-unit-testing`，見檔頭說明）。
 
 ---
 
@@ -165,16 +205,17 @@
 EMS_System/
 ├─ src/
 │  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts
-│  ├─ config/       constants.ts（提醒天數 7/30、預設屬性、集合名稱）
-│  ├─ lib/          firebase.ts、taskLogic.ts、recurrence.ts、checklistLogic.ts
-│  ├─ services/     authService、taskService、categoryService、checklistTemplateService
+│  ├─ config/       constants.ts（提醒天數 7/30、預設屬性、集合名稱、ADMIN_EMAILS）
+│  ├─ lib/          firebase.ts、taskLogic.ts、recurrence.ts、checklistLogic.ts、permissions.ts
+│  ├─ services/     authService、taskService、categoryService、checklistTemplateService、userService
 │  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
 │  │                CompletionSection、ui
-│  └─ pages/        LoginPage、HomePage、NewTaskPage、TaskDetailPage、
-│                   CategoriesPage、ChecklistTemplatesPage、ToolsPage
+│  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
+│                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage
+├─ scripts/         rules.test.mjs（Firestore 安全規則測試）
 ├─ firebase/        firestore.rules
 ├─ docs/            SPEC.md、CHANGELOG.md
 ├─ firebase.json / .firebaserc

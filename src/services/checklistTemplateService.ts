@@ -1,6 +1,8 @@
 /**
  * 待辦公版（範本）業務邏輯：查詢、建立、改名、更新項目、刪除。
- * 不依賴 React。權限由 Firestore Security Rules 強制（僅 ownerUid 本人可存取）。
+ * 不依賴 React。
+ * 權限由 Firestore Security Rules 強制：公版為全體已核准使用者共用（v1.8 起）。
+ * `ownerUid` 欄位語意為「建立者」，不再用於資料隔離。
  * 排序於用戶端完成（依名稱），不需複合索引。
  */
 import {
@@ -9,10 +11,8 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
-  query,
   serverTimestamp,
   updateDoc,
-  where,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
@@ -63,20 +63,15 @@ export function buildTemplateItems(contents: string[]): ChecklistTemplateItem[] 
 }
 
 /**
- * 訂閱目前使用者的待辦公版清單（即時更新，依名稱排序）。
+ * 訂閱待辦公版清單（即時更新，依名稱排序；全體已核准使用者共用）。
  * @returns 取消訂閱函式
  */
 export function subscribeChecklistTemplates(
-  ownerUid: string,
   onData: (templates: ChecklistTemplate[]) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const templatesQuery = query(
-    collection(db, COLLECTIONS.checklistTemplates),
-    where('ownerUid', '==', ownerUid),
-  );
   return onSnapshot(
-    templatesQuery,
+    collection(db, COLLECTIONS.checklistTemplates),
     (snapshot) =>
       onData(
         snapshot.docs

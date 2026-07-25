@@ -1,7 +1,7 @@
 {
   "name": "ems-system",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.8.0",
   "type": "module",
   "description": "救護科業務管理系統 - 業務 CRUD、期限提醒、進度管理、屬性分類、跨裝置雲端同步",
   "scripts": {
@@ -9,6 +9,7 @@
     "start": "vite --open",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "test:rules": "firebase emulators:exec --only firestore \"node scripts/rules.test.mjs\"",
     "deploy": "npm run build && firebase deploy"
   },
   "dependencies": {

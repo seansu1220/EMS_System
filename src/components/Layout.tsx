@@ -9,7 +9,7 @@ import { APP_BUILD_TIME, APP_NAME, APP_VERSION } from '../config/constants';
 import { Button } from './ui';
 
 export function Layout() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -46,6 +46,12 @@ export function Layout() {
             <NavLink to="/tools" className={navItemClass}>
               小工具
             </NavLink>
+            {/* 使用者管理僅管理員可見（權限最終防線仍在 Firestore 規則）。 */}
+            {isAdmin && (
+              <NavLink to="/users" className={navItemClass}>
+                使用者管理
+              </NavLink>
+            )}
           </nav>
           <div className="flex items-center gap-2 text-sm text-slate-600">
             <span
@@ -54,7 +60,10 @@ export function Layout() {
             >
               v{APP_VERSION}
             </span>
-            <span className="hidden sm:inline">{user?.displayName}</span>
+            <span className="hidden sm:inline">
+              {user?.displayName}
+              {isAdmin && <span className="ml-1 text-xs text-slate-400">（管理員）</span>}
+            </span>
             <Button variant="ghost" onClick={handleLogout}>
               登出
             </Button>

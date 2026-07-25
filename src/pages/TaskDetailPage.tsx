@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import { useCategories } from '../hooks/useCategories';
 import { deleteTask, reopenTask, subscribeTask, updateTask } from '../services/taskService';
 import type { Task, TaskDraft } from '../types/task';
@@ -17,6 +18,7 @@ import { Button, Card, CenteredSpinner, ErrorBanner } from '../components/ui';
 export function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
+  const { user, isAdmin: canDelete } = useAuth();
   const { categories } = useCategories();
 
   const [task, setTask] = useState<Task | null>(null);
@@ -147,7 +149,8 @@ export function TaskDetailPage() {
         </h2>
         <TaskForm
           categories={categories}
-          ownerUid={task.ownerUid}
+          /* 表單內即時新增屬性時，建立者記為「目前登入者」而非業務的建立者。 */
+          ownerUid={user?.uid ?? ''}
           initial={{
             title: task.title,
             categoryId: task.categoryId,
@@ -188,7 +191,8 @@ export function TaskDetailPage() {
         </Card>
       )}
 
-      {!locked && (
+      {/* 刪除業務僅管理員可執行（Firestore 規則同樣會擋下一般使用者）。 */}
+      {!locked && canDelete && (
         <Card>
           <div className="flex items-center justify-between">
             <div>

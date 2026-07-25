@@ -1,6 +1,8 @@
 /**
  * 屬性（分類）業務邏輯：查詢、建立、改名、排序、刪除、預設屬性建立。
- * 不依賴 React。權限由 Firestore Security Rules 強制（僅 ownerUid 本人可存取）。
+ * 不依賴 React。
+ * 權限由 Firestore Security Rules 強制：屬性為全體已核准使用者共用（v1.8 起）。
+ * `ownerUid` 欄位語意為「建立者」，不再用於資料隔離。
  */
 import {
   addDoc,
@@ -48,34 +50,28 @@ function bySortOrder(a: Category, b: Category): number {
 }
 
 /**
- * 訂閱目前使用者的屬性清單（即時更新）。排序於用戶端完成，不需複合索引。
+ * 訂閱屬性清單（即時更新，全體已核准使用者共用）。排序於用戶端完成，不需複合索引。
  * @returns 取消訂閱函式
  */
 export function subscribeCategories(
-  ownerUid: string,
   onData: (categories: Category[]) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const categoriesQuery = query(
-    collection(db, COLLECTIONS.categories),
-    where('ownerUid', '==', ownerUid),
-  );
   return onSnapshot(
-    categoriesQuery,
+    collection(db, COLLECTIONS.categories),
     (snapshot) => onData(snapshot.docs.map(mapCategory).sort(bySortOrder)),
     (error) => onError(new Error(`讀取屬性失敗（categoryService.subscribeCategories）：${error.message}`)),
   );
 }
 
 /**
- * 首次登入時建立預設屬性（採購、系統、其他）。
- * 若使用者已有任何屬性則不動作，避免重複建立。
+ * 系統首次使用時建立預設屬性（採購、系統、其他）。
+ * 屬性為全體共用，故只要**已有任何屬性**就不動作，避免第二位使用者登入時重複建立。
+ * @param ownerUid 建立者 uid（記錄用）
  */
 export async function ensureDefaultCategories(ownerUid: string): Promise<void> {
   try {
-    const existing = await getDocs(
-      query(collection(db, COLLECTIONS.categories), where('ownerUid', '==', ownerUid)),
-    );
+    const existing = await getDocs(collection(db, COLLECTIONS.categories));
     if (!existing.empty) return;
     const batch = writeBatch(db);
     DEFAULT_CATEGORIES.forEach((name, index) => {
@@ -136,14 +132,10 @@ export async function reorderCategories(orderedIds: string[]): Promise<void> {
 }
 
 /** 計算某屬性目前被幾筆業務使用（刪除前檢查）。 */
-export async function countTasksInCategory(categoryId: string, ownerUid: string): Promise<number> {
+export async function countTasksInCategory(categoryId: string): Promise<number> {
   try {
     const snapshot = await getDocs(
-      query(
-        collection(db, COLLECTIONS.tasks),
-        where('ownerUid', '==', ownerUid),
-        where('categoryId', '==', categoryId),
-      ),
+      query(collection(db, COLLECTIONS.tasks), where('categoryId', '==', categoryId)),
     );
     return snapshot.size;
   } catch (error) {
@@ -160,15 +152,10 @@ export async function countTasksInCategory(categoryId: string, ownerUid: string)
 export async function reassignTasksCategory(
   fromCategoryId: string,
   toCategoryId: string,
-  ownerUid: string,
 ): Promise<void> {
   try {
     const snapshot = await getDocs(
-      query(
-        collection(db, COLLECTIONS.tasks),
-        where('ownerUid', '==', ownerUid),
-        where('categoryId', '==', fromCategoryId),
-      ),
+      query(collection(db, COLLECTIONS.tasks), where('categoryId', '==', fromCategoryId)),
     );
     if (snapshot.empty) return;
     const batch = writeBatch(db);

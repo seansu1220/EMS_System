@@ -1,6 +1,9 @@
 /**
  * 業務（task）業務邏輯：查詢、新增、更新、刪除、進度與待辦管理、完成/解除。
- * 不依賴 React。權限由 Firestore Security Rules 強制（僅 ownerUid 本人可存取）。
+ * 不依賴 React。
+ * 權限由 Firestore Security Rules 強制：**業務為全體已核准使用者共用**——
+ * 皆可讀取、新增、編輯，僅管理員可刪除（v1.8 起）。
+ * `ownerUid` 欄位自 v1.8 起語意為「建立者」，不再用於資料隔離。
  * 清單排序/篩選於用戶端（見 lib/taskLogic.ts）完成，不需複合索引。
  */
 import {
@@ -9,10 +12,8 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
-  query,
   serverTimestamp,
   updateDoc,
-  where,
   type DocumentData,
   type DocumentSnapshot,
   type QueryDocumentSnapshot,
@@ -75,17 +76,16 @@ function mapTask(snapshot: QueryDocumentSnapshot<DocumentData>): Task {
 }
 
 /**
- * 訂閱目前使用者的全部業務（即時更新）。排序交由呼叫端（用戶端）處理。
+ * 訂閱全部業務（即時更新，全體已核准使用者共用同一批資料）。
+ * 排序交由呼叫端（用戶端）處理。
  * @returns 取消訂閱函式
  */
 export function subscribeTasks(
-  ownerUid: string,
   onData: (tasks: Task[]) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const tasksQuery = query(collection(db, COLLECTIONS.tasks), where('ownerUid', '==', ownerUid));
   return onSnapshot(
-    tasksQuery,
+    collection(db, COLLECTIONS.tasks),
     (snapshot) => onData(snapshot.docs.map(mapTask)),
     (error) => onError(new Error(`讀取業務失敗（taskService.subscribeTasks）：${error.message}`)),
   );
@@ -110,7 +110,8 @@ export function subscribeTask(
 }
 
 /**
- * 新增業務；時間戳與擁有者由系統填入，初始為未完成、無進度。
+ * 新增業務；時間戳與建立者由系統填入，初始為未完成、無進度。
+ * @param ownerUid 建立者 uid（須為目前登入者，安全規則會檢查）
  * @param initialChecklistItems 初始待辦事項（由待辦公版帶入時使用；預設為空清單）
  */
 export async function createTask(
@@ -149,7 +150,7 @@ export async function updateTask(taskId: string, fields: Partial<TaskDraft>): Pr
   }
 }
 
-/** 刪除業務。 */
+/** 刪除業務（僅管理員；一般使用者會被安全規則擋下）。 */
 export async function deleteTask(taskId: string): Promise<void> {
   try {
     await deleteDoc(doc(db, COLLECTIONS.tasks, taskId));

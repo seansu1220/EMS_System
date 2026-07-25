@@ -4,6 +4,92 @@
 
 ---
 
+## 2026-07-25　v1.8 登入管制：帳號審核制 + 角色權限 + 資料改為多人共用
+
+### 需求描述
+1. **登入要有管制、要有使用者權限**。
+2. 管理員為 `seansu1220@gmail.com`（權限最大）；其他人註冊後**必須經管理員允許才能成為正式帳號**。
+3. 兩種帳號的差別：**只有管理員能刪除業務**，其他人不行。
+4. 使用者補充：目前主要仍是他個人的業務，但同事代理時要能「點進來看他有什麼待辦、幫他新增業務」，
+   故**資料為大家共用同一批**（未來擴充多人再調整邏輯）。
+
+### 根本原因
+需求變更（非缺陷）：原系統設計為「單一使用者、多裝置」，所有資料以 `ownerUid` 做硬隔離
+（每個帳號只看得到自己的資料），既無角色概念，也無註冊審核；任何人都能自行註冊直接使用，
+且任何人都能刪除自己看得到的業務。
+
+### 修改的檔案與內容摘要
+
+**A. 型別與設定（型別先行 / 配置驅動）**
+- `src/types/user.ts`：新增 `UserRole`（admin | member）、`UserStatus`（pending | approved | rejected）；
+  `AppUser` 新增 `role`、`status`、`reviewedAt`、`reviewedBy`。
+- `src/config/constants.ts`：新增 `ADMIN_EMAILS`（管理員 email 白名單，註明須與 firestore.rules 同步）、
+  `USER_STATUS_LABELS`（中文標籤 + 色調）、`USER_ROLE_LABELS`。
+- `src/lib/permissions.ts`（新增，純函式）：`isAdminEmail`、`resolveRole`、`resolveInitialStatus`、
+  `isAdmin`、`isApproved`、`canDeleteTask`、`canManageUsers`；管理員一律以 **email 白名單**認定，
+  不看資料庫欄位（避免竄改文件提權）。
+
+**B. 帳號審核流程**
+- `src/services/authService.ts`：`ensureUserDoc` 建立文件時依 email 決定 `role/status`
+  （管理員 → admin/approved；其他人 → member/**pending**），已有 status 則不覆寫；
+  舊資料（無 status）自動補寫。`register` 同步寫入 role/status。
+  新增 `subscribeUserProfile`（即時訂閱自己的帳號文件）、`mapUserData`（舊資料相容推導）。
+- `src/context/AuthProvider.tsx`：改用 `subscribeUserProfile` **即時訂閱**——管理員核准後，
+  待審核者的畫面自動解鎖，不需重新登入；`ensureDefaultCategories` 僅在帳號已核准時才呼叫
+  （待審核帳號碰 categories 會被規則擋下）；context 新增 `isAdmin`、`isApproved` 兩個衍生旗標。
+- `src/context/authContext.ts`：`AuthContextValue` 新增 `isAdmin`、`isApproved`。
+- `src/components/ProtectedRoute.tsx`：未核准者顯示 `PendingApprovalPage`，不進入系統、不載入任何業務資料。
+- `src/pages/PendingApprovalPage.tsx`（新增）：待審核 / 未通過的提示畫面（含帳號資訊與登出）。
+- `src/pages/RegisterPage.tsx`：註冊表單上方加註「新帳號需經管理員核准後才能使用」。
+- `src/services/userService.ts`（新增）：`subscribeUsers`（待審核排最前）、`setUserStatus`（核准/拒絕，
+  記錄 reviewedAt / reviewedBy）。
+- `src/pages/UsersPage.tsx`（新增）：`/users` 使用者管理頁（僅管理員，非管理員導回首頁）——
+  帳號清單、狀態徽章、核准 / 停用（二次確認）、待審核數量提醒；管理員帳號不可在此調整。
+- `src/App.tsx`、`src/components/Layout.tsx`：新增 `/users` 路由；導覽列「使用者管理」僅管理員可見，
+  右上角顯示名稱後加「（管理員）」。
+
+**C. 資料由「各自隔離」改為「全體共用」**
+- `src/services/taskService.ts`、`categoryService.ts`、`checklistTemplateService.ts`：
+  訂閱查詢移除 `where('ownerUid','==',uid)`（改讀整個集合），對應簽名去掉 ownerUid 參數；
+  `countTasksInCategory` / `reassignTasksCategory` 同步移除 ownerUid 條件；
+  `ensureDefaultCategories` 改為「整個集合為空」才建立（避免第二位使用者登入時重複建立預設屬性）。
+  `ownerUid` 欄位保留，語意改為「**建立者**」並於檔頭註明。
+- `src/hooks/useTasks.ts`、`useCategories.ts`、`useChecklistTemplates.ts`：配合新簽名。
+- `src/pages/CategoriesPage.tsx`：配合新簽名。
+- `src/pages/TaskDetailPage.tsx`：**刪除業務卡片僅管理員可見**；表單的 `ownerUid` 改傳「目前登入者」
+  （原本傳業務建立者，會導致同事在他人業務內新增屬性時被規則擋下）。
+- `src/components/ChecklistTemplateBar.tsx`：「另存為公版」的建立者改為目前登入者（同上原因）。
+
+**D. 安全規則（權限最終防線）**
+- `firebase/firestore.rules`：改寫。`isAdmin()` 以 `request.auth.token.email` 比對白名單；
+  `isApproved()` = 管理員 or 自己的 users 文件 `status == 'approved'`；
+  tasks/categories/checklistTemplates 讀取與更新須已核准、建立強制 `ownerUid == uid`、
+  **tasks 的 delete 僅管理員**；users 拆成 `get`（本人或管理員）與 `list`（僅管理員），
+  建立時強制 role/status 依 email 決定，更新時**本人不可改自己的 role/status**（不可自我核准）。
+- `scripts/rules.test.mjs`（新增）：涵蓋管理員 / 成員 / 待審核 / 未登入 / 自我提權共 20 項規則測試。
+
+### 規格外決定
+- 管理員判定用 **email 白名單**而非 users 文件的 role 欄位：即使有人竄改自己的文件也無法提權；
+  代價是白名單需在 `constants.ts` 與 `firestore.rules` 兩處手動同步（兩處皆已加註警語）。
+- 管理員在 `isApproved()` 中短路（不查文件），確保即使自己的 users 文件缺欄位也不會被鎖在系統外。
+- 屬性與待辦公版的**刪除未限管理員**（使用者只要求鎖「刪除業務」）；日後要收緊只需改規則與 permissions.ts。
+- 帳號被停用（rejected）只擋登入使用，**不刪除**其建立的資料。
+- 前端判斷管理員時，email 一律取自 Firebase 登入資訊（與安全規則使用的 token email 同源），
+  不用 users 文件內的 email 欄位，避免舊文件欄位缺漏導致管理員被誤判為一般使用者。
+
+### 驗收
+- `npx tsc -b` 型別檢查零錯誤；`npm run build` 零錯誤（僅 bundle 體積 >500kB 常規警告）。
+- `scripts/rules.test.mjs` **尚未實際執行**：firebase-tools 15 的模擬器需 JDK 21，本機僅有 Java 8
+  （為避免影響本機既有 Java 環境未安裝新 JDK）。
+- 改以**線上實測**替代：部署後以臨時測試帳號（非管理員）直接呼叫 Firestore REST API 實測 8 項，全數通過——
+  可建立自己的 pending 文件 ✅／讀不到業務清單（403）✅／不可新增業務（403）✅／不可自我核准（403）✅／
+  不可自我提權為 admin（403）✅／不可列出使用者清單（403）✅／可讀自己的文件 ✅／可改自己的顯示名稱 ✅。
+  測試後已刪除該 Auth 帳號與其 Firestore 文件。
+- **尚未實測**：「已核准的一般使用者」路徑（需管理員核准一個帳號才能測），
+  待第一位同事註冊並核准後確認；規則上僅差 `status == 'approved'` 的字串比對。
+
+---
+
 ## 2026-07-25　v1.7 說明欄加大 + 待辦流程控管（編輯期限/拖曳排序/進度）+ 待辦公版
 
 ### 需求描述
