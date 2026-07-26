@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-07-26　v1.10 小工具第二、三階段：查詢、匯出、分隊彙總統計
+
+### 需求描述
+完成「各分隊到院前預警比率」的自動化：查詢上個月已結案案件 → 匯出兩份 Excel
+（全部／到院前傳送預警）→ 依分隊彙總並產出比較表。
+
+### 探測發現與踩到的坑
+1. **上方 header 那排報表連結，登入直後並不存在**（只有「首頁」），
+   要進入報表系統後才會出現。原本用它導航必然逾時失敗，改走左側選單。
+2. **「查詢」與「匯出EXCEL」不是標準表單按鈕**，而是 `<img id="_btnQuery">`／`<img id="_btnExcel">`，
+   因此第一版探測器（只掃 input/button/select）完全掃不到。已擴充為掃描所有帶 onclick
+   的元素與圖片，並同步加強遮蔽（資料列表內元素跳過、5 碼以上數字遮蔽）。
+3. **兩個進階搜尋是同頁展開，不是彈出視窗**（`triggleTable()`／`triggleTable2()`）。
+   展開函式是 toggle，盲目呼叫兩次會把已展開的區塊收起來，故改為「先檢查可見性再決定是否切換」。
+4. **SheetJS 的 ESM 版本必須先 `set_fs(fs)`**，否則 `readFile`／`writeFile` 直接拋
+   `cannot save file`。這個問題只有在實際讀寫檔時才會出現，已用整合測試釘住。
+
+### 修改的檔案與內容摘要
+- 新增 `tools/ems-report/navigation.mjs`：frame 查找（每次重查，因 POST 導頁會重建 frame）、
+  導向查詢頁（左側選單為主、直接載入網址為備援）、`ensureFieldVisible` 確保欄位可見。
+- 新增 `tools/ems-report/scrape.mjs`：偵測系統日期格式（讀 My97DatePicker 的 `dateFmt`）、
+  填入期間與救護狀態、兩次查詢與匯出；下載監聽同時涵蓋主視窗與新開分頁，避免彈窗下載漏接。
+- 新增 `tools/ems-report/workbook.mjs`：匯出檔解析，**自動定位標題列**
+  （政府匯出檔上方常有報表名稱與查詢條件說明列）；`describeWorkbook` 只回報欄名與筆數。
+- 新增 `tools/ems-report/aggregate.mjs`：`resolveSquadColumn`／`countBySquad`／
+  `buildComparison`／`summarize`／`formatRatio`，全部為純函式。
+- 新增 `tools/ems-report/report.mjs`：終端機對齊表格（中日韓字元寬度計算）與 Excel 報表輸出。
+- 新增 `tools/ems-report/xlsxNode.mjs`：SheetJS 的 Node 包裝，統一處理 `set_fs`。
+- 新增測試 `aggregate.test.mjs`、`workbook.test.mjs`（共 14 項，含寫出／讀回真實 Excel）。
+- `tools/ems-report/dateRange.mjs`：`formatDateForSite` 由三種固定格式改為樣板轉換
+  （支援 `yyyy`／`yy`／`ryyy` 民國年／`MM`／`dd`），配合執行時偵測到的系統格式。
+- `tools/ems-report/probe.mjs`：抽出導航邏輯至 navigation.mjs；擴充可點擊元素擷取。
+- `tools/ems-report/config.mjs`：補上 frame 名稱、AP 代號、備援網址產生器、查詢欄位與按鈕
+  選擇器、下拉選項實際值、分隊欄名候選、下載逾時。
+- `tools/ems-report/index.mjs`：串接完整流程；解析失敗時保留原始檔並輸出結構診斷。
+- `package.json`：新增 `xlsx`（SheetJS 官方 CDN 版）；測試指令改為掃描 `*.test.mjs`；版本 → 1.10.0。
+- `docs/SPEC.md`：新增 4.5 探測結果、4.7 統計規則，模組職責與進度同步更新。
+
+### 個資防護（沿用並強化）
+- 匯出的原始明細只落在 `out/raw/`，**統計成功後自動刪除**；解析失敗才保留供比對格式，並明確警告。
+- 最終報表只有分隊名稱與數字；`describeWorkbook` 的輸出經測試斷言不含任何資料列內容。
+- 探測模式新增兩道保險：資料列表（列數 > 5 的表格）內元素一律跳過、5 碼以上連續數字遮蔽。
+
+### 已驗證
+- `npm run tool:ems:test`：14 項全數通過。
+- 以合成的「含說明列」Excel 做端對端驗證：標題列定位、分隊計數、比率計算、
+  Excel 報表寫出與讀回皆正確（120/80/30 案件對應 24/4/0 預警，比率 20.0%／5.0%／0.0%，合計 12.2%）。
+
+### 待驗證
+- 尚未對真實系統實跑。日期格式與匯出檔的分隊欄名以實跑結果為準，
+  若欄名不在 `SQUAD_COLUMN_CANDIDATES` 內，程式會列出實際欄名並保留原始檔以便補上。
+
+---
+
 ## 2026-07-26　v1.9.1 小工具改為雙擊捷徑執行
 
 ### 問題描述

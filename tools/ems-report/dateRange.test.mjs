@@ -30,9 +30,11 @@ test('resolveMonthRange 解析 --month 參數', () => {
   assert.throws(() => resolveMonthRange('2026/06'), /格式/);
 });
 
-test('formatDateForSite 轉換系統日期格式', () => {
-  assert.equal(formatDateForSite('2026-06-01', 'iso'), '2026-06-01');
-  assert.equal(formatDateForSite('2026-06-01', 'slash'), '2026/06/01');
-  assert.equal(formatDateForSite('2026-06-01', 'roc'), '115/06/01');
-  assert.throws(() => formatDateForSite('2026-06-01', 'unknown'), /未知的日期格式/);
+test('formatDateForSite 依樣板轉換日期', () => {
+  assert.equal(formatDateForSite('2026-06-01', 'yyyy-MM-dd'), '2026-06-01');
+  assert.equal(formatDateForSite('2026-06-01', 'yyyy/MM/dd'), '2026/06/01');
+  assert.equal(formatDateForSite('2026-06-01', 'ryyy/MM/dd'), '115/06/01', '民國年');
+  assert.equal(formatDateForSite('2026-06-30', 'yy.MM.dd'), '26.06.30');
+  assert.throws(() => formatDateForSite('2026-6-1', 'yyyy-MM-dd'), /YYYY-MM-DD/);
+  assert.throws(() => formatDateForSite('2026-06-01', ''), /無效的日期格式樣板/);
 });

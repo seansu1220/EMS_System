@@ -12,8 +12,9 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { PATHS, SITE } from './config.mjs';
+import { PATHS } from './config.mjs';
 import { log, prompt } from './logger.mjs';
+import { gotoRecordQuery, toggleAdvancedSearch } from './navigation.mjs';
 
 /** 超過這個列數的表格視為「資料列表」，其內元素一律不擷取。 */
 const DATA_TABLE_ROW_LIMIT = 5;
@@ -135,74 +136,6 @@ async function captureTo(context, sequence, label) {
   return filePath;
 }
 
-/** 依名稱取得 frame；frame 會在導航後重建，故每次都重新查找。 */
-function getFrame(page, frameName) {
-  const frame = page.frames().find((item) => item.name() === frameName);
-  if (!frame) throw new Error(`找不到名為 ${frameName} 的 frame，系統版面可能已改版`);
-  return frame;
-}
-
-/** 等待內容框載入指定功能，回傳是否成功。 */
-async function waitForContentAp(page, apName, timeoutMs = 20000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const content = page.frames().find((item) => item.name() === SITE.frames.content);
-    if (content?.url().includes(apName)) return true;
-    await page.waitForTimeout(500);
-  }
-  return false;
-}
-
-/**
- * 導向「報表系統 → 救護紀錄表查詢」。
- *
- * 主要路徑：直接觸發左側選單那個連結（走系統自己的導航流程）。
- * 注意：上方 header 那排報表連結要進到報表系統後才會出現，登入直後並不存在，不可用來導航。
- * 備援路徑：直接把內容框導到該功能的網址。
- * @returns {Promise<string>} 實際使用的路徑描述
- */
-async function gotoRecordQuery(page) {
-  const sideMenu = getFrame(page, SITE.frames.sideMenu);
-  // 選單可能是收合狀態，用 JS 觸發而非 Playwright 點擊，才不會因為元素不可見而失敗。
-  const clicked = await sideMenu.evaluate((menuText) => {
-    const link = [...document.querySelectorAll('a')].find(
-      (item) => item.textContent.trim() === menuText,
-    );
-    if (!link) return false;
-    link.click();
-    return true;
-  }, SITE.menu.recordQuery);
-
-  if (clicked && (await waitForContentAp(page, SITE.apNames.recordQuery))) {
-    return '左側選單連結';
-  }
-
-  log.warn('點選單沒有成功切換，改用直接載入網址的備援方式');
-  const content = getFrame(page, SITE.frames.content);
-  await content.goto(SITE.contentUrl(SITE.apNames.recordQuery), { waitUntil: 'domcontentloaded' });
-  if (!(await waitForContentAp(page, SITE.apNames.recordQuery))) {
-    throw new Error('選單與直接載入網址都無法開啟救護紀錄表查詢頁');
-  }
-  return '直接載入網址（備援）';
-}
-
-/** 展開頁面上兩個進階搜尋區塊。 */
-async function expandAdvancedSearch(page) {
-  const content = getFrame(page, SITE.frames.content);
-  const expanded = [];
-  for (const toggleFnName of SITE.advancedSearchToggles) {
-    const ok = await content.evaluate((fnName) => {
-      const toggleFn = window[fnName];
-      if (typeof toggleFn !== 'function') return false;
-      toggleFn();
-      return true;
-    }, toggleFnName);
-    expanded.push(`${toggleFnName}=${ok ? '成功' : '找不到此函式'}`);
-    await page.waitForTimeout(800);
-  }
-  return expanded.join('、');
-}
-
 /** 記錄所有 frame 的名稱與網址，失敗時用來判斷卡在哪裡。 */
 async function describeFrames(page) {
   return page.frames().map((frame) => ({ name: frame.name(), url: frame.url() }));
@@ -235,7 +168,7 @@ export async function runAutoProbe(context, page) {
     await captureTo(context, 2, '救護紀錄表查詢-初始');
 
     log.info('展開「進階搜尋」與「急救處置進階搜尋」');
-    const expanded = await expandAdvancedSearch(page);
+    const expanded = await toggleAdvancedSearch(page);
     stepLog.push({ name: '展開進階搜尋', result: expanded });
     await captureTo(context, 3, '救護紀錄表查詢-已展開進階搜尋');
 

@@ -1,0 +1,158 @@
+/**
+ * 查詢與匯出：在救護紀錄表查詢頁設定條件，查詢後匯出 Excel。
+ *
+ * 共匯出兩份：
+ *   1. 救護狀態＝已結案（總案件數）
+ *   2. 救護狀態＝已結案 ＋ 院前預警＝到院前傳送預警（預警案件數）
+ *
+ * ⚠ 匯出檔含個案明細，只落在本機 out/raw/，且預設統計後即刪除。
+ */
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { SITE, PATHS, QUERY_CRITERIA, DATASETS, DOWNLOAD_TIMEOUT_MS } from './config.mjs';
+import { formatDateForSite } from './dateRange.mjs';
+import { log } from './logger.mjs';
+import { getFrame, gotoRecordQuery, ensureFieldVisible } from './navigation.mjs';
+
+/**
+ * 讀取日期欄位的 My97DatePicker 設定，取得系統採用的日期格式。
+ * 偵測不到就沿用設定檔的預設值，並在畫面上說明用了哪一種。
+ * @returns {Promise<string>} 例如 `yyyy-MM-dd`
+ */
+async function detectDateFormat(page) {
+  const content = getFrame(page, SITE.frames.content);
+  const attributeText = await content
+    .locator(SITE.queryFields.dateFrom)
+    .evaluate((element) =>
+      ['onfocus', 'onclick', 'onchange'].map((name) => element.getAttribute(name) || '').join(' '),
+    )
+    .catch(() => '');
+  const matched = /dateFmt\s*:\s*'([^']+)'/.exec(attributeText);
+  if (matched) {
+    log.info(`日期格式：${matched[1]}（自系統日期元件偵測）`);
+    return matched[1];
+  }
+  log.warn(`偵測不到系統日期格式，改用預設值 ${SITE.defaultDateFormat}`);
+  return SITE.defaultDateFormat;
+}
+
+/** 在內容框填入一個欄位的值。 */
+async function fillField(page, selector, value) {
+  const content = getFrame(page, SITE.frames.content);
+  await content.fill(selector, value);
+}
+
+/** 在內容框選擇一個下拉選項（以 value 指定，避免文字有全半形差異）。 */
+async function selectField(page, selector, value) {
+  const content = getFrame(page, SITE.frames.content);
+  await content.selectOption(selector, value);
+}
+
+/**
+ * 設定兩次查詢共通的條件：期間與救護狀態。
+ * @param {import('playwright-core').Page} page
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {string} dateFormat
+ */
+async function applyCommonCriteria(page, monthRange, dateFormat) {
+  await fillField(page, SITE.queryFields.dateFrom, formatDateForSite(monthRange.start, dateFormat));
+  await fillField(page, SITE.queryFields.dateTo, formatDateForSite(monthRange.end, dateFormat));
+  await ensureFieldVisible(page, SITE.queryFields.rescueStatus);
+  await selectField(page, SITE.queryFields.rescueStatus, QUERY_CRITERIA.rescueStatusValue);
+  log.info(`查詢條件：${monthRange.start} ~ ${monthRange.end}、救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`);
+}
+
+/**
+ * 等待任一視窗觸發檔案下載。
+ *
+ * 匯出可能由主視窗直接下載，也可能先開彈出視窗再下載，
+ * 因此新開的分頁也要一併監聽，否則會漏接。
+ *
+ * @param {import('playwright-core').BrowserContext} context
+ * @param {() => Promise<void>} action 觸發下載的動作
+ * @returns {Promise<import('playwright-core').Download>}
+ */
+function waitForAnyDownload(context, action) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`等待匯出檔案超過 ${DOWNLOAD_TIMEOUT_MS / 1000} 秒仍未開始下載`));
+    }, DOWNLOAD_TIMEOUT_MS);
+
+    const onDownload = (download) => {
+      cleanup();
+      resolve(download);
+    };
+    const onPage = (newPage) => newPage.on('download', onDownload);
+
+    function cleanup() {
+      clearTimeout(timer);
+      context.off('page', onPage);
+      for (const openPage of context.pages()) openPage.off('download', onDownload);
+    }
+
+    for (const openPage of context.pages()) openPage.on('download', onDownload);
+    context.on('page', onPage);
+
+    action().catch((error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+/** 按下查詢並等待結果頁回來。 */
+async function runQuery(page) {
+  const content = getFrame(page, SITE.frames.content);
+  await content.locator(SITE.queryFields.queryButton).click();
+  // 這個系統以 POST 重載內容框，網址不會變，因此以「載入完成 + 緩衝」判定。
+  await page.waitForLoadState('load', { timeout: 60000 }).catch(() => {});
+  await page.waitForTimeout(SITE.querySettleMs);
+}
+
+/** 按下匯出 EXCEL 並把檔案存到指定路徑。 */
+async function exportExcel(context, page, targetPath) {
+  const download = await waitForAnyDownload(context, async () => {
+    const content = getFrame(page, SITE.frames.content);
+    await content.locator(SITE.queryFields.excelButton).click();
+  });
+  await download.saveAs(targetPath);
+  const suggested = download.suggestedFilename();
+  log.ok(`已下載：${path.basename(targetPath)}（系統原檔名 ${suggested}）`);
+  return targetPath;
+}
+
+/**
+ * 執行兩次查詢與匯出。
+ * @param {import('playwright-core').BrowserContext} context
+ * @param {import('playwright-core').Page} page
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Promise<{total: string, alert: string}>} 兩份原始檔的路徑
+ */
+export async function exportBothDatasets(context, page, monthRange) {
+  await fs.mkdir(PATHS.rawDir, { recursive: true });
+
+  log.step('開啟救護紀錄表查詢');
+  const route = await gotoRecordQuery(page);
+  log.ok(`已開啟（${route}）`);
+
+  const dateFormat = await detectDateFormat(page);
+  await applyCommonCriteria(page, monthRange, dateFormat);
+
+  const results = {};
+  for (const dataset of [DATASETS.total, DATASETS.alert]) {
+    log.step(`查詢並匯出：${dataset.label}`);
+    await ensureFieldVisible(page, SITE.queryFields.prehospitalAlert);
+    await selectField(page, SITE.queryFields.prehospitalAlert, dataset.alertValue);
+    log.info(
+      dataset.alertValue
+        ? `院前預警＝${QUERY_CRITERIA.prehospitalAlertLabel}`
+        : '院前預警＝不限（取得全部送醫案件）',
+    );
+
+    await runQuery(page);
+    const targetPath = path.join(PATHS.rawDir, `${monthRange.label}-${dataset.key}.xls`);
+    results[dataset.key] = await exportExcel(context, page, targetPath);
+  }
+  return results;
+}

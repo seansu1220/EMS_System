@@ -61,7 +61,7 @@ export const SITE = {
   /** 展開進階搜尋區塊的頁面函式名稱（按鈕的 onclick 就是呼叫這兩個）。 */
   advancedSearchToggles: ['triggleTable', 'triggleTable2'],
 
-  /** 救護紀錄表查詢頁的欄位（id 取自實際探測結果）。 */
+  /** 救護紀錄表查詢頁的欄位與按鈕（id 取自實際探測結果）。 */
   queryFields: {
     dateFrom: '#_txtFromDate',
     dateTo: '#_txtToDate',
@@ -71,8 +71,20 @@ export const SITE = {
     prehospitalAlert: '#_selPreHOSPWarning',
     /** 分隊。 */
     squad: '#_selDeptnoCar',
+    /** 查詢與匯出是圖片按鈕，不是標準表單按鈕。 */
+    queryButton: '#_btnQuery',
+    excelButton: '#_btnExcel',
   },
+
+  /** 偵測不到系統日期元件設定時採用的格式（My97DatePicker 樣式）。 */
+  defaultDateFormat: 'yyyy-MM-dd',
+
+  /** 按下查詢後額外等待的緩衝時間（毫秒），讓伺服器把結果整理完。 */
+  querySettleMs: 3000,
 };
+
+/** 等待匯出檔案開始下載的上限（毫秒）；資料量大時伺服器產檔會久一點。 */
+export const DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
 
 /** 瀏覽器啟動設定。使用本機已安裝的 Chrome，不另外下載 Chromium。 */
 export const BROWSER = {
@@ -103,17 +115,36 @@ export const PATHS = {
 export const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * 查詢條件的固定值。文字需與系統下拉選單顯示一致，日後系統改字只改這裡。
+ * 查詢條件的固定值。value 取自系統下拉選單的實際選項值，
+ * label 僅供畫面顯示；日後系統若改動選項，只改這裡。
  */
 export const QUERY_CRITERIA = {
-  /** 救護狀態：兩次查詢都固定為此值。 */
-  rescueStatus: '已結案',
-  /** 院前預警：第二次查詢（預警案件）才套用。 */
-  prehospitalAlert: '到院前傳送預警',
+  /** 救護狀態：兩次查詢都固定為「已結案」。 */
+  rescueStatusValue: '0',
+  rescueStatusLabel: '已結案',
+  /** 院前預警：第二次查詢（預警案件）才套用「到院前傳送預警」。 */
+  prehospitalAlertValue: '1',
+  prehospitalAlertLabel: '到院前傳送預警',
 };
 
-/** 兩次匯出的識別名稱，用於檔名與報表欄位。 */
+/**
+ * 兩次匯出的定義。`alertValue` 為空字串代表院前預警不設條件（取全部）。
+ */
 export const DATASETS = {
-  total: { key: 'total', label: '總案件數' },
-  alert: { key: 'alert', label: '到院前預警案件數' },
+  total: { key: 'total', label: '總案件數', alertValue: '' },
+  alert: { key: 'alert', label: '到院前預警案件數', alertValue: QUERY_CRITERIA.prehospitalAlertValue },
 };
+
+/**
+ * 匯出檔中「分隊」欄位可能的欄名，由前往後比對。
+ * 系統改欄名時在這裡加一筆即可，不必動程式邏輯。
+ */
+export const SQUAD_COLUMN_CANDIDATES = [
+  '分隊',
+  '分隊名稱',
+  '救護分隊',
+  '出勤分隊',
+  '隊別',
+  '單位',
+  '單位名稱',
+];

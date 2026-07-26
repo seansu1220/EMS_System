@@ -60,21 +60,28 @@ export function resolveMonthRange(monthArg, today = new Date()) {
 }
 
 /**
- * 依系統日期輸入框的格式輸出日期字串。
+ * 依系統日期元件的格式樣板輸出日期字串。
+ *
+ * 樣板沿用 My97DatePicker 的寫法（該系統的日期欄位就是用這套元件），
+ * 支援 `yyyy`（西元年）、`yy`（西元年後兩碼）、`ryyy`（民國年）、`MM`、`dd`。
+ * 這樣系統若改用民國年或斜線分隔，只需改樣板不必改程式。
+ *
  * @param {string} isoDate `YYYY-MM-DD`
- * @param {'iso'|'slash'|'roc'} format 系統採用的格式
+ * @param {string} pattern 例如 `yyyy-MM-dd`、`yyyy/MM/dd`、`ryyy/MM/dd`
  * @returns {string}
  */
-export function formatDateForSite(isoDate, format) {
-  const [year, month, day] = isoDate.split('-');
-  switch (format) {
-    case 'iso':
-      return `${year}-${month}-${day}`;
-    case 'slash':
-      return `${year}/${month}/${day}`;
-    case 'roc':
-      return `${Number(year) - 1911}/${month}/${day}`;
-    default:
-      throw new Error(`未知的日期格式設定：${format}`);
+export function formatDateForSite(isoDate, pattern) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!matched) throw new Error(`日期須為 YYYY-MM-DD，收到：${isoDate}`);
+  const [, year, month, day] = matched;
+  if (!pattern || !/[yMd]/.test(pattern)) {
+    throw new Error(`無效的日期格式樣板：${pattern}`);
   }
+  // ryyy 需先於 yyyy 取代，否則會被 yyyy 規則先吃掉。
+  return pattern
+    .replace(/ryyy/g, String(Number(year) - 1911))
+    .replace(/yyyy/g, year)
+    .replace(/yy/g, year.slice(2))
+    .replace(/MM/g, month)
+    .replace(/dd/g, day);
 }
