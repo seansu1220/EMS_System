@@ -53,12 +53,16 @@ function parseArgs(argv) {
  */
 function countFile(filePath, label) {
   const table = readTable(filePath, SQUAD_COLUMN_CANDIDATES);
-  log.info(`${label}：${table.rows.length} 筆`);
-  log.info(`  匯出檔欄位（${table.headers.length} 欄）：${table.headers.join(' ｜ ')}`);
+  log.info(`${label}：${table.rows.length} 筆、${table.headers.length} 欄`);
 
   const { column, reason } = resolveSquadColumn(table.headers, table.rows, SQUAD_COLUMN_CANDIDATES);
   const counts = countBySquad(table.rows, column);
   log.info(`  分隊欄位判定為「${column}」（${reason}），共 ${counts.size} 個分隊`);
+
+  // 匯出檔有 200 多欄，全列會把紀錄檔灌爆；只有在判定沒把握時才列出完整欄名供排查。
+  if (!reason.startsWith('內容')) {
+    log.info(`  完整欄名：${table.headers.join(' ｜ ')}`);
+  }
 
   // 全市分隊數量約 40 個，只算出 1~2 個幾乎必然是選錯欄位，早點擋下來免得產出錯誤報表。
   if (counts.size < 3 && table.rows.length > 100) {
