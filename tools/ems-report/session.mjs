@@ -70,6 +70,27 @@ async function waitForLogin(page, credentials) {
 }
 
 /**
+ * 等待登入後的主畫面（frameset）真正建好。
+ *
+ * 「登入頁消失」只代表表單送出了，此時系統還在組主畫面，
+ * 各個 frame 尚未存在。少了這段等待，後續找 frame 會立刻失敗。
+ */
+async function waitForAppReady(page, timeoutMs = APP_READY_TIMEOUT_MS) {
+  const required = [SITE.frames.sideMenu, SITE.frames.content];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frameNames = page.frames().map((frame) => frame.name());
+    if (required.every((name) => frameNames.includes(name))) return;
+    await page.waitForTimeout(500);
+  }
+  const found = page.frames().map((frame) => frame.name() || '(主文件)').join('、');
+  throw new Error(
+    `登入後等待系統主畫面載入逾時（${timeoutMs / 1000} 秒）。` +
+      `需要的 frame：${required.join('、')}；目前只有：${found}`,
+  );
+}
+
+/**
  * 開啟瀏覽器並完成登入，回傳可繼續操作的工作階段。
  * @returns {Promise<EmsSession>}
  */
@@ -93,7 +114,9 @@ export async function startSession() {
   log.info('（驗證碼不做自動辨識，必須由你本人輸入）');
 
   await waitForLogin(page, credentials);
-  log.ok('登入完成');
+  log.ok('登入完成，等待系統主畫面載入');
+  await waitForAppReady(page);
+  log.ok('主畫面已就緒');
 
   return {
     browser,

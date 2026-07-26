@@ -116,6 +116,9 @@ export const PATHS = {
 /** 等待使用者手動登入的上限（毫秒）。 */
 export const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** 登入後等待主畫面（frameset）建好的上限（毫秒）。 */
+export const APP_READY_TIMEOUT_MS = 60 * 1000;
+
 /**
  * 查詢條件的固定值。value 取自系統下拉選單的實際選項值，
  * label 僅供畫面顯示；日後系統若改動選項，只改這裡。
