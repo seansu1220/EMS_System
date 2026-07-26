@@ -36,16 +36,63 @@ async function detectDateFormat(page) {
   return SITE.defaultDateFormat;
 }
 
-/** 在內容框填入一個欄位的值。 */
-async function fillField(page, selector, value) {
+/**
+ * 在內容框填入一個欄位的值。
+ *
+ * 日期欄位用的是 My97DatePicker，這類欄位常被設成 readonly 強迫使用者從日曆挑選，
+ * 而 Playwright 的 `fill()` 遇到 readonly 會直接拋錯，因此保留「直接寫入 value 並
+ * 補送 input/change 事件」的備援寫法。
+ */
+async function fillField(page, selector, value, label) {
   const content = getFrame(page, SITE.frames.content);
-  await content.fill(selector, value);
+  try {
+    await content.fill(selector, value, { timeout: 10000 });
+    log.info(`${label}＝${value}`);
+    return;
+  } catch (error) {
+    log.warn(`${label} 無法直接輸入（${error instanceof Error ? error.message.split('\n')[0] : error}），改用備援寫法`);
+  }
+  const applied = await content.evaluate(
+    ({ fieldSelector, fieldValue }) => {
+      const element = document.querySelector(fieldSelector);
+      if (!element) return false;
+      element.removeAttribute('readonly');
+      element.value = fieldValue;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return element.value === fieldValue;
+    },
+    { fieldSelector: selector, fieldValue: value },
+  );
+  if (!applied) throw new Error(`無法填入${label}（${selector}）`);
+  log.info(`${label}＝${value}（備援寫法）`);
 }
 
-/** 在內容框選擇一個下拉選項（以 value 指定，避免文字有全半形差異）。 */
-async function selectField(page, selector, value) {
+/**
+ * 在內容框選擇一個下拉選項（以 value 指定，避免文字有全半形差異）。
+ * 選單若因版面因素無法互動，同樣改用直接設定並補送 change 事件。
+ */
+async function selectField(page, selector, value, label) {
   const content = getFrame(page, SITE.frames.content);
-  await content.selectOption(selector, value);
+  try {
+    await content.selectOption(selector, value, { timeout: 10000 });
+    log.info(`${label}（已選取）`);
+    return;
+  } catch (error) {
+    log.warn(`${label} 無法直接選取（${error instanceof Error ? error.message.split('\n')[0] : error}），改用備援寫法`);
+  }
+  const applied = await content.evaluate(
+    ({ fieldSelector, fieldValue }) => {
+      const element = document.querySelector(fieldSelector);
+      if (!element) return false;
+      element.value = fieldValue;
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return element.value === fieldValue;
+    },
+    { fieldSelector: selector, fieldValue: value },
+  );
+  if (!applied) throw new Error(`無法選取${label}（${selector} = ${value}）`);
+  log.info(`${label}（備援寫法）`);
 }
 
 /**
@@ -55,11 +102,16 @@ async function selectField(page, selector, value) {
  * @param {string} dateFormat
  */
 async function applyCommonCriteria(page, monthRange, dateFormat) {
-  await fillField(page, SITE.queryFields.dateFrom, formatDateForSite(monthRange.start, dateFormat));
-  await fillField(page, SITE.queryFields.dateTo, formatDateForSite(monthRange.end, dateFormat));
+  log.step('設定查詢條件');
+  await fillField(page, SITE.queryFields.dateFrom, formatDateForSite(monthRange.start, dateFormat), '起日');
+  await fillField(page, SITE.queryFields.dateTo, formatDateForSite(monthRange.end, dateFormat), '迄日');
   await ensureFieldVisible(page, SITE.queryFields.rescueStatus);
-  await selectField(page, SITE.queryFields.rescueStatus, QUERY_CRITERIA.rescueStatusValue);
-  log.info(`查詢條件：${monthRange.start} ~ ${monthRange.end}、救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`);
+  await selectField(
+    page,
+    SITE.queryFields.rescueStatus,
+    QUERY_CRITERIA.rescueStatusValue,
+    `救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`,
+  );
 }
 
 /**
@@ -143,14 +195,18 @@ export async function exportBothDatasets(context, page, monthRange) {
   for (const dataset of [DATASETS.total, DATASETS.alert]) {
     log.step(`查詢並匯出：${dataset.label}`);
     await ensureFieldVisible(page, SITE.queryFields.prehospitalAlert);
-    await selectField(page, SITE.queryFields.prehospitalAlert, dataset.alertValue);
-    log.info(
+    await selectField(
+      page,
+      SITE.queryFields.prehospitalAlert,
+      dataset.alertValue,
       dataset.alertValue
         ? `院前預警＝${QUERY_CRITERIA.prehospitalAlertLabel}`
         : '院前預警＝不限（取得全部送醫案件）',
     );
 
+    log.info('按下查詢，等待結果');
     await runQuery(page);
+    log.info('按下匯出EXCEL，等待下載');
     const targetPath = path.join(PATHS.rawDir, `${monthRange.label}-${dataset.key}.xls`);
     results[dataset.key] = await exportExcel(context, page, targetPath);
   }

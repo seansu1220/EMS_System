@@ -109,6 +109,8 @@ export const PATHS = {
   rawDir: path.join(TOOL_DIR, 'out', 'raw'),
   /** 最終彙總報表（只有分隊層級數字）。 */
   reportDir: path.join(TOOL_DIR, 'out', 'report'),
+  /** 最近一次執行的完整紀錄（只有流程訊息，不含個案資料）。 */
+  logFile: path.join(TOOL_DIR, 'out', 'last-run.log'),
 };
 
 /** 等待使用者手動登入的上限（毫秒）。 */

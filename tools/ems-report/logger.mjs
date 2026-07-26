@@ -13,18 +13,33 @@ export function maskAccount(account) {
   return `${text[0]}${'*'.repeat(text.length - 2)}${text[text.length - 1]}`;
 }
 
+/**
+ * 執行紀錄。所有輸出都會同時留一份在記憶體，結束時寫成檔案，
+ * 這樣失敗時不必請使用者逐字抄寫終端機訊息。
+ *
+ * ⚠ 個資原則：log 內容依設計只有流程與筆數，不含個案明細，因此可安全落檔。
+ */
+const logLines = [];
+
+/** 記錄一行並輸出到終端機。 */
+function record(text, toStderr = false) {
+  logLines.push(`[${new Date().toISOString()}] ${text}`);
+  if (toStderr) console.error(text);
+  else console.log(text);
+}
+
 export const log = {
   step(message) {
-    console.log(`\n▶ ${message}`);
+    record(`\n▶ ${message}`);
   },
   info(message) {
-    console.log(`  ${message}`);
+    record(`  ${message}`);
   },
   ok(message) {
-    console.log(`  ✅ ${message}`);
+    record(`  ✅ ${message}`);
   },
   warn(message) {
-    console.warn(`  ⚠ ${message}`);
+    record(`  ⚠ ${message}`, true);
   },
   /**
    * 錯誤輸出：一定說明「發生在哪個步驟」與「原因」，不靜默吞掉。
@@ -33,9 +48,24 @@ export const log = {
    */
   fail(stage, error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`\n❌ [${stage}] 失敗：${reason}`);
+    record(`\n❌ [${stage}] 失敗：${reason}`, true);
+    if (error instanceof Error && error.stack) {
+      logLines.push(error.stack);
+    }
   },
 };
+
+/**
+ * 把執行紀錄寫成檔案。
+ * @param {string} filePath
+ * @returns {Promise<void>}
+ */
+export async function writeLogFile(filePath) {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, logLines.join('\n'), 'utf8');
+}
 
 /** 共用的 readline 介面，第一次用到才建立。 */
 let readlineInterface = null;

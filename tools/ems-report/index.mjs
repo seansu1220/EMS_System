@@ -20,8 +20,8 @@ import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
 import { resolveSquadColumn, countBySquad, buildComparison, summarize } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
-import { SQUAD_COLUMN_CANDIDATES } from './config.mjs';
-import { log, closePrompt } from './logger.mjs';
+import { SQUAD_COLUMN_CANDIDATES, PATHS } from './config.mjs';
+import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /**
  * @typedef {Object} CliOptions
@@ -128,6 +128,13 @@ async function main() {
       return;
     }
     await runReportFlow(session, monthRange, options.keepRaw);
+  } catch (error) {
+    // 失敗時把當下的 frame 狀態一併記進紀錄檔，方便判斷卡在哪一頁。
+    log.info('失敗當下的頁面狀態：');
+    for (const frame of session.page.frames()) {
+      log.info(`  frame ${frame.name() || '(主文件)'} → ${frame.url()}`);
+    }
+    throw error;
   } finally {
     await session.close();
     closePrompt();
@@ -135,7 +142,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  log.fail('主流程', error);
-  process.exitCode = 1;
-});
+main()
+  .catch((error) => {
+    log.fail('主流程', error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await writeLogFile(PATHS.logFile).catch(() => {});
+    console.log(`\n完整執行紀錄：${PATHS.logFile}`);
+  });
