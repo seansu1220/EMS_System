@@ -13,7 +13,8 @@ import { log, maskAccount, prompt } from './logger.mjs';
 /**
  * @typedef {Object} EmsSession
  * @property {import('playwright-core').Browser} browser
- * @property {import('playwright-core').Page} page
+ * @property {import('playwright-core').BrowserContext} context 含所有分頁與彈出式視窗
+ * @property {import('playwright-core').Page} page 登入所在的主視窗
  * @property {() => Promise<void>} close
  */
 
@@ -96,6 +97,7 @@ export async function startSession() {
 
   return {
     browser,
+    context,
     page,
     close: async () => {
       await browser.close().catch(() => {});

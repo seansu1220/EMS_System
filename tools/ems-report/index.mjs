@@ -44,7 +44,7 @@ async function main() {
   const session = await startSession();
   try {
     if (options.command === 'probe') {
-      await runInteractiveProbe(session.page);
+      await runInteractiveProbe(session.context);
       return;
     }
     throw new Error(
