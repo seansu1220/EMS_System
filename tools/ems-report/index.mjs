@@ -11,7 +11,7 @@
 import { runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange } from './dateRange.mjs';
-import { log } from './logger.mjs';
+import { log, closePrompt } from './logger.mjs';
 
 /**
  * @typedef {Object} CliOptions
@@ -52,6 +52,7 @@ async function main() {
     );
   } finally {
     await session.close();
+    closePrompt();
     log.info('瀏覽器已關閉');
   }
 }

@@ -125,7 +125,8 @@ export async function runInteractiveProbe(context) {
   let sequence = 1;
   for (;;) {
     const answer = await prompt(`\n[${sequence}] 按 Enter 擷取目前畫面結構（q=結束）：`);
-    if (answer.toLowerCase() === 'q') break;
+    // null 代表輸入串流結束（EOF），視同結束，否則會變成無限擷取。
+    if (answer === null || answer.toLowerCase() === 'q') break;
 
     const pages = await collectAllPages(context);
     const label = pages.flatMap((page) => page.frames).find((frame) => frame.title)?.title ?? 'page';

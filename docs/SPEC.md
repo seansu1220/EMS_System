@@ -228,6 +228,18 @@
 | 帳密不硬寫 | 僅從 `tools/ems-report/.env` 讀取（已 gitignore），且禁用 `VITE_` 前綴以免被打包進前端 |
 
 ### 4.3 執行方式
+**一般使用一律雙擊捷徑，不需輸入指令**：
+
+| 捷徑（專案根目錄） | 用途 |
+| --- | --- |
+| `救護預警統計.bat` | 產生上個月的各分隊比較表（日常使用就是這個） |
+| `救護預警統計-設定用.bat` | 頁面結構探測，系統改版或初次設定時才用 |
+
+兩支 .bat 都會先確認 Node.js 是否存在（沒有就顯示官網下載連結），
+並在缺少套件時自動 `npm install`。批次檔內容維持純 ASCII 訊息，避免主控台中文亂碼。
+
+指令列等價寫法：
+
 | 指令 | 用途 |
 | --- | --- |
 | `npm run tool:ems -- probe` | 互動式探測頁面結構（開發／系統改版時用） |
@@ -289,6 +301,7 @@ EMS_System/
 ├─ docs/            SPEC.md、CHANGELOG.md
 ├─ firebase.json / .firebaserc
 ├─ 啟動業務管理系統.bat
+├─ 救護預警統計.bat / 救護預警統計-設定用.bat（本機小工具捷徑）
 └─ package.json、vite/tsconfig、index.html、.env（不進版控）
 ```
 

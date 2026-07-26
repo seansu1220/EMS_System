@@ -11,16 +11,16 @@ import { Card } from '../components/ui';
 const LOCAL_TOOLS: readonly {
   title: string;
   purpose: string;
-  command: string;
+  shortcut: string;
   steps: readonly string[];
 }[] = [
   {
     title: '救護紀錄表查詢（到院前預警比率）',
     purpose:
       '自動登入緊急救護管理系統，查詢指定月份已結案的救護紀錄，統計各分隊「到院前預警案件數 ÷ 總案件數」的比率。',
-    command: 'npm run tool:ems -- run',
+    shortcut: '救護預警統計.bat',
     steps: [
-      '在電腦上打開專案資料夾的終端機，輸入上面的指令。',
+      '在電腦上打開專案資料夾，雙擊上面那個檔案（不用打任何指令）。',
       '程式會自動開啟 Chrome 並停在登入頁，請你本人輸入驗證碼後按登入。',
       '登入成功後程式自動接手查詢與匯出，最後在電腦上產出各分隊的比較表。',
     ],
@@ -55,10 +55,13 @@ export function ToolsPage() {
           </div>
           <p className="mt-2 text-sm text-slate-600">{tool.purpose}</p>
 
-          <p className="mt-4 text-xs font-medium text-slate-500">執行指令</p>
+          <p className="mt-4 text-xs font-medium text-slate-500">雙擊執行</p>
           <pre className="mt-1 overflow-x-auto rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-100">
-            {tool.command}
+            {tool.shortcut}
           </pre>
+          <p className="mt-1 text-xs text-slate-400">
+            需要該台電腦已安裝 Node.js（Windows 沒有內建，可至 nodejs.org 下載安裝）。
+          </p>
 
           <p className="mt-4 text-xs font-medium text-slate-500">操作步驟</p>
           <ol className="mt-1 list-decimal space-y-1 pl-5 text-sm text-slate-600">

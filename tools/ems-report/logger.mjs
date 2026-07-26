@@ -37,16 +37,40 @@ export const log = {
   },
 };
 
-/** 在終端機等待使用者按 Enter（或輸入文字）。 */
-export function prompt(question) {
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    const onData = (chunk) => {
-      process.stdin.pause();
-      process.stdin.off('data', onData);
-      resolve(String(chunk).trim());
-    };
-    process.stdin.resume();
-    process.stdin.on('data', onData);
-  });
+/** 共用的 readline 介面，第一次用到才建立。 */
+let readlineInterface = null;
+
+/** 輸入串流是否已結束（EOF），例如被導向檔案或使用者按了 Ctrl+Z。 */
+let inputClosed = false;
+
+/**
+ * 在終端機等待使用者輸入一行（直接按 Enter 則回傳空字串）。
+ *
+ * 用 readline 而非直接監聽 stdin：本工具透過 .bat → npm → node 多層轉手執行，
+ * readline 對這種情況的相容性較好，不會出現按了鍵卻沒反應的情形。
+ *
+ * @param {string} question 提示文字
+ * @returns {Promise<string|null>} 使用者輸入；**輸入串流已結束時回傳 `null`**
+ *   （呼叫端須視為「結束」，不可當成空字串繼續迴圈，否則會無限循環）
+ */
+export async function prompt(question) {
+  if (inputClosed) return null;
+  if (!readlineInterface) {
+    const { createInterface } = await import('node:readline/promises');
+    readlineInterface = createInterface({ input: process.stdin, output: process.stdout });
+    readlineInterface.on('close', () => {
+      inputClosed = true;
+    });
+  }
+  // readline 關閉時，等待中的 question() 永遠不會 resolve，故一併競賽 close 事件。
+  const closed = new Promise((resolve) => readlineInterface.once('close', () => resolve(null)));
+  const answer = await Promise.race([readlineInterface.question(question), closed]);
+  return answer === null ? null : answer.trim();
+}
+
+/** 關閉 readline，讓程式能正常結束。 */
+export function closePrompt() {
+  readlineInterface?.close();
+  readlineInterface = null;
+  inputClosed = false;
 }
