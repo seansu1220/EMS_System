@@ -17,6 +17,9 @@ serviceAccountKey.json
 firebase-service-account*.json
 .firebase/
 
+# 小工具產出：含系統匯出的個案明細與彙總報表，絕不進版控
+tools/**/out/
+
 # Python
 __pycache__/
 *.pyc

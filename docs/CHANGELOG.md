@@ -4,6 +4,64 @@
 
 ---
 
+## 2026-07-26　v1.9 本機小工具（第一階段）：救護紀錄表查詢 — 到院前預警比率統計
+
+### 需求描述
+使用者要做「第一個小工具」：登入桃園市政府消防局緊急救護管理系統
+（`https://emsdt.tyfd.gov.tw/EmmWeb/ActionControlServlet`）的報表系統，
+查詢上個月 1 號 ~ 最後一天、救護狀態「已結案」的救護紀錄表，
+分別匯出「全部」與「院前預警＝到院前傳送預警」兩份 Excel，
+再比較各分隊的「到院前預警案件數 / 總案件數」比值。
+使用者另特別要求：**過程牽涉個人資料，設計時務必不能讓個資外洩**。
+
+### 設計決定與理由
+1. **做成本機 CLI，不做在網頁上**：網站是 Firebase Hosting 的靜態前端，
+   瀏覽器端受同源政策限制，本來就無法登入外部系統、處理驗證碼與下載檔案；
+   更關鍵的是匯出檔含個案明細，放在本機處理才能保證不上雲。
+2. **驗證碼由使用者本人輸入，不做自動辨識**：自動破解等於繞過該系統的防自動化機制，
+   不做；改為有頭瀏覽器 + 輪詢等待登入完成，帳密可代填以減少打字。
+3. **用 `playwright-core` + 本機 Chrome**：避免下載上百 MB 的 Chromium。
+4. **先做探測模式**：目標系統為 Java `ActionControlServlet` 架構、全站 POST 導頁，
+   登入後的頁面結構在無帳號的情況下無法取得，故先提供 `probe` 讓使用者實跑取得結構，
+   再據以撰寫查詢與匯出步驟。
+
+### 個資防護作法（寫入 SPEC 第 4.2 節）
+- 全程本機執行：不寫入 Firestore、不呼叫外部 API、不上傳檔案。
+- 原始匯出檔只落在 `tools/ems-report/out/raw/`，統計後自動刪除（`--keep-raw` 才保留）。
+- 最終報表僅含分隊、案件數、預警數、比率，無任何個人欄位。
+- `.gitignore` 排除 `tools/**/out/`，原始檔與報表都不會進版控。
+- log 只印流程與筆數；帳號輸出前以 `maskAccount` 遮蔽。
+- `probe` 只擷取欄位／按鈕／下拉選項名稱，**不擷取任何表格資料列、不截圖**。
+- 帳密只讀 `tools/ems-report/.env`（已 gitignore），並明文禁用 `VITE_` 前綴，
+  避免誤放進根目錄 `.env` 而被 Vite 打包進公開的前端檔案。
+
+### 修改的檔案與內容摘要
+- 新增 `tools/ems-report/config.mjs`：網址、登入欄位選擇器、瀏覽器設定、輸出路徑、查詢條件文字。
+- 新增 `tools/ems-report/dateRange.mjs`：`getMonthRange` / `getPreviousMonthRange` /
+  `resolveMonthRange` / `formatDateForSite`，皆為純函式。
+- 新增 `tools/ems-report/dateRange.test.mjs`：4 組 node:test 測試（含閏年、跨年、格式錯誤）。
+- 新增 `tools/ems-report/session.mjs`：啟動本機 Chrome、代填帳密、輪詢等待登入完成
+  （驗證碼打錯退回登入頁時會自動再補帳密）。
+- 新增 `tools/ems-report/probe.mjs`：互動式頁面結構探測，逐 frame 擷取連結／輸入框／下拉／按鈕／表頭。
+- 新增 `tools/ems-report/logger.mjs`：分階段輸出、錯誤含階段名稱、`maskAccount` 帳號遮蔽、終端機 prompt。
+- 新增 `tools/ems-report/index.mjs`：CLI 進入點（`probe` / `run`，支援 `--month=` 與 `--keep-raw`）。
+- 新增 `tools/ems-report/README.md`、`.env.example`。
+- `.gitignore`：新增 `tools/**/out/`。
+- `package.json`：新增 `tool:ems`、`tool:ems:test` 指令與 `playwright-core` 開發依賴；版本 → 1.9.0。
+- `src/pages/ToolsPage.tsx`：由「保留區域」改為工具說明頁，載明本機執行與個資不上雲的理由。
+- `docs/SPEC.md`：新增第 4 章「本機小工具」（目的、個資規範、指令、流程、模組職責、進度），
+  原第 4~6 章順延為 5~7 章；路由表 `/tools` 說明、目錄結構、檔頭版本行同步更新。
+
+### 已驗證
+- `npm run tool:ems:test`：4 項測試全數通過。
+- 以 headless Chrome 實連目標站：登入頁四個選擇器（帳號／密碼／驗證碼／登入鈕）皆各命中 1 個元素。
+
+### 待辦（第二、三階段）
+- 需使用者實跑 `npm run tool:ems -- probe` 取得「報表系統 → 救護紀錄表查詢」的實際頁面結構，
+  才能實作日期填入、進階搜尋、匯出 Excel 與分隊彙總。目前執行 `run` 會明確報錯提示此事。
+
+---
+
 ## 2026-07-26　v1.8.1 屬性與待辦公版的刪除一併限管理員
 
 ### 需求描述
