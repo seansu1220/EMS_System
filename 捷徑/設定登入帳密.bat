@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 title EMS Report - Save Login Credentials
 
 set "ENVFILE=tools\ems-report\.env"

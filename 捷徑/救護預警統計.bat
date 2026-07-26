@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 title EMS Report - Prehospital Alert Ratio
 
 rem Check npm availability

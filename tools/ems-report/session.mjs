@@ -40,21 +40,36 @@ async function isLoginPageVisible(page) {
   return false;
 }
 
-/** 若登入表單在畫面上，代填帳號密碼（驗證碼留給使用者）。 */
+/**
+ * 若登入表單在畫面上且帳密欄位是空的，代填帳號密碼（驗證碼留給使用者）。
+ *
+ * **只在欄位空白時才動作**，這點很重要：等待登入的迴圈每秒會呼叫一次，
+ * 若每次都重填並把游標移到驗證碼欄，使用者打驗證碼時焦點會被不斷搶走而無法輸入。
+ * 欄位一旦有值就完全不再碰，登入失敗退回空白表單時才會再填一次。
+ *
+ * @returns {Promise<boolean>} 這次是否真的填了
+ */
 async function fillCredentialsIfPresent(page, credentials) {
-  if (!credentials.username && !credentials.password) return;
+  if (!credentials.username && !credentials.password) return false;
   for (const frame of page.frames()) {
     const hasForm = await frame.locator(SITE.loginFields.captcha).count().catch(() => 0);
     if (!hasForm) continue;
+
+    const currentUsername = await frame.inputValue(SITE.loginFields.username).catch(() => '');
+    const currentPassword = await frame.inputValue(SITE.loginFields.password).catch(() => '');
+    if (currentUsername || currentPassword) return false; // 已有內容，不干擾使用者輸入
+
     if (credentials.username) {
       await frame.fill(SITE.loginFields.username, credentials.username).catch(() => {});
     }
     if (credentials.password) {
       await frame.fill(SITE.loginFields.password, credentials.password).catch(() => {});
     }
+    // 只在剛填完的這一次把游標移到驗證碼欄，之後不再改變焦點。
     await frame.focus(SITE.loginFields.captcha).catch(() => {});
-    return;
+    return true;
   }
+  return false;
 }
 
 /** 輪詢等待登入完成（登入頁消失即視為成功）。 */
@@ -63,8 +78,9 @@ async function waitForLogin(page, credentials) {
   while (Date.now() < deadline) {
     if (!(await isLoginPageVisible(page))) return;
     await page.waitForTimeout(1000);
-    // 驗證碼打錯會退回登入頁，這裡順手把帳密再補上。
-    await fillCredentialsIfPresent(page, credentials).catch(() => {});
+    // 驗證碼打錯會退回登入頁（欄位變空白），此時才會再補一次帳密。
+    const refilled = await fillCredentialsIfPresent(page, credentials).catch(() => false);
+    if (refilled) log.info('偵測到登入表單重新出現，已再次代填帳號密碼');
   }
   throw new Error(`超過 ${LOGIN_TIMEOUT_MS / 60000} 分鐘仍未完成登入`);
 }
