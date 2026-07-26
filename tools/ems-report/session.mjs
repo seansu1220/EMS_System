@@ -7,7 +7,7 @@
  */
 import path from 'node:path';
 import { chromium } from 'playwright-core';
-import { BROWSER, SITE, LOGIN_TIMEOUT_MS, PATHS } from './config.mjs';
+import { BROWSER, SITE, LOGIN_TIMEOUT_MS, APP_READY_TIMEOUT_MS, PATHS } from './config.mjs';
 import { log, maskAccount, prompt } from './logger.mjs';
 
 /**
@@ -75,7 +75,7 @@ async function waitForLogin(page, credentials) {
  * 「登入頁消失」只代表表單送出了，此時系統還在組主畫面，
  * 各個 frame 尚未存在。少了這段等待，後續找 frame 會立刻失敗。
  */
-async function waitForAppReady(page, timeoutMs = APP_READY_TIMEOUT_MS) {
+export async function waitForAppReady(page, timeoutMs = APP_READY_TIMEOUT_MS) {
   const required = [SITE.frames.sideMenu, SITE.frames.content];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
