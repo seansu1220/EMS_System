@@ -19,6 +19,59 @@ export const SITE = {
     captcha: '#txtUserCode',
     submit: '#_btnOK',
   },
+
+  /**
+   * 登入後是 frameset 版面，各功能分屬不同 frame（名稱取自實際探測結果）。
+   */
+  frames: {
+    /** 上方功能列（報表系統各功能的連結都在這裡）。 */
+    header: 'header',
+    /** 主要內容區（查詢條件、結果列表都在這裡）。 */
+    content: 'contentFrame',
+    /** 左側選單。 */
+    sideMenu: 'contentSidemenu',
+  },
+
+  /** 選單項目文字（系統改字時只改這裡）。 */
+  menu: {
+    recordQuery: '救護紀錄表查詢',
+  },
+
+  /** 各功能的 AP 代號（取自選單連結）。 */
+  apNames: {
+    recordQuery: 'wap119.RPS64101030',
+  },
+
+  /**
+   * 直接載入某個功能到內容框的網址樣板（點選單失敗時的備援）。
+   * 格式取自實際的 contentFrame 網址。
+   */
+  contentUrl(apName) {
+    const params = new URLSearchParams({
+      id: '00',
+      APname: apName,
+      pushButton: 'load',
+      pushFun: 'load',
+      nextAPname: apName,
+      _txtFirstEntry: 'TRUE',
+    });
+    return `https://emsdt.tyfd.gov.tw/EmmWeb/ActionControlServlet?${params}`;
+  },
+
+  /** 展開進階搜尋區塊的頁面函式名稱（按鈕的 onclick 就是呼叫這兩個）。 */
+  advancedSearchToggles: ['triggleTable', 'triggleTable2'],
+
+  /** 救護紀錄表查詢頁的欄位（id 取自實際探測結果）。 */
+  queryFields: {
+    dateFrom: '#_txtFromDate',
+    dateTo: '#_txtToDate',
+    /** 救護狀態（未填寫/已填寫/未結案/已結案）。 */
+    rescueStatus: '#_selSTATUS',
+    /** 院前預警（未傳送預警/到院前傳送預警/到院後傳送預警）。 */
+    prehospitalAlert: '#_selPreHOSPWarning',
+    /** 分隊。 */
+    squad: '#_selDeptnoCar',
+  },
 };
 
 /** 瀏覽器啟動設定。使用本機已安裝的 Chrome，不另外下載 Chromium。 */

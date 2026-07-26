@@ -32,10 +32,9 @@ echo   This records field / button / dropdown
 echo   NAMES only. It never records any case
 echo   data and never takes screenshots.
 echo.
-echo   1. Sign in on the Chrome window.
-echo   2. Go to a screen, come back here,
-echo      press Enter to capture it.
-echo   3. Type q then Enter to finish.
+echo   YOU ONLY NEED TO SIGN IN.
+echo   Everything after that is automatic.
+echo   Do not touch the browser once signed in.
 echo ============================================
 echo.
 

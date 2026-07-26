@@ -8,7 +8,7 @@
  *   npm run tool:ems -- run --month=2026-06  指定月份（預設為上個月）
  *   npm run tool:ems -- run --keep-raw     保留系統匯出的原始 Excel（預設用完即刪）
  */
-import { runInteractiveProbe } from './probe.mjs';
+import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange } from './dateRange.mjs';
 import { log, closePrompt } from './logger.mjs';
@@ -31,6 +31,8 @@ function parseArgs(argv) {
     command,
     month: args.find((arg) => arg.startsWith('--month='))?.split('=')[1],
     keepRaw: args.includes('--keep-raw'),
+    /** probe 預設全自動；自動導航失敗時可用 --manual 改回手動點選。 */
+    manual: args.includes('--manual'),
   };
 }
 
@@ -44,7 +46,11 @@ async function main() {
   const session = await startSession();
   try {
     if (options.command === 'probe') {
-      await runInteractiveProbe(session.context);
+      if (options.manual) {
+        await runInteractiveProbe(session.context);
+      } else {
+        await runAutoProbe(session.context, session.page);
+      }
       return;
     }
     throw new Error(
