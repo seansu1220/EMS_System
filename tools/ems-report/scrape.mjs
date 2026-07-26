@@ -45,27 +45,40 @@ async function detectDateFormat(page) {
  */
 async function fillField(page, selector, value, label) {
   const content = getFrame(page, SITE.frames.content);
-  try {
-    await content.fill(selector, value, { timeout: 10000 });
-    log.info(`${label}＝${value}`);
-    return;
-  } catch (error) {
-    log.warn(`${label} 無法直接輸入（${error instanceof Error ? error.message.split('\n')[0] : error}），改用備援寫法`);
+  const field = content.locator(selector);
+  const isReadonly = await field
+    .evaluate((element) => element.hasAttribute('readonly') || element.readOnly === true)
+    .catch(() => false);
+
+  if (isReadonly) {
+    log.info(`${label} 為唯讀欄位（只能用日曆點選），直接寫入值`);
+  } else {
+    try {
+      await content.fill(selector, value, { timeout: 10000 });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+      log.warn(`${label} 無法直接輸入（${reason}），改用直接寫入`);
+    }
   }
-  const applied = await content.evaluate(
+
+  await content.evaluate(
     ({ fieldSelector, fieldValue }) => {
       const element = document.querySelector(fieldSelector);
-      if (!element) return false;
+      if (!element) return;
       element.removeAttribute('readonly');
       element.value = fieldValue;
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
-      return element.value === fieldValue;
     },
     { fieldSelector: selector, fieldValue: value },
   );
-  if (!applied) throw new Error(`無法填入${label}（${selector}）`);
-  log.info(`${label}＝${value}（備援寫法）`);
+
+  // 回讀驗證：條件沒真的填進去卻繼續查詢，會撈到全部資料（曾發生過），故一律確認。
+  const actual = await field.inputValue().catch(() => null);
+  if (actual !== value) {
+    throw new Error(`${label} 填入後回讀不符：預期「${value}」，實際「${actual}」`);
+  }
+  log.info(`${label}＝${value}（已確認）`);
 }
 
 /**
@@ -76,23 +89,26 @@ async function selectField(page, selector, value, label) {
   const content = getFrame(page, SITE.frames.content);
   try {
     await content.selectOption(selector, value, { timeout: 10000 });
-    log.info(`${label}（已選取）`);
-    return;
   } catch (error) {
-    log.warn(`${label} 無法直接選取（${error instanceof Error ? error.message.split('\n')[0] : error}），改用備援寫法`);
+    const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    log.warn(`${label} 無法直接選取（${reason}），改用直接寫入`);
+    await content.evaluate(
+      ({ fieldSelector, fieldValue }) => {
+        const element = document.querySelector(fieldSelector);
+        if (!element) return;
+        element.value = fieldValue;
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      },
+      { fieldSelector: selector, fieldValue: value },
+    );
   }
-  const applied = await content.evaluate(
-    ({ fieldSelector, fieldValue }) => {
-      const element = document.querySelector(fieldSelector);
-      if (!element) return false;
-      element.value = fieldValue;
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-      return element.value === fieldValue;
-    },
-    { fieldSelector: selector, fieldValue: value },
-  );
-  if (!applied) throw new Error(`無法選取${label}（${selector} = ${value}）`);
-  log.info(`${label}（備援寫法）`);
+
+  // 與日期欄位同理：一律回讀確認，條件沒設定成功就不該繼續查詢。
+  const actual = await content.locator(selector).inputValue().catch(() => null);
+  if (actual !== value) {
+    throw new Error(`${label} 選取後回讀不符：預期「${value}」，實際「${actual}」`);
+  }
+  log.info(`${label}（已確認）`);
 }
 
 /**
@@ -103,8 +119,9 @@ async function selectField(page, selector, value, label) {
  */
 async function applyCommonCriteria(page, monthRange, dateFormat) {
   log.step('設定查詢條件');
+  // 迄日用 23:59:59，否則格式含時間時會變成當天 00:00:00，漏掉整個最後一天的案件。
   await fillField(page, SITE.queryFields.dateFrom, formatDateForSite(monthRange.start, dateFormat), '起日');
-  await fillField(page, SITE.queryFields.dateTo, formatDateForSite(monthRange.end, dateFormat), '迄日');
+  await fillField(page, SITE.queryFields.dateTo, formatDateForSite(monthRange.end, dateFormat, { endOfDay: true }), '迄日');
   await ensureFieldVisible(page, SITE.queryFields.rescueStatus);
   await selectField(
     page,

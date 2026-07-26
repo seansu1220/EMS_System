@@ -47,12 +47,26 @@ function parseArgs(argv) {
   };
 }
 
-/** 讀取一份匯出檔並依分隊計數。 */
+/**
+ * 讀取一份匯出檔並依分隊計數。
+ * 欄名屬於檔案結構（非個人資料），完整記錄下來，日後欄位變動時可直接對照。
+ */
 function countFile(filePath, label) {
   const table = readTable(filePath, SQUAD_COLUMN_CANDIDATES);
-  const squadColumn = resolveSquadColumn(table.headers, SQUAD_COLUMN_CANDIDATES);
-  const counts = countBySquad(table.rows, squadColumn);
-  log.info(`${label}：${table.rows.length} 筆，分隊欄位「${squadColumn}」，共 ${counts.size} 個分隊`);
+  log.info(`${label}：${table.rows.length} 筆`);
+  log.info(`  匯出檔欄位（${table.headers.length} 欄）：${table.headers.join(' ｜ ')}`);
+
+  const { column, reason } = resolveSquadColumn(table.headers, table.rows, SQUAD_COLUMN_CANDIDATES);
+  const counts = countBySquad(table.rows, column);
+  log.info(`  分隊欄位判定為「${column}」（${reason}），共 ${counts.size} 個分隊`);
+
+  // 全市分隊數量約 40 個，只算出 1~2 個幾乎必然是選錯欄位，早點擋下來免得產出錯誤報表。
+  if (counts.size < 3 && table.rows.length > 100) {
+    throw new Error(
+      `分隊欄位判定可能有誤：${table.rows.length} 筆資料只分出 ${counts.size} 個分隊。` +
+        `目前選中「${column}」。實際欄位有：${table.headers.join('、')}`,
+    );
+  }
   return counts;
 }
 

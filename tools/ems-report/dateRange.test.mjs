@@ -38,3 +38,16 @@ test('formatDateForSite 依樣板轉換日期', () => {
   assert.throws(() => formatDateForSite('2026-6-1', 'yyyy-MM-dd'), /YYYY-MM-DD/);
   assert.throws(() => formatDateForSite('2026-06-01', ''), /無效的日期格式樣板/);
 });
+
+test('formatDateForSite 處理含時間的樣板（系統實際使用的格式）', () => {
+  // 未處理時間時會留下字面上的 HH:mm:ss，使查詢條件失效，故特別釘住。
+  assert.equal(formatDateForSite('2026-06-01', 'yyyy-MM-dd HH:mm:ss'), '2026-06-01 00:00:00');
+  assert.equal(
+    formatDateForSite('2026-06-30', 'yyyy-MM-dd HH:mm:ss', { endOfDay: true }),
+    '2026-06-30 23:59:59',
+    '迄日要涵蓋整天，否則會漏掉當天的案件',
+  );
+  assert.ok(!formatDateForSite('2026-06-01', 'yyyy-MM-dd HH:mm:ss').includes('H'), '不可殘留樣板字元');
+  // MM（月）與 mm（分）大小寫不同，不可互相污染
+  assert.equal(formatDateForSite('2026-11-05', 'MM/dd HH:mm'), '11/05 00:00');
+});

@@ -15,12 +15,36 @@ import { findHeaderRowIndex } from './workbook.mjs';
 
 const CANDIDATES = ['分隊', '分隊名稱', '救護分隊', '單位'];
 
-test('resolveSquadColumn 找出分隊欄位', () => {
-  assert.equal(resolveSquadColumn(['案件編號', '分隊', '送醫院所'], CANDIDATES), '分隊');
-  assert.equal(resolveSquadColumn(['案件編號', '救護分隊'], CANDIDATES), '救護分隊');
-  assert.equal(resolveSquadColumn(['案件編號', ' 分 隊 '], CANDIDATES), ' 分 隊 ', '忽略空白差異');
-  assert.equal(resolveSquadColumn(['出勤分隊名稱'], CANDIDATES), '出勤分隊名稱', '退而求其次用包含比對');
-  assert.throws(() => resolveSquadColumn(['案件編號', '姓名'], CANDIDATES), /找不到分隊欄位/);
+test('resolveSquadColumn 以欄名比對（資料不足以判斷內容時）', () => {
+  assert.equal(resolveSquadColumn(['案件編號', '分隊', '送醫院所'], [], CANDIDATES).column, '分隊');
+  assert.equal(resolveSquadColumn(['案件編號', '救護分隊'], [], CANDIDATES).column, '救護分隊');
+  assert.equal(resolveSquadColumn(['案件編號', ' 分 隊 '], [], CANDIDATES).column, ' 分 隊 ', '忽略空白差異');
+  assert.equal(resolveSquadColumn(['出勤分隊名稱'], [], CANDIDATES).column, '出勤分隊名稱', '退而求其次用包含比對');
+  assert.throws(() => resolveSquadColumn(['案件編號', '姓名'], [], CANDIDATES), /找不到分隊欄位/);
+});
+
+test('resolveSquadColumn 以內容判斷，不被名稱含「分隊」的勾選欄騙走', () => {
+  // 重現實際踩到的狀況：匯出檔有「分隊 自行受理」這個勾選欄（值為 V），
+  // 真正的分隊在另一個欄名完全不含「分隊」的欄位。
+  const headers = ['案件編號', '分隊 自行受理', '受理單位'];
+  const rows = [
+    { '案件編號': 'A1', '分隊 自行受理': 'V', '受理單位': '桃園分隊' },
+    { '案件編號': 'A2', '分隊 自行受理': '', '受理單位': '大林分隊' },
+    { '案件編號': 'A3', '分隊 自行受理': 'V', '受理單位': '中路分隊' },
+    { '案件編號': 'A4', '分隊 自行受理': '', '受理單位': '第一救災救護大隊' },
+  ];
+  const resolved = resolveSquadColumn(headers, rows, CANDIDATES);
+  assert.equal(resolved.column, '受理單位');
+  assert.match(resolved.reason, /內容/);
+});
+
+test('resolveSquadColumn 內容判斷勝過欄名完全相符', () => {
+  const headers = ['分隊', '出勤單位'];
+  const rows = [
+    { '分隊': 'V', '出勤單位': '桃園分隊' },
+    { '分隊': 'V', '出勤單位': '大林分隊' },
+  ];
+  assert.equal(resolveSquadColumn(headers, rows, CANDIDATES).column, '出勤單位');
 });
 
 test('countBySquad 依分隊計數', () => {

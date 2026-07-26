@@ -4,6 +4,61 @@
 
 ---
 
+## 2026-07-26　v1.10.1 實跑修正：日期含時間、分隊欄位誤判、登入時序與漏 import
+
+首次對真實系統實跑，依序修正四個問題。
+
+### 問題一：登入後主畫面尚未載入就往下走
+- **現象**：`找不到名為 contentSidemenu 的 frame`，且失敗發生在「登入完成」後 1 毫秒。
+- **原因**：以「驗證碼欄位消失」判定登入完成，但那只代表表單送出，
+  系統此時還在組 frameset，各 frame 尚不存在。先前探測能過只是擷取動作恰好爭取到時間。
+- **修正**：`session.mjs` 新增 `waitForAppReady`，等 `contentSidemenu` 與 `contentFrame`
+  真正出現才繼續。
+
+### 問題二：新增的常數漏 import
+- **現象**：`APP_READY_TIMEOUT_MS is not defined`，實跑才爆。
+- **原因**：常數只加進 `config.mjs`，忘了在 `session.mjs` import。
+  `node --check` 只驗語法、不驗未定義引用，故未被擋下。
+- **修正**：補上 import；新增 `session.test.mjs` 以假的 page 物件**實際執行**
+  `waitForAppReady`，讓這類「跑到才現形」的錯誤能在測試階段暴露。
+
+### 問題三：日期條件根本沒生效（最嚴重）
+- **現象**：查詢期間設為 2026-06 卻撈到 10185 筆。
+- **原因**：系統日期格式實際為 `yyyy-MM-dd HH:mm:ss`，
+  而 `formatDateForSite` 只處理年月日，**`HH:mm:ss` 被原樣留在字串裡**，
+  填進去的是「2026-06-01 HH:mm:ss」這種無效值。
+- **修正**：`dateRange.mjs` 支援 `HH`／`mm`／`ss`（單次掃描取代，避免 MM 與 mm 互相污染），
+  起日補 00:00:00、**迄日補 23:59:59**（否則會漏掉最後一天整天的案件）。
+- **並補上防線**：`scrape.mjs` 的欄位填寫改為**填完一律回讀驗證**，值不符即中止，
+  不再讓錯誤條件跑完整趟；唯讀欄位（日曆點選）也改為直接判定後寫入，省去兩次 10 秒逾時等待。
+
+### 問題四：分隊欄位認錯，整份報表只算出一個「V」
+- **現象**：報表只有一列，分隊名稱是「V」，26／34 件。
+- **原因**：匯出檔沒有名為「分隊」的欄位，欄名模糊比對抓到了
+  「分隊 自行受理」這個**勾選記號欄**（值為 V）。
+- **修正**：`aggregate.mjs` 的 `resolveSquadColumn` 改為**以欄位內容為主要依據**——
+  真正的分隊欄，值會大量以「分隊／大隊／中隊」結尾（門檻 80%）；
+  內容判斷不出來時才退回欄名比對，且「包含」比對改取最短欄名以避開複合欄。
+  回傳值改為 `{ column, reason }`，把判定依據一併記錄。
+- **並補上防線**：`index.mjs` 在資料超過 100 筆卻只分出少於 3 個分隊時直接中止並列出實際欄名，
+  同時**把匯出檔的完整欄名記入執行紀錄**（欄名屬檔案結構，非個人資料）。
+
+### 修改的檔案
+- `tools/ems-report/session.mjs`、`config.mjs`：等待主畫面、`APP_READY_TIMEOUT_MS`。
+- `tools/ems-report/dateRange.mjs`：日期樣板支援時分秒與 `endOfDay`。
+- `tools/ems-report/scrape.mjs`：回讀驗證、唯讀欄位處理、迄日 23:59:59。
+- `tools/ems-report/aggregate.mjs`：分隊欄位改以內容判定。
+- `tools/ems-report/index.mjs`：記錄完整欄名、分隊數量合理性檢查。
+- 新增 `tools/ems-report/session.test.mjs`；`aggregate.test.mjs`／`dateRange.test.mjs` 補測試。
+- 新增 `設定登入帳密.bat`、`tools/ems-report/.env`（已 gitignore，明示密碼為明文儲存）。
+- `tools/ems-report/logger.mjs`、`config.mjs`：執行紀錄自動寫入 `out/last-run.log`。
+
+### 已驗證
+- `npm run tool:ems:test`：20 項全數通過（原 14 項）。
+- 新增測試直接重現兩個實跑缺陷：含時間的日期樣板、被「分隊 自行受理」誤導的欄位判定。
+
+---
+
 ## 2026-07-26　v1.10 小工具第二、三階段：查詢、匯出、分隊彙總統計
 
 ### 需求描述

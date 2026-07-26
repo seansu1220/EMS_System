@@ -13,25 +13,65 @@
  * @property {number|null} ratio 預警比率（0~1）；總案件數為 0 時為 null
  */
 
-/**
- * 從匯出檔的欄位標題中找出「分隊」欄。
- * @param {string[]} headers 匯出檔的欄位標題
- * @param {readonly string[]} candidates 可能的欄名（依序比對）
- * @returns {string} 實際使用的欄名
- */
-export function resolveSquadColumn(headers, candidates) {
-  const normalize = (text) => String(text ?? '').replace(/\s/g, '');
-  const normalizedHeaders = headers.map(normalize);
+/** 分隊名稱的樣態：桃園市的救護單位名稱以分隊／大隊／中隊結尾。 */
+const SQUAD_NAME_PATTERN = /(分隊|大隊|中隊)$/;
 
+/** 判定「這一欄的內容看起來就是分隊」所需的比例。 */
+const CONTENT_MATCH_THRESHOLD = 0.8;
+
+const normalize = (text) => String(text ?? '').replace(/\s/g, '');
+
+/**
+ * 依「欄位內容」評分：值大多以分隊／大隊結尾者，就是分隊欄。
+ * @returns {{header: string, score: number, distinct: number}[]} 由高分到低分
+ */
+function scoreHeadersByContent(headers, rows) {
+  return headers
+    .map((header) => {
+      const values = rows.map((row) => String(row[header] ?? '').trim()).filter(Boolean);
+      if (values.length === 0) return { header, score: 0, distinct: 0 };
+      const hits = values.filter((value) => SQUAD_NAME_PATTERN.test(value)).length;
+      return { header, score: hits / values.length, distinct: new Set(values).size };
+    })
+    .sort((left, right) => right.score - left.score || right.distinct - left.distinct);
+}
+
+/**
+ * 找出匯出檔中的「分隊」欄。
+ *
+ * 以**內容**為主要依據而非欄名：匯出檔裡可能同時存在「分隊 自行受理」這種
+ * 名稱含「分隊」卻只是勾選記號的欄位，單靠欄名比對會選錯
+ * （曾因此把整份報表算成只有一個叫「V」的分隊）。
+ *
+ * @param {string[]} headers 匯出檔的欄位標題
+ * @param {Record<string, unknown>[]} rows 資料列（用來判斷欄位內容）
+ * @param {readonly string[]} candidates 備用的欄名候選
+ * @returns {{column: string, reason: string}} 選中的欄名與判定依據
+ */
+export function resolveSquadColumn(headers, rows, candidates) {
+  const scored = scoreHeadersByContent(headers, rows);
+  const best = scored[0];
+  if (best && best.score >= CONTENT_MATCH_THRESHOLD && best.distinct > 1) {
+    return {
+      column: best.header,
+      reason: `內容有 ${(best.score * 100).toFixed(0)}% 以分隊／大隊結尾，共 ${best.distinct} 種`,
+    };
+  }
+
+  // 內容判斷不出來（例如資料很少）時，退回欄名比對。
+  const normalizedHeaders = headers.map(normalize);
   for (const candidate of candidates) {
     const index = normalizedHeaders.indexOf(normalize(candidate));
-    if (index >= 0) return headers[index];
+    if (index >= 0) return { column: headers[index], reason: `欄名與「${candidate}」完全相符` };
   }
-  // 找不到完全相同的欄名時，退而求其次找「包含」候選字的欄位。
-  for (const candidate of candidates) {
-    const index = normalizedHeaders.findIndex((header) => header.includes(normalize(candidate)));
-    if (index >= 0) return headers[index];
+  // 最後才用「包含」比對，並取最短的欄名（避免選到「分隊 自行受理」這種複合欄）。
+  const contains = headers
+    .filter((header) => candidates.some((candidate) => normalize(header).includes(normalize(candidate))))
+    .sort((left, right) => normalize(left).length - normalize(right).length);
+  if (contains.length > 0) {
+    return { column: contains[0], reason: '欄名包含分隊字樣（推測，請確認結果是否合理）' };
   }
+
   throw new Error(
     `匯出檔中找不到分隊欄位。實際欄位有：${headers.join('、')}。` +
       `請把正確欄名加進 config.mjs 的 SQUAD_COLUMN_CANDIDATES。`,
