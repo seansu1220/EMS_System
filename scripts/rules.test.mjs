@@ -99,6 +99,13 @@ await seed(async (db) => {
     items: [{ id: 'i1', content: '簽陳核准', sortOrder: 0 }],
     ownerUid: 'admin-uid',
   });
+  await setDoc(doc(db, 'holidays/2027'), {
+    year: 2027,
+    holidays: [{ date: '2027-01-01', name: '開國紀念日' }],
+    workdays: [],
+    offDayCount: 121,
+    updatedBy: 'admin-uid',
+  });
 });
 
 const admin = dbFor('admin-uid', ADMIN_EMAIL);
@@ -114,6 +121,19 @@ await check(
 );
 await check('管理員可刪除業務', assertSucceeds(deleteDoc(doc(admin, 'tasks/task-2'))));
 await check('管理員可刪除屬性', assertSucceeds(deleteDoc(doc(admin, 'categories/cat-2'))));
+await check(
+  '管理員可匯入假日清單',
+  assertSucceeds(
+    setDoc(doc(admin, 'holidays/2028'), {
+      year: 2028,
+      holidays: [{ date: '2028-01-03', name: '補假' }],
+      workdays: [],
+      offDayCount: 120,
+      updatedBy: 'admin-uid',
+    }),
+  ),
+);
+await check('管理員可刪除假日清單', assertSucceeds(deleteDoc(doc(admin, 'holidays/2028'))));
 
 // 復原 pending 狀態供後續測試
 await seed(async (db) => {
@@ -170,6 +190,11 @@ await check(
   '成員不可刪除待辦公版',
   assertFails(deleteDoc(doc(member, 'checklistTemplates/tpl-1'))),
 );
+await check('成員可讀假日清單（首頁天數要用）', assertSucceeds(getDoc(doc(member, 'holidays/2027'))));
+await check(
+  '成員不可匯入假日清單（會改變所有人看到的天數）',
+  assertFails(updateDoc(doc(member, 'holidays/2027'), { offDayCount: 999 })),
+);
 
 // ── 3. 待審核帳號 ──
 await check('待審核者不可讀業務', assertFails(getDoc(doc(pending, 'tasks/task-1'))));
@@ -184,6 +209,7 @@ await check(
     }),
   ),
 );
+await check('待審核者不可讀假日清單', assertFails(getDoc(doc(pending, 'holidays/2027'))));
 await check('待審核者可讀自己的帳號文件', assertSucceeds(getDoc(doc(pending, 'users/pending-uid'))));
 await check(
   '待審核者不可自我核准',

@@ -7,6 +7,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTasks } from '../hooks/useTasks';
 import { useCategories } from '../hooks/useCategories';
+import { useHolidays } from '../hooks/useHolidays';
 import type { Task } from '../types/task';
 import { isDone, isOverdue, sortProgressEntries } from '../lib/taskLogic';
 import { describeRecurrence } from '../lib/recurrence';
@@ -20,6 +21,8 @@ export function HomePage() {
   const navigate = useNavigate();
   const { tasks, loading: tasksLoading, error: tasksError } = useTasks();
   const { categories, error: categoriesError } = useCategories();
+  // 假日清單讀取失敗不阻擋畫面：仍以內建清單計算剩餘工作日，故此處不取 error。
+  const { workdayCalendar } = useHolidays();
 
   const [activeTab, setActiveTab] = useState<string>(ALL_TAB);
   const [showDone, setShowDone] = useState(false);
@@ -48,7 +51,7 @@ export function HomePage() {
 
   return (
     <div className="space-y-6">
-      <ReminderPanel tasks={tasks} categories={categories} />
+      <ReminderPanel tasks={tasks} categories={categories} workdayCalendar={workdayCalendar} />
 
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

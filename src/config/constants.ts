@@ -29,6 +29,7 @@ export const COLLECTIONS = {
   categories: 'categories',
   tasks: 'tasks',
   checklistTemplates: 'checklistTemplates',
+  holidays: 'holidays',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */
@@ -51,7 +52,8 @@ export const REMINDER_DAYS = {
 
 /**
  * 工作日的星期代碼（對應 Date.getDay()：0=週日、1=週一 … 6=週六）。
- * 預設為週一至週五；若未來要排除國定假日，另建假日清單再擴充 taskLogic.workdaysUntil()。
+ * 這是「沒有假日資料時」的預設規則；國定假日與補班日由假日清單另行修正
+ * （內建清單見 config/holidays.ts，計算見 lib/workday.ts）。
  */
 export const WORKDAY_WEEKDAYS: readonly number[] = [1, 2, 3, 4, 5];
 

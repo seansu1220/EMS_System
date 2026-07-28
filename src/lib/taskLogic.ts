@@ -3,7 +3,6 @@
  * 不依賴 React 或 Firebase，皆為純函式（輸入 → 輸出，無副作用），方便獨立測試。
  */
 import type { ProgressEntry, Task } from '../types/task';
-import { WORKDAY_WEEKDAYS } from '../config/constants';
 import { describeRecurrence } from './recurrence';
 
 /**
@@ -89,36 +88,6 @@ export function daysUntil(deadline: string, from: string = today()): number {
   const base = new Date(`${from}T00:00:00`);
   const diffMs = target.getTime() - base.getTime();
   return Math.round(diffMs / (24 * 60 * 60 * 1000));
-}
-
-/** 該日期是否為工作日（依 WORKDAY_WEEKDAYS 設定，預設週一～週五）。 */
-function isWorkday(date: Date): boolean {
-  return WORKDAY_WEEKDAYS.includes(date.getDay());
-}
-
-/**
- * 計算距離期限還剩幾個「工作日」：統計 from（不含）到 deadline（含）之間的工作日數。
- * 例：週五看到下週一到期的業務，日曆日剩 3 天，工作日只剩 1 天。
- * 期限為今天或已逾期時回傳 0（逾期天數請改用 daysUntil()，以日曆日呈現較直覺）。
- * @param deadline yyyy-MM-dd
- * @param from 基準日（yyyy-MM-dd），預設今天
- */
-export function workdaysUntil(deadline: string, from: string = today()): number {
-  const totalDays = daysUntil(deadline, from);
-  if (totalDays <= 0) return 0;
-
-  // 整週部分直接以「每週工作日數」相乘，剩餘不足一週的天數才逐日檢查（最多 6 次）。
-  const fullWeeks = Math.floor(totalDays / 7);
-  const restDays = totalDays % 7;
-  let workdays = fullWeeks * WORKDAY_WEEKDAYS.length;
-
-  const cursor = new Date(`${from}T00:00:00`);
-  cursor.setDate(cursor.getDate() + fullWeeks * 7);
-  for (let step = 0; step < restDays; step += 1) {
-    cursor.setDate(cursor.getDate() + 1);
-    if (isWorkday(cursor)) workdays += 1;
-  }
-  return workdays;
 }
 
 /** 業務是否已完成。 */

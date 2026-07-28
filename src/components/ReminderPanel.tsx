@@ -1,7 +1,7 @@
 /**
  * 首頁上方的近期任務提醒卡。
  * 預設顯示「已逾期 + 7 天內到期」的未完成業務；點「展開」改為 30 天內。
- * 剩餘天數以「工作日」呈現（週一～週五，見 WORKDAY_WEEKDAYS），
+ * 剩餘天數以「工作日」呈現（扣掉週末與國定假日，見 lib/workday），
  * 避免週五看到下週一到期的業務時，因日曆日顯示「剩 3 天」而誤判還有餘裕。
  * 顏色：已逾期＝紅、剩餘工作日在 urgent 天數內＝橙、其餘＝一般色。點擊跳轉業務詳情。
  * 無期限的未完成業務不受視窗限制，永遠顯示於獨立的「未定期限」區段（避免被遺忘）。
@@ -13,12 +13,15 @@ import { useNavigate } from 'react-router-dom';
 import type { Task } from '../types/task';
 import type { Category } from '../types/category';
 import { REMINDER_DAYS } from '../config/constants';
-import { daysUntil, getReminderTasks, workdaysUntil, type ReminderItem } from '../lib/taskLogic';
+import { daysUntil, getReminderTasks, type ReminderItem } from '../lib/taskLogic';
+import { isYearCovered, workdaysUntil, type WorkdayCalendar } from '../lib/workday';
 import { Card } from './ui';
 
 interface ReminderPanelProps {
   tasks: Task[];
   categories: Category[];
+  /** 假日索引（由 useHolidays 提供），決定剩餘工作日怎麼扣。 */
+  workdayCalendar: WorkdayCalendar;
 }
 
 /** 期限的剩餘量（日曆日供逾期/今天判定，工作日供顯示與急迫度判定）。 */
@@ -27,11 +30,17 @@ interface Remaining {
   calendarDays: number;
   /** 距離期限還剩幾個工作日（今天到期或已逾期時為 0）。 */
   workdays: number;
+  /** 期限所在年份是否有假日資料（沒有的話只扣了週末）。 */
+  covered: boolean;
 }
 
 /** 計算單一期限的剩餘量。 */
-function remainingOf(deadline: string): Remaining {
-  return { calendarDays: daysUntil(deadline), workdays: workdaysUntil(deadline) };
+function remainingOf(deadline: string, calendar: WorkdayCalendar): Remaining {
+  return {
+    calendarDays: daysUntil(deadline),
+    workdays: workdaysUntil(deadline, calendar),
+    covered: isYearCovered(deadline, calendar),
+  };
 }
 
 /** 依剩餘量決定文字顏色（逾期紅、剩餘工作日在 urgent 內橙、其餘一般色）。 */
@@ -48,12 +57,14 @@ function remainingLabel({ calendarDays, workdays }: Remaining): string {
   return `剩 ${workdays} 個工作日`;
 }
 
-/** 滑鼠停留時顯示的日曆日補充說明（未到期才有）。 */
-function calendarHint({ calendarDays }: Remaining): string | undefined {
-  return calendarDays > 0 ? `日曆日剩 ${calendarDays} 天` : undefined;
+/** 滑鼠停留時顯示的補充說明：日曆日天數，以及該年份是否有假日資料。 */
+function calendarHint({ calendarDays, covered }: Remaining): string | undefined {
+  if (calendarDays <= 0) return undefined;
+  const base = `日曆日剩 ${calendarDays} 天`;
+  return covered ? base : `${base}（該年度尚未匯入國定假日，僅扣除週末）`;
 }
 
-export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
+export function ReminderPanel({ tasks, categories, workdayCalendar }: ReminderPanelProps) {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
 
@@ -100,7 +111,7 @@ export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
             <ul className="divide-y divide-slate-100">
               {datedReminders.map((item, index) => {
                 // 此段皆為有期限項目，deadline 必為非 null。
-                const remaining = remainingOf(item.deadline as string);
+                const remaining = remainingOf(item.deadline as string, workdayCalendar);
                 return (
                   <li key={`${item.kind}-${item.taskId}-${index}`}>
                     <button

@@ -11,6 +11,7 @@
 > v1.10.1：實跑修正（日期含時分秒、分隊欄位改以內容判定、登入時序、回讀驗證）
 > v1.11：規格書拆分（小工具移至 TOOLS_SPEC.md）、根目錄批次檔收納至 捷徑/
 > v1.11.8：首頁提醒卡的剩餘天數改以工作日計算（見 2.2）
+> v1.12：工作日扣除國定假日，新增「假日設定」頁可匯入官方辦公日曆表（見 2.2、2.7）
 > 使用者：救護科股長（管理員）＋經核准的代理同事，多裝置使用
 
 輔助救護科股長辦公的業務與行程管理網頁系統。可新增業務、註記期限、更新處理進度、
@@ -75,10 +76,12 @@
 - 顏色標示：已逾期＝紅色、剩餘工作日 3 天內＝橙色、其餘＝一般色；每筆顯示期限日期、
   剩餘/逾期天數、名稱、屬性標籤，點擊跳轉業務詳情。
 - **剩餘天數以「工作日」計**（v1.11.8 起）：顯示「剩 N 個工作日」，N＝今天（不含）到期限（含）
-  之間的工作日數，工作日定義於 `WORKDAY_WEEKDAYS`（預設週一～週五，不含國定假日）。
-  目的：避免週五看到下週一到期的業務時，因日曆日「剩 3 天」而誤判還有餘裕（實際只剩 1 個工作日）。
-  已逾期仍以日曆日呈現（「逾期 N 天」）、期限為今天顯示「今天到期」；滑鼠停留於天數可看日曆日天數。
-  納入提醒的 7/30 天視窗維持日曆日計算（避免視窗被假日壓縮）。
+  之間的工作日數。目的：避免週五看到下週一到期的業務時，因日曆日「剩 3 天」而誤判還有餘裕
+  （實際只剩 1 個工作日）。已逾期仍以日曆日呈現（「逾期 N 天」）、期限為今天顯示「今天到期」；
+  滑鼠停留於天數可看日曆日天數。納入提醒的 7/30 天視窗維持日曆日計算（避免視窗被假日壓縮）。
+- **工作日的定義**（v1.12 起）：預設週一～週五（`WORKDAY_WEEKDAYS`），再扣除國定假日、
+  加回補班日，假日清單見 2.7。**清單未涵蓋的年份只扣週六日**，不猜假日；
+  滑鼠停留於天數會註明該年度尚未匯入假日。計算集中於 `src/lib/workday.ts`（純函式）。
 - **無期限且未完成的業務**：不受 7/30 天視窗限制，**永遠顯示**於提醒卡內，
   獨立區段排在有期限項目之後，灰色「未定期限」標籤區隔（避免被遺忘）。（v1.4 起）
 - 已完成業務、已勾掉的待辦、無期限的待辦事項不進提醒。
@@ -176,7 +179,30 @@
 - 管理員自己的帳號與其他白名單 email 不可在此調整（權限來自 email 白名單）。
 - 頁首顯示待審核數量提醒；非管理員進入此路徑一律導回首頁。
 
-### 2.7 路由
+### 2.7 假日設定 `/holidays`（v1.12 起）
+決定首頁「剩 N 個工作日」要扣掉哪些日子。**所有已核准者可查看，只有管理員能匯入或刪除**
+（這份資料會改變每個人看到的天數）。
+
+**資料來源與涵蓋範圍**
+- 程式內建 2026、2027 兩年（`src/config/holidays.ts`），由行政院人事行政總處
+  「政府行政機關辦公日曆表」開放資料（政府資料開放平臺 dataset 14718）的官方 CSV 轉出。
+- 政府通常每年年中才公布次年日曆表，故內建清單天生只涵蓋近一兩年；
+  新年度公布後由管理員匯入，**不需重新部署程式**。未涵蓋年份退回「只扣週六日」。
+
+**儲存格式**：只存「與預設不同的例外日」，不存整年 365 天——
+`holidays[]`＝平日卻放假（國定假日、補假），`workdays[]`＝週末卻要上班（補班日）。
+一年約 20 筆，資料量小且可人工核對。
+
+**匯入流程**：選擇官方 CSV 檔案（或貼上內容）→ 系統解析後顯示「讀到幾天假、哪幾天」的預覽
+→ 確認後才寫入 Firestore → 全裝置即時生效。同一年重複匯入會直接覆蓋，不會留下兩份打架的資料。
+
+**解析規則**（`src/lib/holidayCsv.ts`，純函式）
+- 官方數字版格式：`西元日期,星期,是否放假,備註`，是否放假欄 `0`＝上班、`2`＝放假。
+- 日期容錯接受 `20270101` / `2027-01-01` / `2027/1/1` 三種寫法；不存在的日期（如 2 月 30 日）略過。
+- **整年不足 350 天的年度一律拒絕匯入**並說明原因——寧可不匯，也不要匯進殘缺清單而漏算假日。
+- 檔案完全讀不到日曆資料時，明確提示可能選到 Google 行事曆專用版或 PDF。
+
+### 2.8 路由
 | 路徑 | 頁面 | 權限 |
 | --- | --- | --- |
 | `/login` | 登入 / 註冊 | 公開 |
@@ -185,6 +211,7 @@
 | `/tasks/:taskId` | 業務詳情 / 編輯 / 進度 / 待辦 | 需登入且已核准（刪除僅管理員） |
 | `/categories` | 屬性管理 | 需登入且已核准 |
 | `/templates` | 待辦公版管理 | 需登入且已核准 |
+| `/holidays` | 假日設定（工作日天數的來源） | 需登入且已核准（匯入/刪除僅管理員） |
 | `/tools` | 小工具（說明頁；工具本身在本機執行，見 TOOLS_SPEC.md） | 需登入且已核准 |
 | `/users` | 使用者管理 | 僅管理員 |
 
@@ -199,6 +226,9 @@
 - `categories/{id}`：{ name, sortOrder, ownerUid（建立者）, createdAt }
 - `tasks/{id}`：見 2.3 欄位表（ownerUid 為建立者）
 - `checklistTemplates/{id}`：見 2.5（待辦公版）
+- `holidays/{西元年}`：{ year, holidays[]（{date,name}）, workdays[]（{date,name}）,
+  offDayCount（全年放假天數，供人工核對）, updatedBy, updatedAt }（v1.12 新增，見 2.7）
+  ——文件 ID 就是年份，重複匯入同年直接覆蓋。
 
 ### 安全規則（v1.8 改版）
 - 管理員以 `request.auth.token.email` 比對白名單認定（**不讀資料庫欄位**，避免竄改文件提權）；
@@ -206,6 +236,7 @@
 - `tasks` / `categories` / `checklistTemplates`：
   讀取與更新須為「已核准使用者」；建立另強制 `ownerUid == request.auth.uid`（記錄建立者）；
   **三者的 delete 皆僅管理員**（v1.8.1 起）。
+- `holidays`：已核准者可讀（首頁計算天數要用），**寫入與刪除僅管理員**（v1.12 起）。
 - `users`：本人可讀自己的文件、可改自己的一般欄位，但 **role 與 status 不可自行變更**（不可自我核准/提權）；
   列出全部帳號與變更他人狀態僅限管理員；建立時強制
   `role/status == (管理員 email ? admin/approved : member/pending)`。
@@ -229,17 +260,21 @@
 ```
 EMS_System/
 ├─ src/
-│  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts
-│  ├─ config/       constants.ts（提醒天數 7/30、工作日星期、預設屬性、集合名稱、ADMIN_EMAILS）
-│  ├─ lib/          firebase.ts、taskLogic.ts、recurrence.ts、checklistLogic.ts、permissions.ts
-│  ├─ services/     authService、taskService、categoryService、checklistTemplateService、userService
-│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates
+│  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts、holiday.ts
+│  ├─ config/       constants.ts（提醒天數 7/30、工作日星期、預設屬性、集合名稱、ADMIN_EMAILS）、
+│  │                holidays.ts（內建 2026/2027 國定假日清單）
+│  ├─ lib/          firebase.ts、taskLogic.ts、workday.ts（工作日計算）、holidayCsv.ts（日曆表解析）、
+│  │                recurrence.ts、checklistLogic.ts、permissions.ts
+│  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
+│  │                userService、holidayService
+│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
 │  │                CompletionSection、ui
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
-│                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage
+│                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、HolidaysPage、
+│                   ToolsPage、UsersPage
 ├─ tools/           本機小工具（規格見 TOOLS_SPEC.md），不參與建置與部署
 │  └─ ems-report/   救護紀錄表查詢；out/ 為產出目錄，含個案明細，已 gitignore
 ├─ 捷徑/            雙擊執行的批次檔（啟動系統、救護預警統計、設定登入帳密…）

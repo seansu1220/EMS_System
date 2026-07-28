@@ -9,6 +9,7 @@ import { NewTaskPage } from './pages/NewTaskPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 import { CategoriesPage } from './pages/CategoriesPage';
 import { ChecklistTemplatesPage } from './pages/ChecklistTemplatesPage';
+import { HolidaysPage } from './pages/HolidaysPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="tasks/:taskId" element={<TaskDetailPage />} />
         <Route path="categories" element={<CategoriesPage />} />
         <Route path="templates" element={<ChecklistTemplatesPage />} />
+        <Route path="holidays" element={<HolidaysPage />} />
         <Route path="tools" element={<ToolsPage />} />
         {/* 使用者管理：頁面內再檢查管理員身分，非管理員導回首頁。 */}
         <Route path="users" element={<UsersPage />} />

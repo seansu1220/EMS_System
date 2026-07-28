@@ -86,5 +86,12 @@ service cloud.firestore {
       allow update: if isApproved();
       allow delete: if isAdmin();
     }
+
+    // ── 國定假日（辦公日曆表）：全體已核准者可讀（首頁天數計算要用），
+    //    但只有管理員能匯入/刪除——這份資料會改變所有人看到的剩餘天數。
+    match /holidays/{year} {
+      allow read: if isApproved();
+      allow write: if isAdmin();
+    }
   }
 }

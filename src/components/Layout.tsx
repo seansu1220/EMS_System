@@ -43,6 +43,9 @@ export function Layout() {
             <NavLink to="/templates" className={navItemClass}>
               待辦公版
             </NavLink>
+            <NavLink to="/holidays" className={navItemClass}>
+              假日設定
+            </NavLink>
             <NavLink to="/tools" className={navItemClass}>
               小工具
             </NavLink>
