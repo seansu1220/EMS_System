@@ -4,7 +4,14 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, describeSheet } from './adjustSheet.mjs';
+import {
+  parseCsv,
+  describeSheet,
+  buildCsvUrl,
+  parseSheetDate,
+  resolveAdjustColumns,
+  countAdjustmentsBySquad,
+} from './adjustSheet.mjs';
 
 test('parseCsv 處理引號、逗號與跨行儲存格', () => {
   const csv = '日期,分隊,原因\n2026-06-01,桃園分隊,"備註,含逗號"\n2026-06-02,大林分隊,"換行\n測試"\n';
@@ -40,4 +47,51 @@ test('describeSheet 推測欄位型態且不輸出任何內容', () => {
   const serialized = JSON.stringify(info);
   assert.ok(!serialized.includes('桃園分隊'), '診斷資訊不可含任何儲存格內容');
   assert.ok(!serialized.includes('2026-06-01'), '診斷資訊不可含任何儲存格內容');
+});
+
+test('buildCsvUrl 未指定 gid 時不可帶該參數', () => {
+  // 曾因預設 gid=0 而拿到 HTTP 400：第一個分頁的 gid 未必是 0。
+  assert.equal(buildCsvUrl('ABC', null), 'https://docs.google.com/spreadsheets/d/ABC/export?format=csv');
+  assert.equal(buildCsvUrl('ABC', ''), 'https://docs.google.com/spreadsheets/d/ABC/export?format=csv');
+  assert.equal(buildCsvUrl('ABC', '123'), 'https://docs.google.com/spreadsheets/d/ABC/export?format=csv&gid=123');
+});
+
+test('parseSheetDate 容錯各種日期寫法', () => {
+  assert.equal(parseSheetDate('2026-06-01'), '2026-06-01');
+  assert.equal(parseSheetDate('2026/6/1'), '2026-06-01');
+  assert.equal(parseSheetDate('2026/6/1 上午 08:30'), '2026-06-01');
+  assert.equal(parseSheetDate('2026年6月1日'), '2026-06-01');
+  assert.equal(parseSheetDate('115/6/1'), '2026-06-01', '民國年要換算');
+  assert.equal(parseSheetDate('沒有日期'), null);
+  assert.equal(parseSheetDate('2026-13-01'), null, '不合理的月份不接受');
+  assert.equal(parseSheetDate(''), null);
+});
+
+test('resolveAdjustColumns 以內容判定日期欄與分隊欄', () => {
+  const rows = [
+    ['編號', '案發時間', '單位', '備註'],
+    ['A1', '2026-06-01 08:30', '桃園分隊', '重複派遣'],
+    ['A2', '2026/6/2', '大林分隊', ''],
+    ['A3', '115/6/3', '中路分隊', ''],
+  ];
+  assert.deepEqual(resolveAdjustColumns(rows), { dateColumn: 1, squadColumn: 2 });
+});
+
+test('countAdjustmentsBySquad 只計期間內的列', () => {
+  const rows = [
+    ['時間', '分隊'],
+    ['2026-06-01', '桃園分隊'],
+    ['2026-06-30', '桃園分隊'],
+    ['2026-07-01', '桃園分隊'],
+    ['2026-05-31', '大林分隊'],
+    ['沒日期', '大林分隊'],
+  ];
+  const range = { label: '2026-06', start: '2026-06-01', end: '2026-06-30' };
+  const result = countAdjustmentsBySquad(rows, { dateColumn: 0, squadColumn: 1 }, range);
+
+  assert.equal(result.counts.get('桃園分隊'), 2, '起訖日皆須含在內');
+  assert.equal(result.counts.has('大林分隊'), false);
+  assert.equal(result.inRange, 2);
+  assert.equal(result.outOfRange, 2);
+  assert.equal(result.unparsable, 1);
 });

@@ -133,6 +133,60 @@ export function summarize(stats, name = '合計') {
 }
 
 /**
+ * 套用增減試算表的扣除：**只扣送醫案件數（分母），不動預警案件數（分子）**。
+ *
+ * 依使用者說明，會被列在該試算表上的案件，本來就不會是系統中登記有到院前預警的案件，
+ * 因此分子不需要跟著減。扣除後比率會略為上升。
+ *
+ * 試算表的分隊寫法可能省略「分隊」二字，故比對時會嘗試自動補上。
+ *
+ * @param {SquadStat[]} stats 各分隊統計
+ * @param {Map<string, number>} adjustments 分隊 → 要扣除的件數
+ * @returns {{stats: SquadStat[], applied: number, unmatched: string[], overflow: string[]}}
+ *   `unmatched` 為試算表有、但統計結果找不到的分隊；
+ *   `overflow` 為扣到分母小於分子的分隊（代表資料有問題，需人工確認）
+ */
+export function applyAdjustments(stats, adjustments) {
+  const normalize = (text) => String(text ?? '').replace(/\s/g, '');
+  const bySquad = new Map(stats.map((item) => [normalize(item.squad), item]));
+
+  /** 試算表可能只寫「桃園」而非「桃園分隊」，兩種寫法都試。 */
+  const findTarget = (name) => {
+    const key = normalize(name);
+    return bySquad.get(key) ?? bySquad.get(`${key}分隊`) ?? null;
+  };
+
+  const deductions = new Map();
+  const unmatched = [];
+  let applied = 0;
+
+  for (const [name, count] of adjustments) {
+    const target = findTarget(name);
+    if (!target) {
+      unmatched.push(name);
+      continue;
+    }
+    deductions.set(target.squad, (deductions.get(target.squad) ?? 0) + count);
+    applied += count;
+  }
+
+  const overflow = [];
+  const adjusted = stats.map((item) => {
+    const deduct = deductions.get(item.squad) ?? 0;
+    if (deduct === 0) return item;
+    const totalCount = Math.max(0, item.totalCount - deduct);
+    if (totalCount < item.alertCount) overflow.push(item.squad);
+    return {
+      ...item,
+      totalCount,
+      ratio: totalCount === 0 ? null : item.alertCount / totalCount,
+    };
+  });
+
+  return { stats: adjusted, applied, unmatched, overflow };
+}
+
+/**
  * @typedef {SquadStat & {level: 'brigade'|'squad'}} GroupedStat
  */
 

@@ -17,9 +17,14 @@ import { PATHS } from './config.mjs';
 /**
  * @typedef {Object} SheetSource
  * @property {string} spreadsheetId 試算表 ID
- * @property {string} gid 分頁 gid
- * @property {string} csvUrl CSV 匯出網址（僅內部使用，不對外輸出）
+ * @property {string|null} gid 分頁 gid；null 代表未指定（取第一個分頁）
  */
+
+/** 組出 CSV 匯出網址。gid 為 null 時**不帶該參數**，Google 會回傳第一個分頁。 */
+export function buildCsvUrl(spreadsheetId, gid) {
+  const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv`;
+  return gid === null || gid === undefined || gid === '' ? base : `${base}&gid=${gid}`;
+}
 
 /** 讀取 .env 並解析出試算表來源；未設定時回傳 null。 */
 export function resolveSheetSource() {
@@ -38,13 +43,10 @@ export function resolveSheetSource() {
         '請把瀏覽器網址列的整串網址貼上。',
     );
   }
-  const gidFromUrl = /[#&?]gid=(\d+)/.exec(url)?.[1];
-  const gid = (process.env.EMS_ADJUST_SHEET_GID ?? '').trim() || gidFromUrl || '0';
-  return {
-    spreadsheetId: idMatch[1],
-    gid,
-    csvUrl: `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv&gid=${gid}`,
-  };
+  // 不可預設成 gid=0：第一個分頁的 gid 未必是 0（原始分頁被刪過就會變成別的數字），
+  // 硬帶 gid=0 會得到 HTTP 400。未指定時一律不帶，讓 Google 回傳第一個分頁。
+  const explicitGid = (process.env.EMS_ADJUST_SHEET_GID ?? '').trim() || /[#&?]gid=(\d+)/.exec(url)?.[1];
+  return { spreadsheetId: idMatch[1], gid: explicitGid || null };
 }
 
 /**
@@ -95,15 +97,31 @@ export function parseCsv(input) {
  * @returns {Promise<string[][]>}
  */
 export async function fetchSheetRows(source) {
-  let response;
-  try {
-    response = await fetch(source.csvUrl, { redirect: 'follow' });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`連線到 Google 試算表失敗：${reason}`);
+  const attempt = async (gid) => {
+    let response;
+    try {
+      response = await fetch(buildCsvUrl(source.spreadsheetId, gid), { redirect: 'follow' });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`連線到 Google 試算表失敗：${reason}`);
+    }
+    return response;
+  };
+
+  let response = await attempt(source.gid);
+  // 指定的 gid 不存在時 Google 回 400；退一步改抓第一個分頁。
+  if (response.status === 400 && source.gid !== null) {
+    response = await attempt(null);
+  }
+
+  if (response.status === 404) {
+    throw new Error('找不到這份試算表（HTTP 404）。請確認網址正確，且檔案沒有被刪除。');
   }
   if (!response.ok) {
-    throw new Error(`讀取 Google 試算表失敗（HTTP ${response.status}）`);
+    throw new Error(
+      `讀取 Google 試算表失敗（HTTP ${response.status}）。` +
+        '若為 400，通常是指定的分頁 gid 不存在；可清空 EMS_ADJUST_SHEET_GID 改用第一個分頁。',
+    );
   }
 
   const contentType = response.headers.get('content-type') ?? '';
@@ -115,6 +133,107 @@ export async function fetchSheetRows(source) {
     );
   }
   return parseCsv(text);
+}
+
+/**
+ * 解析試算表裡的日期字串為 `YYYY-MM-DD`。
+ *
+ * 容錯處理常見寫法：`2026-06-01`、`2026/6/1`、後面接時間、以及**民國年**（如 `115/6/1`）。
+ * 解析不出來時回傳 null，由呼叫端決定如何處理。
+ *
+ * @param {string} text
+ * @returns {string|null}
+ */
+export function parseSheetDate(text) {
+  const matched = /(\d{2,4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})/.exec(String(text ?? ''));
+  if (!matched) return null;
+
+  let year = Number(matched[1]);
+  const month = Number(matched[2]);
+  const day = Number(matched[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  // 三碼以內視為民國年（例如 115 → 2026）。
+  if (year < 1911) year += 1911;
+
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+/**
+ * 從試算表內容判斷「日期欄」與「分隊欄」是哪兩欄。
+ *
+ * 與匯出檔的作法一致：**看內容不看欄名**，因為使用者維護的表單欄名可能隨時改。
+ *
+ * @param {string[][]} rows 含標題列
+ * @returns {{dateColumn: number, squadColumn: number}}
+ */
+export function resolveAdjustColumns(rows) {
+  const body = rows.slice(1);
+  if (body.length === 0) throw new Error('增減試算表沒有任何資料列');
+  const columnCount = Math.max(...rows.map((row) => row.length));
+
+  let dateColumn = -1;
+  let squadColumn = -1;
+  let bestDateScore = 0;
+  let bestSquadScore = 0;
+
+  for (let index = 0; index < columnCount; index += 1) {
+    const values = body.map((row) => (row[index] ?? '').trim()).filter(Boolean);
+    if (values.length === 0) continue;
+    const dateScore = values.filter((value) => parseSheetDate(value) !== null).length / values.length;
+    const squadScore = values.filter((value) => /(分隊|大隊|中隊)$/.test(value)).length / values.length;
+    if (dateScore > bestDateScore && dateScore >= 0.7) {
+      bestDateScore = dateScore;
+      dateColumn = index;
+    }
+    if (squadScore > bestSquadScore && squadScore >= 0.7) {
+      bestSquadScore = squadScore;
+      squadColumn = index;
+    }
+  }
+
+  if (dateColumn < 0) throw new Error('增減試算表中找不到日期欄（沒有任何一欄的內容大多是日期）');
+  if (squadColumn < 0) throw new Error('增減試算表中找不到分隊欄（沒有任何一欄的內容大多以分隊／大隊結尾）');
+  return { dateColumn, squadColumn };
+}
+
+/**
+ * 統計「期間內每個分隊要扣掉幾件」。
+ *
+ * 規則（使用者 2026-07-28 確認）：試算表每一列代表一件應排除的案件，
+ * 若該列日期落在查詢期間內，就把該分隊的**送醫案件數（分母）扣 1**。
+ * **預警案件數（分子）不動**——會列在這張表上的案件本來就不會是有到院前預警的案件。
+ *
+ * @param {string[][]} rows 含標題列
+ * @param {{dateColumn: number, squadColumn: number}} columns
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {{counts: Map<string, number>, inRange: number, outOfRange: number, unparsable: number}}
+ */
+export function countAdjustmentsBySquad(rows, columns, monthRange) {
+  const counts = new Map();
+  let inRange = 0;
+  let outOfRange = 0;
+  let unparsable = 0;
+
+  for (const row of rows.slice(1)) {
+    const isoDate = parseSheetDate(row[columns.dateColumn] ?? '');
+    if (isoDate === null) {
+      unparsable += 1;
+      continue;
+    }
+    if (isoDate < monthRange.start || isoDate > monthRange.end) {
+      outOfRange += 1;
+      continue;
+    }
+    const squad = String(row[columns.squadColumn] ?? '').trim();
+    if (!squad) {
+      unparsable += 1;
+      continue;
+    }
+    counts.set(squad, (counts.get(squad) ?? 0) + 1);
+    inRange += 1;
+  }
+  return { counts, inRange, outOfRange, unparsable };
 }
 
 /**

@@ -25,10 +25,17 @@ import {
   buildComparison,
   groupByBrigade,
   sortByRatioDesc,
+  applyAdjustments,
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
 import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT } from './config.mjs';
-import { resolveSheetSource, fetchSheetRows, describeSheet } from './adjustSheet.mjs';
+import {
+  resolveSheetSource,
+  fetchSheetRows,
+  describeSheet,
+  resolveAdjustColumns,
+  countAdjustmentsBySquad,
+} from './adjustSheet.mjs';
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /**
@@ -126,6 +133,8 @@ async function runReportFlow(session, monthRange, keepRaw) {
     throw error;
   }
 
+  stats = await adjustStats(stats, monthRange);
+
   if (stats.length === 0) {
     log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
   }
@@ -153,14 +162,16 @@ async function runReportFlow(session, monthRange, keepRaw) {
  * 檢查增減用的 Google 試算表能不能讀到，並印出結構供核對欄位。
  * 不需要開瀏覽器，也不需要登入救護系統。
  */
-async function checkAdjustSheet() {
+async function checkAdjustSheet(monthRange) {
   const source = resolveSheetSource();
   if (!source) {
     log.warn('尚未設定 EMS_ADJUST_SHEET_URL（位於 tools/ems-report/.env）。');
     log.info('把 Google 試算表的整串網址貼在該參數後面存檔，再執行一次即可。');
     return;
   }
-  log.info(`試算表 ID 長度 ${source.spreadsheetId.length}、分頁 gid=${source.gid}（不顯示網址）`);
+  log.info(
+    `試算表 ID 長度 ${source.spreadsheetId.length}、分頁 ${source.gid ?? '（未指定，取第一個）'}（不顯示網址）`,
+  );
 
   const rows = await fetchSheetRows(source);
   const info = describeSheet(rows);
@@ -170,6 +181,41 @@ async function checkAdjustSheet() {
     const kinds = column.kinds.length > 0 ? `｜推測：${column.kinds.join('＋')}` : '';
     log.info(`  [${column.index}] ${column.header || '(無標題)'} → ${column.filled} 筆有值、${column.distinct} 種${kinds}`);
   }
+
+  const columns = resolveAdjustColumns(rows);
+  log.ok(`日期欄判定為第 [${columns.dateColumn}] 欄、分隊欄判定為第 [${columns.squadColumn}] 欄`);
+
+  const { counts, inRange, outOfRange, unparsable } = countAdjustmentsBySquad(rows, columns, monthRange);
+  log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內要扣除的件數`);
+  log.info(`期間內 ${inRange} 件、期間外 ${outOfRange} 件、日期或分隊讀不出來 ${unparsable} 件`);
+  for (const [squad, count] of [...counts].sort((left, right) => right[1] - left[1])) {
+    log.info(`  ${squad}　-${count}`);
+  }
+  if (counts.size === 0) log.warn('這個期間沒有任何要扣除的案件。');
+}
+
+/** 讀取增減試算表並套用扣除；未設定或讀取失敗時不中斷主流程。 */
+async function adjustStats(stats, monthRange) {
+  const source = resolveSheetSource();
+  if (!source) {
+    log.info('未設定增減試算表（EMS_ADJUST_SHEET_URL），略過扣除。');
+    return stats;
+  }
+  log.step('套用增減試算表的扣除');
+  const rows = await fetchSheetRows(source);
+  const columns = resolveAdjustColumns(rows);
+  const { counts, inRange, outOfRange, unparsable } = countAdjustmentsBySquad(rows, columns, monthRange);
+  log.info(`試算表 ${rows.length - 1} 列：期間內 ${inRange} 件、期間外 ${outOfRange} 件、無法判讀 ${unparsable} 件`);
+
+  const result = applyAdjustments(stats, counts);
+  log.ok(`已自送醫案件數（分母）扣除 ${result.applied} 件，預警案件數不變`);
+  if (result.unmatched.length > 0) {
+    log.warn(`試算表中有 ${result.unmatched.length} 個分隊在統計結果裡找不到，未扣除：${result.unmatched.join('、')}`);
+  }
+  if (result.overflow.length > 0) {
+    log.warn(`以下分隊扣除後分母小於分子，請人工確認：${result.overflow.join('、')}`);
+  }
+  return result.stats;
 }
 
 async function main() {
@@ -179,7 +225,8 @@ async function main() {
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
 
   if (options.command === 'check-sheet') {
-    await checkAdjustSheet();
+    log.info(`試算期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
+    await checkAdjustSheet(monthRange);
     return;
   }
 

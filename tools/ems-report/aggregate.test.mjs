@@ -12,6 +12,7 @@ import {
   formatRatio,
   groupByBrigade,
   sortByRatioDesc,
+  applyAdjustments,
 } from './aggregate.mjs';
 import { findHeaderRowIndex } from './workbook.mjs';
 
@@ -167,4 +168,44 @@ test('findHeaderRowIndex 跳過匯出檔上方的說明列', () => {
   ];
   assert.equal(findHeaderRowIndex(matrix, CANDIDATES), 3);
   assert.equal(findHeaderRowIndex([['姓名', '年齡']], CANDIDATES), -1);
+});
+
+test('applyAdjustments 只扣分母、不動分子', () => {
+  const stats = buildComparison(
+    new Map([['桃園分隊', 100], ['大林分隊', 50]]),
+    new Map([['桃園分隊', 90], ['大林分隊', 45]]),
+  );
+  const result = applyAdjustments(stats, new Map([['桃園分隊', 5]]));
+
+  const 桃園 = result.stats.find((item) => item.squad === '桃園分隊');
+  assert.equal(桃園.totalCount, 95, '送醫案件數要扣掉');
+  assert.equal(桃園.alertCount, 90, '預警案件數不可變動');
+  assert.equal(桃園.ratio, 90 / 95, '比率用扣除後的分母重算');
+  assert.equal(result.applied, 5);
+
+  const 大林 = result.stats.find((item) => item.squad === '大林分隊');
+  assert.equal(大林.totalCount, 50, '沒被列入的分隊完全不變');
+});
+
+test('applyAdjustments 容許試算表省略「分隊」二字', () => {
+  const stats = buildComparison(new Map([['桃園分隊', 10]]), new Map([['桃園分隊', 8]]));
+  const result = applyAdjustments(stats, new Map([['桃園', 2]]));
+  assert.equal(result.stats[0].totalCount, 8);
+  assert.deepEqual(result.unmatched, []);
+});
+
+test('applyAdjustments 回報找不到的分隊與扣過頭的情形', () => {
+  const stats = buildComparison(new Map([['桃園分隊', 10]]), new Map([['桃園分隊', 9]]));
+  const result = applyAdjustments(stats, new Map([['桃園分隊', 5], ['不存在分隊', 3]]));
+
+  assert.deepEqual(result.unmatched, ['不存在分隊'], '找不到的分隊要回報，不可默默忽略');
+  assert.deepEqual(result.overflow, ['桃園分隊'], '分母扣到小於分子要示警');
+  assert.equal(result.applied, 5, '只計實際套用的件數');
+});
+
+test('applyAdjustments 不會產生負數分母', () => {
+  const stats = buildComparison(new Map([['桃園分隊', 3]]), new Map([['桃園分隊', 0]]));
+  const result = applyAdjustments(stats, new Map([['桃園分隊', 10]]));
+  assert.equal(result.stats[0].totalCount, 0);
+  assert.equal(result.stats[0].ratio, null, '分母為 0 時不做除法');
 });
