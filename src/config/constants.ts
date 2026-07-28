@@ -36,15 +36,24 @@ export type Tone = 'slate' | 'green' | 'amber' | 'red' | 'blue';
 
 /**
  * 提醒天數門檻。
- * - default：預設提醒範圍（逾期 + 7 天內到期）。
- * - expanded：展開後的提醒範圍（逾期 + 30 天內到期）。
- * - urgent：期限在此天數內（含逾期）以橙色標示。
+ * - default：預設提醒範圍（逾期 + 7 個日曆日內到期）。
+ * - expanded：展開後的提醒範圍（逾期 + 30 個日曆日內到期）。
+ * - urgent：剩餘「工作日」在此天數內（含逾期）以橙色標示。
+ *
+ * 註：default / expanded 為「納入提醒的視窗」，以日曆日計算（避免視窗被假日壓縮）；
+ *     urgent 與畫面上顯示的剩餘天數一致，皆以工作日計算。
  */
 export const REMINDER_DAYS = {
   default: 7,
   expanded: 30,
   urgent: 3,
 } as const;
+
+/**
+ * 工作日的星期代碼（對應 Date.getDay()：0=週日、1=週一 … 6=週六）。
+ * 預設為週一至週五；若未來要排除國定假日，另建假日清單再擴充 taskLogic.workdaysUntil()。
+ */
+export const WORKDAY_WEEKDAYS: readonly number[] = [1, 2, 3, 4, 5];
 
 /** 首次登入自動建立的預設屬性名稱（依此順序即為初始 sortOrder）。 */
 export const DEFAULT_CATEGORIES: readonly string[] = ['採購', '系統', '其他'];

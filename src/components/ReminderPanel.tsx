@@ -1,7 +1,9 @@
 /**
  * 首頁上方的近期任務提醒卡。
  * 預設顯示「已逾期 + 7 天內到期」的未完成業務；點「展開」改為 30 天內。
- * 顏色：已逾期＝紅、期限在 urgent 天數內＝橙、其餘＝一般色。點擊跳轉業務詳情。
+ * 剩餘天數以「工作日」呈現（週一～週五，見 WORKDAY_WEEKDAYS），
+ * 避免週五看到下週一到期的業務時，因日曆日顯示「剩 3 天」而誤判還有餘裕。
+ * 顏色：已逾期＝紅、剩餘工作日在 urgent 天數內＝橙、其餘＝一般色。點擊跳轉業務詳情。
  * 無期限的未完成業務不受視窗限制，永遠顯示於獨立的「未定期限」區段（避免被遺忘）。
  *
  * 純顯示元件：提醒清單的計算來自 lib/taskLogic（純函式），本元件不含資料存取邏輯。
@@ -11,7 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Task } from '../types/task';
 import type { Category } from '../types/category';
 import { REMINDER_DAYS } from '../config/constants';
-import { daysUntil, getReminderTasks, type ReminderItem } from '../lib/taskLogic';
+import { daysUntil, getReminderTasks, workdaysUntil, type ReminderItem } from '../lib/taskLogic';
 import { Card } from './ui';
 
 interface ReminderPanelProps {
@@ -19,18 +21,36 @@ interface ReminderPanelProps {
   categories: Category[];
 }
 
-/** 依剩餘天數決定文字顏色。 */
-function toneClass(remaining: number): string {
-  if (remaining < 0) return 'text-red-600';
-  if (remaining <= REMINDER_DAYS.urgent) return 'text-amber-600';
+/** 期限的剩餘量（日曆日供逾期/今天判定，工作日供顯示與急迫度判定）。 */
+interface Remaining {
+  /** 距離期限的日曆日數：負數＝已逾期、0＝今天到期。 */
+  calendarDays: number;
+  /** 距離期限還剩幾個工作日（今天到期或已逾期時為 0）。 */
+  workdays: number;
+}
+
+/** 計算單一期限的剩餘量。 */
+function remainingOf(deadline: string): Remaining {
+  return { calendarDays: daysUntil(deadline), workdays: workdaysUntil(deadline) };
+}
+
+/** 依剩餘量決定文字顏色（逾期紅、剩餘工作日在 urgent 內橙、其餘一般色）。 */
+function toneClass({ calendarDays, workdays }: Remaining): string {
+  if (calendarDays < 0) return 'text-red-600';
+  if (workdays <= REMINDER_DAYS.urgent) return 'text-amber-600';
   return 'text-slate-600';
 }
 
-/** 將剩餘天數轉為中文描述。 */
-function remainingLabel(remaining: number): string {
-  if (remaining < 0) return `逾期 ${Math.abs(remaining)} 天`;
-  if (remaining === 0) return '今天到期';
-  return `剩 ${remaining} 天`;
+/** 將剩餘量轉為中文描述（逾期以日曆日計，未到期以工作日計）。 */
+function remainingLabel({ calendarDays, workdays }: Remaining): string {
+  if (calendarDays < 0) return `逾期 ${Math.abs(calendarDays)} 天`;
+  if (calendarDays === 0) return '今天到期';
+  return `剩 ${workdays} 個工作日`;
+}
+
+/** 滑鼠停留時顯示的日曆日補充說明（未到期才有）。 */
+function calendarHint({ calendarDays }: Remaining): string | undefined {
+  return calendarDays > 0 ? `日曆日剩 ${calendarDays} 天` : undefined;
 }
 
 export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
@@ -80,7 +100,7 @@ export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
             <ul className="divide-y divide-slate-100">
               {datedReminders.map((item, index) => {
                 // 此段皆為有期限項目，deadline 必為非 null。
-                const remaining = daysUntil(item.deadline as string);
+                const remaining = remainingOf(item.deadline as string);
                 return (
                   <li key={`${item.kind}-${item.taskId}-${index}`}>
                     <button
@@ -91,7 +111,8 @@ export function ReminderPanel({ tasks, categories }: ReminderPanelProps) {
                         {item.deadline}
                       </span>
                       <span
-                        className={`w-20 shrink-0 text-xs font-semibold ${toneClass(remaining)}`}
+                        className={`w-24 shrink-0 text-xs font-semibold ${toneClass(remaining)}`}
+                        title={calendarHint(remaining)}
                       >
                         {remainingLabel(remaining)}
                       </span>
