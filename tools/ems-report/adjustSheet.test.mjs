@@ -95,3 +95,16 @@ test('countAdjustmentsBySquad 只計期間內的列', () => {
   assert.equal(result.outOfRange, 2);
   assert.equal(result.unparsable, 1);
 });
+
+test('describeSheet 的日期判定與實際判定一致（含民國年與年月日寫法）', () => {
+  // 診斷若用比實際判定更嚴格的規則，會出現「說不像日期、卻被判成日期欄」的矛盾訊息。
+  const rows = [
+    ['時間', '分隊'],
+    ['2026年6月1日', '桃園分隊'],
+    ['115/6/2', '大林分隊'],
+    ['2026/6/3 上午 08:30', '中路分隊'],
+  ];
+  const info = describeSheet(rows);
+  assert.ok(info.columns[0].kinds.includes('日期'), '診斷要認得出這是日期欄');
+  assert.equal(resolveAdjustColumns(rows).dateColumn, 0, '實際判定也要是同一欄');
+});

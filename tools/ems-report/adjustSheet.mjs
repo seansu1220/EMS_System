@@ -255,7 +255,8 @@ export function describeSheet(rows) {
       values.length === 0 ? 0 : values.filter(predicate).length / values.length;
 
     const kinds = [];
-    if (ratioOf((value) => /\d{2,4}[-/]\d{1,2}[-/]\d{1,2}/.test(value)) > 0.7) kinds.push('日期');
+    // 用與實際判定相同的 parseSheetDate，否則診斷會說「不像日期」但程式卻判成日期欄，造成誤解。
+    if (ratioOf((value) => parseSheetDate(value) !== null) > 0.7) kinds.push('日期');
     if (ratioOf((value) => /\d{1,2}:\d{2}/.test(value)) > 0.7) kinds.push('時間');
     if (ratioOf((value) => /(分隊|大隊|中隊)$/.test(value)) > 0.7) kinds.push('分隊名稱');
     if (ratioOf((value) => /^-?\d+(\.\d+)?$/.test(value)) > 0.7) kinds.push('數字');
