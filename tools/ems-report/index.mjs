@@ -18,9 +18,15 @@ import { startSession } from './session.mjs';
 import { resolveMonthRange } from './dateRange.mjs';
 import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
-import { resolveSquadColumn, countBySquad, buildComparison, summarize } from './aggregate.mjs';
+import {
+  resolveSquadColumn,
+  countBySquad,
+  buildComparison,
+  groupByBrigade,
+  sortByRatioDesc,
+} from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
-import { SQUAD_COLUMN_CANDIDATES, PATHS } from './config.mjs';
+import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT } from './config.mjs';
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /**
@@ -121,9 +127,18 @@ async function runReportFlow(session, monthRange, keepRaw) {
   if (stats.length === 0) {
     log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
   }
-  const summary = summarize(stats);
-  printReport(stats, summary, monthRange);
-  await writeReport(stats, summary, monthRange);
+
+  const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
+  if (unmapped.length > 0) {
+    log.warn(
+      `有 ${unmapped.length} 個單位不在大隊對應表內，已歸入「${REPORT_FORMAT.unmappedGroupName}」：` +
+        `${unmapped.join('、')}。若是新設或改隸分隊，請更新 config.mjs 的 BRIGADES。`,
+    );
+  }
+  const sortedStats = sortByRatioDesc(stats);
+
+  printReport(groupedRows, sortedStats, monthRange);
+  await writeReport(groupedRows, sortedStats, monthRange);
 
   if (keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.total)}（含個資，請自行妥善處理）`);

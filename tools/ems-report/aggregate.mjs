@@ -116,19 +116,78 @@ export function buildComparison(totalCounts, alertCounts) {
 }
 
 /**
- * 計算全部分隊的合計。
+ * 把多筆統計加總為一筆。
  * @param {SquadStat[]} stats
+ * @param {string} [name] 加總後的名稱
  * @returns {SquadStat}
  */
-export function summarize(stats) {
+export function summarize(stats, name = '合計') {
   const totalCount = stats.reduce((sum, item) => sum + item.totalCount, 0);
   const alertCount = stats.reduce((sum, item) => sum + item.alertCount, 0);
   return {
-    squad: '合計',
+    squad: name,
     totalCount,
     alertCount,
     ratio: totalCount === 0 ? null : alertCount / totalCount,
   };
+}
+
+/**
+ * @typedef {SquadStat & {level: 'brigade'|'squad'}} GroupedStat
+ */
+
+/**
+ * 依大隊分組：每個大隊一列合計，後面接該大隊轄下各分隊。
+ *
+ * 大隊的數字由**轄下分隊實際出現的資料**加總而得，不另外查詢，
+ * 因此分隊資料若有增減，大隊數字會自動跟著對。
+ *
+ * **大隊預警率＝該大隊預警案件總數 ÷ 送醫案件總數（加權）**，
+ * 使用者於 2026-07-28 確認採此算法。
+ * 注意：使用者先前的人工報表是取「各分隊比率的平均」，兩者會差約 0.2~1.0 個百分點
+ * （案件量小的分隊在平均法中權重被放大），故新舊報表的大隊數字不會完全相同，屬預期差異。
+ *
+ * @param {SquadStat[]} stats 各分隊統計
+ * @param {readonly {name: string, squads: readonly string[]}[]} brigades 大隊與轄下分隊
+ * @param {string} unmappedGroupName 未對應到大隊者的分組名稱
+ * @returns {{rows: GroupedStat[], unmapped: string[]}} 排列好的列，以及未對應到大隊的單位名稱
+ */
+export function groupByBrigade(stats, brigades, unmappedGroupName) {
+  const byName = new Map(stats.map((item) => [item.squad, item]));
+  const used = new Set();
+  /** @type {GroupedStat[]} */
+  const rows = [];
+
+  for (const brigade of brigades) {
+    const members = brigade.squads.map((squad) => byName.get(squad)).filter(Boolean);
+    if (members.length === 0) continue;
+    for (const member of members) used.add(member.squad);
+    rows.push({ ...summarize(members, brigade.name), level: 'brigade' });
+    for (const member of members) rows.push({ ...member, level: 'squad' });
+  }
+
+  // 匯出檔裡有、但對應表沒收錄的單位（例如新設分隊或以大隊名義出勤）不能默默丟掉。
+  const leftovers = stats.filter((item) => !used.has(item.squad));
+  if (leftovers.length > 0) {
+    rows.push({ ...summarize(leftovers, unmappedGroupName), level: 'brigade' });
+    for (const member of leftovers) rows.push({ ...member, level: 'squad' });
+  }
+
+  return { rows, unmapped: leftovers.map((item) => item.squad) };
+}
+
+/**
+ * 依到院前預警率由高到低排序（比率相同時，案件多的在前，再相同則依名稱）。
+ * @param {SquadStat[]} stats
+ * @returns {SquadStat[]} 新陣列，不變動輸入
+ */
+export function sortByRatioDesc(stats) {
+  return [...stats].sort(
+    (left, right) =>
+      (right.ratio ?? -1) - (left.ratio ?? -1) ||
+      right.totalCount - left.totalCount ||
+      left.squad.localeCompare(right.squad, 'zh-Hant'),
+  );
 }
 
 /**

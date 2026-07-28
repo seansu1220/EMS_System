@@ -10,6 +10,8 @@ import {
   buildComparison,
   summarize,
   formatRatio,
+  groupByBrigade,
+  sortByRatioDesc,
 } from './aggregate.mjs';
 import { findHeaderRowIndex } from './workbook.mjs';
 
@@ -91,6 +93,62 @@ test('summarize 計算合計', () => {
   assert.equal(summary.alertCount, 10);
   assert.equal(summary.ratio, 0.1);
   assert.equal(summarize([]).ratio, null);
+});
+
+const BRIGADES_FIXTURE = [
+  { name: '甲大隊', squads: ['甲一分隊', '甲二分隊'] },
+  { name: '乙大隊', squads: ['乙一分隊'] },
+];
+
+test('groupByBrigade 產生大隊合計並接上轄下分隊', () => {
+  const stats = buildComparison(
+    new Map([['甲一分隊', 100], ['甲二分隊', 100], ['乙一分隊', 50]]),
+    new Map([['甲一分隊', 90], ['甲二分隊', 80], ['乙一分隊', 25]]),
+  );
+  const { rows, unmapped } = groupByBrigade(stats, BRIGADES_FIXTURE, '未對應大隊');
+
+  assert.deepEqual(rows.map((row) => row.squad),
+    ['甲大隊', '甲一分隊', '甲二分隊', '乙大隊', '乙一分隊'], '大隊在前、轄下分隊依設定順序');
+  assert.deepEqual(rows.map((row) => row.level),
+    ['brigade', 'squad', 'squad', 'brigade', 'squad']);
+
+  const 甲大隊 = rows[0];
+  assert.equal(甲大隊.totalCount, 200, '大隊數字由轄下分隊加總');
+  assert.equal(甲大隊.alertCount, 170);
+  assert.equal(甲大隊.ratio, 0.85);
+  assert.deepEqual(unmapped, []);
+});
+
+test('groupByBrigade 不會默默丟掉對應表沒收錄的單位', () => {
+  const stats = buildComparison(
+    new Map([['甲一分隊', 10], ['新設分隊', 20]]),
+    new Map([['甲一分隊', 5], ['新設分隊', 10]]),
+  );
+  const { rows, unmapped } = groupByBrigade(stats, BRIGADES_FIXTURE, '未對應大隊');
+
+  assert.deepEqual(unmapped, ['新設分隊']);
+  const group = rows.find((row) => row.squad === '未對應大隊');
+  assert.ok(group, '未對應的單位要自成一組');
+  assert.equal(group.totalCount, 20);
+  assert.equal(rows.at(-1).squad, '新設分隊', '未對應組排在最後');
+});
+
+test('groupByBrigade 跳過完全沒有資料的大隊', () => {
+  const stats = buildComparison(new Map([['乙一分隊', 10]]), new Map([['乙一分隊', 10]]));
+  const { rows } = groupByBrigade(stats, BRIGADES_FIXTURE, '未對應大隊');
+  assert.deepEqual(rows.map((row) => row.squad), ['乙大隊', '乙一分隊'], '甲大隊沒資料就不出現');
+});
+
+test('sortByRatioDesc 依預警率由高到低', () => {
+  const stats = buildComparison(
+    new Map([['低分隊', 100], ['高分隊', 100], ['同率大隊', 200], ['無案件', 0]]),
+    new Map([['低分隊', 50], ['高分隊', 90], ['同率大隊', 180]]),
+  );
+  const sorted = sortByRatioDesc(stats);
+  assert.deepEqual(sorted.map((item) => item.squad), ['同率大隊', '高分隊', '低分隊', '無案件'],
+    '同為 0.9 時案件多的在前；比率為 null 者排最後');
+  // 確認為新陣列，未變動輸入
+  assert.notEqual(sorted, stats);
 });
 
 test('formatRatio 顯示格式', () => {

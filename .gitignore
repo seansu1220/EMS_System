@@ -32,3 +32,6 @@ venv/
 .idea/
 .DS_Store
 *.log
+
+# Excel 開啟中產生的暫存鎖定檔
+~$*
