@@ -67,6 +67,7 @@
 | `救護預警統計.bat` | 產生上個月的各分隊比較表（**日常使用就是這個**） |
 | `設定登入帳密.bat` | 用記事本開啟 `.env` 填帳密，省去每次輸入（驗證碼仍須本人輸入） |
 | `救護預警統計-設定用.bat` | 頁面結構探測，系統改版時才用 |
+| `檢查增減試算表.bat` | 確認增減用的 Google 試算表讀不讀得到，並列出欄位結構 |
 
 指令列等價寫法：
 
@@ -77,6 +78,7 @@
 | `npm run tool:ems -- run --keep-raw` | 保留原始匯出檔（含個資） |
 | `npm run tool:ems -- probe` | 自動探測頁面結構（使用者只需登入） |
 | `npm run tool:ems -- probe --manual` | 改為手動點選的探測模式 |
+| `npm run tool:ems -- check-sheet` | 檢查增減用的 Google 試算表 |
 | `npm run tool:ems:test` | 全部單元／整合測試 |
 
 以本機已安裝的 Chrome 執行（`playwright-core` + `channel: 'chrome'`），不另外下載瀏覽器。

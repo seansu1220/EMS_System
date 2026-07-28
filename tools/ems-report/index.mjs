@@ -10,6 +10,7 @@
  *   npm run tool:ems -- run --keep-raw       保留系統匯出的原始檔（含個資）
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
  *   npm run tool:ems -- probe --manual       改為手動點選的探測模式
+ *   npm run tool:ems -- check-sheet          檢查增減用的 Google 試算表能否讀取
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -27,6 +28,7 @@ import {
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
 import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT } from './config.mjs';
+import { resolveSheetSource, fetchSheetRows, describeSheet } from './adjustSheet.mjs';
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /**
@@ -41,8 +43,8 @@ import { log, closePrompt, writeLogFile } from './logger.mjs';
 function parseArgs(argv) {
   const args = argv.slice(2);
   const command = args.find((arg) => !arg.startsWith('--')) ?? 'run';
-  if (command !== 'probe' && command !== 'run') {
-    throw new Error(`未知的指令：${command}（可用：run、probe）`);
+  if (!['run', 'probe', 'check-sheet'].includes(command)) {
+    throw new Error(`未知的指令：${command}（可用：run、probe、check-sheet）`);
   }
   return {
     command,
@@ -147,13 +149,41 @@ async function runReportFlow(session, monthRange, keepRaw) {
   }
 }
 
+/**
+ * 檢查增減用的 Google 試算表能不能讀到，並印出結構供核對欄位。
+ * 不需要開瀏覽器，也不需要登入救護系統。
+ */
+async function checkAdjustSheet() {
+  const source = resolveSheetSource();
+  if (!source) {
+    log.warn('尚未設定 EMS_ADJUST_SHEET_URL（位於 tools/ems-report/.env）。');
+    log.info('把 Google 試算表的整串網址貼在該參數後面存檔，再執行一次即可。');
+    return;
+  }
+  log.info(`試算表 ID 長度 ${source.spreadsheetId.length}、分頁 gid=${source.gid}（不顯示網址）`);
+
+  const rows = await fetchSheetRows(source);
+  const info = describeSheet(rows);
+  log.ok(`讀取成功：${info.rowCount} 列（含標題）、${info.columnCount} 欄`);
+  log.info('各欄結構（只顯示欄名與型態推測，不顯示任何內容）：');
+  for (const column of info.columns) {
+    const kinds = column.kinds.length > 0 ? `｜推測：${column.kinds.join('＋')}` : '';
+    log.info(`  [${column.index}] ${column.header || '(無標題)'} → ${column.filled} 筆有值、${column.distinct} 種${kinds}`);
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   const monthRange = resolveMonthRange(options.month);
 
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
-  log.info(`查詢期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
 
+  if (options.command === 'check-sheet') {
+    await checkAdjustSheet();
+    return;
+  }
+
+  log.info(`查詢期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
   const session = await startSession();
   try {
     if (options.command === 'probe') {
