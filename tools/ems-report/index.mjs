@@ -188,11 +188,10 @@ async function checkAdjustSheet(monthRange) {
   const { counts, inRange, outOfRange, unparsable } = countAdjustmentsBySquad(rows, columns, monthRange);
   log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內要扣除的件數`);
   log.info(`期間內 ${inRange} 件、期間外 ${outOfRange} 件、日期或分隊讀不出來 ${unparsable} 件`);
+  // 使用者確認：試算表中日期空白屬正常情形，不需處理，故以一般訊息呈現而非警告，
+  // 避免每次執行都跳警示而讓真正該注意的訊息被淹沒。
   if (unparsable > 0) {
-    log.warn(
-      `有 ${unparsable} 列的日期或分隊是空白（或格式無法辨識），無法判斷是否屬於本期間，一律未扣除。` +
-        '若這幾列其實屬於本期間，請在試算表補上日期與分隊後重跑。',
-    );
+    log.info(`（其中 ${unparsable} 列的日期或分隊為空白，無法判斷期間，未列入扣除）`);
   }
   for (const [squad, count] of [...counts].sort((left, right) => right[1] - left[1])) {
     log.info(`  ${squad}　-${count}`);
