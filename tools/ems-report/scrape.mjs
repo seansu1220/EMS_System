@@ -191,16 +191,78 @@ async function runQuery(page) {
   await page.waitForTimeout(SITE.querySettleMs);
 }
 
+/**
+ * 監看頁面是否出現系統自己的錯誤訊息（例如 `Error!!! wap119.RPS64101030_1._btnExcel()`）。
+ *
+ * 匯出在伺服器端失敗時**不會有任何下載**，若只等下載事件會白等到逾時（3 分鐘）才報錯。
+ * 這裡改為一偵測到錯誤字樣就立刻中止。
+ *
+ * ⚠ 只取出錯誤訊息那一行，不讀取也不記錄頁面上的查詢結果內容。
+ *
+ * @param {{stopped: boolean}} stopSignal 下載成功後用來停止監看
+ */
+function watchForSiteError(page, stopSignal) {
+  return new Promise((_resolve, reject) => {
+    const timer = setInterval(async () => {
+      if (stopSignal.stopped) {
+        clearInterval(timer);
+        return;
+      }
+      try {
+        const content = page.frames().find((frame) => frame.name() === SITE.frames.content);
+        if (!content) return;
+        const errorText = content.getByText(SITE.errorMarker, { exact: false }).first();
+        if ((await errorText.count()) === 0) return;
+        clearInterval(timer);
+        const message = ((await errorText.innerText().catch(() => '')) || SITE.errorMarker)
+          .split('\n')[0]
+          .trim()
+          .slice(0, 150);
+        reject(new Error(`系統回報匯出失敗：${message}`));
+      } catch {
+        // 頁面正在換頁時查詢元素會失敗，忽略後續輪詢即可。
+      }
+    }, 2000);
+  });
+}
+
 /** 按下匯出 EXCEL 並把檔案存到指定路徑。 */
 async function exportExcel(context, page, targetPath) {
-  const download = await waitForAnyDownload(context, async () => {
+  const stopSignal = { stopped: false };
+  const downloadPromise = waitForAnyDownload(context, async () => {
     const content = getFrame(page, SITE.frames.content);
     await content.locator(SITE.queryFields.excelButton).click();
   });
+
+  let download;
+  try {
+    download = await Promise.race([downloadPromise, watchForSiteError(page, stopSignal)]);
+  } finally {
+    stopSignal.stopped = true;
+  }
   await download.saveAs(targetPath);
   const suggested = download.suggestedFilename();
   log.ok(`已下載：${path.basename(targetPath)}（系統原檔名 ${suggested}）`);
   return targetPath;
+}
+
+/**
+ * 匯出失敗時重新查詢並再試一次。
+ *
+ * 這個系統的匯出偶爾會在伺服器端拋例外（`Error!!! ..._btnExcel()`）。
+ * 由於失敗現在能在數秒內偵測到，重試的成本很低，
+ * 但可以省下使用者為了重跑而重新登入一次的麻煩。
+ */
+async function exportExcelWithRetry(context, page, targetPath) {
+  try {
+    return await exportExcel(context, page, targetPath);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log.warn(`匯出失敗（${reason}）`);
+    log.info('重新查詢後再試一次');
+    await runQuery(page);
+    return exportExcel(context, page, targetPath);
+  }
 }
 
 /**
@@ -237,7 +299,7 @@ export async function exportBothDatasets(context, page, monthRange) {
     await runQuery(page);
     log.info('按下匯出EXCEL，等待下載');
     const targetPath = path.join(PATHS.rawDir, `${monthRange.label}-${dataset.key}.xls`);
-    results[dataset.key] = await exportExcel(context, page, targetPath);
+    results[dataset.key] = await exportExcelWithRetry(context, page, targetPath);
   }
   return results;
 }

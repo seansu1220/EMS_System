@@ -81,6 +81,13 @@ export const SITE = {
   /** 偵測不到系統日期元件設定時採用的格式（My97DatePicker 樣式）。 */
   defaultDateFormat: 'yyyy-MM-dd',
 
+  /**
+   * 系統自身錯誤訊息的開頭字樣，例如
+   * `Error!!! wap119.RPS64101030_1._btnExcel()`（伺服器端執行匯出時拋出例外）。
+   * 出現這個字樣代表動作已失敗，不必再等下載。
+   */
+  errorMarker: 'Error!!!',
+
   /** 按下查詢後額外等待的緩衝時間（毫秒），讓伺服器把結果整理完。 */
   querySettleMs: 3000,
 };
