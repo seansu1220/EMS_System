@@ -67,6 +67,8 @@ export const SITE = {
     dateTo: '#_txtToDate',
     /** 救護狀態（未填寫/已填寫/未結案/已結案）。 */
     rescueStatus: '#_selSTATUS',
+    /** 送醫情形（未運送/送醫）。 */
+    transport: '#_selSPA11',
     /** 院前預警（未傳送預警/到院前傳送預警/到院後傳送預警）。 */
     prehospitalAlert: '#_selPreHOSPWarning',
     /** 分隊。 */
@@ -127,6 +129,12 @@ export const QUERY_CRITERIA = {
   /** 救護狀態：兩次查詢都固定為「已結案」。 */
   rescueStatusValue: '0',
   rescueStatusLabel: '已結案',
+  /**
+   * 送醫情形：兩次查詢都固定為「送醫」。
+   * 少了這個條件會把未運送案件（誤報、拒送、現場死亡等）一起算進母數，數字會偏高。
+   */
+  transportValue: '1',
+  transportLabel: '送醫',
   /** 院前預警：第二次查詢（預警案件）才套用「到院前傳送預警」。 */
   prehospitalAlertValue: '1',
   prehospitalAlertLabel: '到院前傳送預警',

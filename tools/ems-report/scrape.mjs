@@ -112,7 +112,11 @@ async function selectField(page, selector, value, label) {
 }
 
 /**
- * 設定兩次查詢共通的條件：期間與救護狀態。
+ * 設定兩次查詢共通的條件：期間、救護狀態、送醫情形。
+ *
+ * 送醫情形必須限定為「送醫」：未運送案件（誤報、拒送、現場死亡等）不會有到院前預警，
+ * 若一併算進母數會讓比率被稀釋而失真。
+ *
  * @param {import('playwright-core').Page} page
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {string} dateFormat
@@ -128,6 +132,14 @@ async function applyCommonCriteria(page, monthRange, dateFormat) {
     SITE.queryFields.rescueStatus,
     QUERY_CRITERIA.rescueStatusValue,
     `救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`,
+  );
+
+  await ensureFieldVisible(page, SITE.queryFields.transport);
+  await selectField(
+    page,
+    SITE.queryFields.transport,
+    QUERY_CRITERIA.transportValue,
+    `送醫情形＝${QUERY_CRITERIA.transportLabel}`,
   );
 }
 
