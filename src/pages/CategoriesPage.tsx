@@ -1,8 +1,13 @@
 /**
- * 屬性管理頁。
- * 可新增、改名、拖曳排序、刪除屬性。
+ * 屬性管理頁（左右兩欄：左＝業務屬性、右＝假日設定）。
+ *
+ * 左欄：可新增、改名、拖曳排序、刪除屬性。
  * 排序改為拖曳（桌機滑鼠、手機長按），放開後依新順序批次寫入 sortOrder（0..n-1）。
  * 刪除仍被業務使用的屬性前，須先選擇轉移目標屬性，批次轉移後再刪除。
+ *
+ * 右欄：假日設定（v1.12.2 起併入本頁，原為獨立的 /holidays 頁，
+ * 目的是精簡導覽列項目）。該區塊自行管理狀態，見 components/HolidaySettings。
+ * 手機等窄螢幕會自動改為上下堆疊，屬性在上、假日在下。
  */
 import { useEffect, useState } from 'react';
 import {
@@ -32,6 +37,7 @@ import {
   reorderCategories,
 } from '../services/categoryService';
 import type { Category } from '../types/category';
+import { HolidaySettings } from '../components/HolidaySettings';
 import { Button, Card, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
 /** 進行中刪除流程的狀態：需要轉移時記錄目標屬性與使用數。 */
@@ -173,74 +179,85 @@ export function CategoriesPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="space-y-6">
       <h1 className="text-xl font-bold text-slate-800">屬性管理</h1>
-      <ErrorBanner message={error ?? loadError} />
 
-      {/* 新增屬性 */}
-      <Card>
-        <h2 className="mb-3 text-base font-bold text-slate-700">新增屬性</h2>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="輸入屬性名稱"
-            className={`${INPUT_CLASS} flex-1`}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleAdd();
-            }}
-          />
-          <Button onClick={handleAdd} disabled={busy}>
-            新增
-          </Button>
+      {/* 兩欄：左＝業務屬性、右＝假日設定；窄螢幕自動改為上下堆疊。 */}
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <div className="space-y-6">
+          <ErrorBanner message={error ?? loadError} />
+
+          {/* 新增屬性 */}
+          <Card>
+            <h2 className="mb-3 text-base font-bold text-slate-700">新增屬性</h2>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="輸入屬性名稱"
+                className={`${INPUT_CLASS} flex-1`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAdd();
+                }}
+              />
+              <Button onClick={handleAdd} disabled={busy}>
+                新增
+              </Button>
+            </div>
+          </Card>
+
+          {/* 屬性清單（拖曳排序） */}
+          <Card>
+            <h2 className="mb-1 text-base font-bold text-slate-700">現有屬性</h2>
+            <p className="mb-3 text-xs text-slate-400">
+              拖曳左側把手可調整順序（手機請長按把手）。
+            </p>
+            {loading ? (
+              <CenteredSpinner />
+            ) : orderedCategories.length === 0 ? (
+              <p className="text-sm text-slate-400">尚無屬性。</p>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={() => setIsDragging(true)}
+                onDragCancel={() => setIsDragging(false)}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={orderedCategories.map((item) => item.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <ul className="divide-y divide-slate-100">
+                    {orderedCategories.map((category) => (
+                      <SortableCategoryRow
+                        key={category.id}
+                        category={category}
+                        isEditing={editingId === category.id}
+                        editingName={editingName}
+                        busy={busy}
+                        canDelete={canDelete}
+                        onEditingNameChange={setEditingName}
+                        onStartEdit={() => {
+                          setEditingId(category.id);
+                          setEditingName(category.name);
+                        }}
+                        onCancelEdit={() => setEditingId(null)}
+                        onRename={() => handleRename(category)}
+                        onDelete={() => handleDeleteClick(category)}
+                      />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </DndContext>
+            )}
+          </Card>
         </div>
-      </Card>
 
-      {/* 屬性清單（拖曳排序） */}
-      <Card>
-        <h2 className="mb-1 text-base font-bold text-slate-700">現有屬性</h2>
-        <p className="mb-3 text-xs text-slate-400">拖曳左側把手可調整順序（手機請長按把手）。</p>
-        {loading ? (
-          <CenteredSpinner />
-        ) : orderedCategories.length === 0 ? (
-          <p className="text-sm text-slate-400">尚無屬性。</p>
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={() => setIsDragging(true)}
-            onDragCancel={() => setIsDragging(false)}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={orderedCategories.map((item) => item.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="divide-y divide-slate-100">
-                {orderedCategories.map((category) => (
-                  <SortableCategoryRow
-                    key={category.id}
-                    category={category}
-                    isEditing={editingId === category.id}
-                    editingName={editingName}
-                    busy={busy}
-                    canDelete={canDelete}
-                    onEditingNameChange={setEditingName}
-                    onStartEdit={() => {
-                      setEditingId(category.id);
-                      setEditingName(category.name);
-                    }}
-                    onCancelEdit={() => setEditingId(null)}
-                    onRename={() => handleRename(category)}
-                    onDelete={() => handleDeleteClick(category)}
-                  />
-                ))}
-              </ul>
-            </SortableContext>
-          </DndContext>
-        )}
-      </Card>
+        {/* 右欄：假日設定（自行管理狀態與錯誤訊息） */}
+        <HolidaySettings />
+      </div>
 
       {/* 刪除前轉移業務對話框 */}
       {deleteFlow && (
