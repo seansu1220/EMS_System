@@ -1,10 +1,12 @@
 /**
  * Firestore 安全規則測試（在 Firestore 模擬器上執行，不碰線上資料）。
  *
- * 前置需求（本機目前不具備，故此測試尚未實際執行過）：
- *   1. JDK 21 以上（firebase-tools 15 的模擬器要求；本機僅有 Java 8）。
- *   2. npm i -D @firebase/rules-unit-testing --legacy-peer-deps
- *      （未列入 devDependencies，避免一般安裝時的 peer 版本衝突）。
+ * 前置需求：
+ *   1. JDK 21 以上（firebase-tools 15 的模擬器要求）。
+ *      這台電腦另裝有舊的 Java 8 且在 PATH 中排在前面，
+ *      故由 scripts/run-rules-test.mjs 於執行時自動挑出夠新的 JDK，不需手動設環境變數。
+ *   2. npm i --no-save @firebase/rules-unit-testing --legacy-peer-deps
+ *      （刻意不列入 devDependencies，避免一般安裝時的 peer 版本衝突；缺少時啟動器會提示）。
  * 執行方式：npm run test:rules
  *
  * 驗證重點（對應 SPEC 2.7 權限模型）：

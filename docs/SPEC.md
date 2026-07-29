@@ -12,6 +12,7 @@
 > v1.11：規格書拆分（小工具移至 TOOLS_SPEC.md）、根目錄批次檔收納至 捷徑/
 > v1.11.8：首頁提醒卡的剩餘天數改以工作日計算（見 2.2）
 > v1.12：工作日扣除國定假日，新增「假日設定」頁可匯入官方辦公日曆表（見 2.2、2.7）
+> v1.12.1：安全規則測試可在本機執行（32/32 通過，見第 3 章末）
 > 使用者：救護科股長（管理員）＋經核准的代理同事，多裝置使用
 
 輔助救護科股長辦公的業務與行程管理網頁系統。可新增業務、註記期限、更新處理進度、
@@ -240,7 +241,11 @@
 - `users`：本人可讀自己的文件、可改自己的一般欄位，但 **role 與 status 不可自行變更**（不可自我核准/提權）；
   列出全部帳號與變更他人狀態僅限管理員；建立時強制
   `role/status == (管理員 email ? admin/approved : member/pending)`。
-- 規則測試腳本置於 `scripts/rules.test.mjs`（需 JDK 21 + `@firebase/rules-unit-testing`，見檔頭說明）。
+- 規則測試腳本置於 `scripts/rules.test.mjs`，執行 `npm run test:rules`（v1.12.1 起 32/32 通過）。
+  啟動器 `scripts/run-rules-test.mjs` 會自動找出 JDK 21 以上的安裝並只在該次執行插入 PATH——
+  因為 firebase-tools 是直接呼叫 PATH 上的 `java`（不看 JAVA_HOME），而本機另有舊版 Java 8 排在前面。
+  測試套件 `@firebase/rules-unit-testing` 刻意不列入 devDependencies（避免 peer 版本衝突），
+  缺少時啟動器會提示安裝指令。
 
 ---
 
@@ -278,7 +283,7 @@ EMS_System/
 ├─ tools/           本機小工具（規格見 TOOLS_SPEC.md），不參與建置與部署
 │  └─ ems-report/   救護紀錄表查詢；out/ 為產出目錄，含個案明細，已 gitignore
 ├─ 捷徑/            雙擊執行的批次檔（啟動系統、救護預警統計、設定登入帳密…）
-├─ scripts/         rules.test.mjs（Firestore 安全規則測試）
+├─ scripts/         rules.test.mjs（Firestore 安全規則測試）、run-rules-test.mjs（挑 JDK 21 的啟動器）
 ├─ firebase/        firestore.rules
 ├─ docs/            SPEC.md（本檔）、TOOLS_SPEC.md（小工具）、CHANGELOG.md
 ├─ firebase.json / .firebaserc

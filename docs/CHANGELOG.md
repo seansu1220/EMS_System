@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-07-29　v1.12.1 安全規則測試可在本機執行（補上 v1.12.0 未實跑的驗證）
+
+### 問題描述
+`npm run test:rules` 一直無法執行：firebase-tools 15 的 Firestore 模擬器要求 JDK 21，
+本機只有 Java 8。v1.12.0 因此只做到「規則能被 Firebase 編譯通過」，測試沒有實跑。
+
+### 根本原因與處理
+1. **缺 JDK 21**：以 `winget install --id Microsoft.OpenJDK.21` 安裝，
+   與既有的 Java 8 並存（未移除舊版，也未改動系統 JAVA_HOME）。
+2. **裝了還是不生效**：firebase-tools 是直接呼叫 PATH 上的 `java`（原始碼中 binary 寫死為 "java"，
+   不讀 JAVA_HOME），而 Oracle 的 `javapath` 捷徑目錄在系統 PATH 中排在 JDK 21 之前，
+   所以 `java` 仍解析到 8。
+3. **解法**：新增啟動器 `scripts/run-rules-test.mjs`，於執行時掃描常見安裝目錄找出
+   JDK 21 以上，**只在該次子行程的環境變數**把它插到 PATH 最前面，
+   不修改系統 PATH，也不影響其他仍需 Java 8 的程式。`package.json` 的 `test:rules` 改指向此啟動器。
+
+### 修改的檔案與內容
+- 新增 `scripts/run-rules-test.mjs`：JDK 版本偵測（相容 `1.8.0_291` 與 `21.0.11` 兩種版本字串）、
+  自動挑選、缺少測試套件時提示安裝指令。
+- `package.json`：`test:rules` 由直接呼叫 firebase 改為 `node scripts/run-rules-test.mjs`。
+- `scripts/rules.test.mjs`：檔頭前置需求說明更新（不再是「尚未執行過」）。
+
+### 實作時踩到的兩個坑（供日後參考）
+- **Windows 的環境變數鍵名是 `Path` 不是 `PATH`**：`{...process.env}` 展開後直接寫 `env.PATH`
+  會多出一個新鍵而非覆蓋，子行程拿到殘缺的 PATH，連 `npx` 都找不到。
+  改為先找出實際鍵名再覆寫。
+- `spawn()` 同時給 args 陣列與 `shell: true` 會觸發 DEP0190 警告，改為傳單一命令字串。
+
+### 驗證
+`npm run test:rules` → **32/32 項通過**，其中含 v1.12.0 新增的 4 項假日權限測試：
+管理員可匯入/刪除假日清單、成員可讀但不可寫、待審核者不可讀。
+
+---
+
 ## 2026-07-29　v1.12.0 工作日扣除國定假日，新增「假日設定」頁可自行匯入
 
 ### 問題描述
@@ -52,6 +86,7 @@ v1.11.8 的工作日只扣週六日，沒扣國定假日。跨到春節、連假
   以及**用官方 2026／2027 CSV 反解回內建清單、逐筆比對完全一致**（確保內建資料沒抄錯）。
 - ⚠️ `npm run test:rules` 在本機無法執行：firebase-tools 需要 JDK 21，目前環境版本過舊。
   安全規則已隨部署由 Firebase 編譯通過，但**規則測試尚未實跑**，待有 JDK 21 的環境補跑。
+  → 已於 v1.12.1 補跑完成，32/32 通過。
 
 ### 已知限制
 - 內建清單只到 2027 年底。2028 年的日曆表預計 2027 年年中公布，屆時請在「假日設定」頁匯入。
