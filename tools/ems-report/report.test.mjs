@@ -25,9 +25,18 @@ const SORTED = [
   { squad: '大林分隊', alertCount: 40, totalCount: 45, ratio: 40 / 45 },
 ];
 
-/** 取得儲存格的底色 argb（沒有底色則回傳 null）。 */
+/**
+ * 取得儲存格的實心底色 argb（沒有實心底色則回傳 null）。
+ * 需檢查 `pattern === 'solid'`：有設定框線的儲存格讀回時會帶
+ * `{type:'pattern', pattern:'none'}`，只看 type 會誤判成有底色。
+ */
 function fillArgbOf(cell) {
-  return cell.fill?.type === 'pattern' ? (cell.fill.fgColor?.argb ?? null) : null;
+  return cell.fill?.pattern === 'solid' ? (cell.fill.fgColor?.argb ?? null) : null;
+}
+
+/** 中日韓字元佔兩個字元寬。 */
+function displayWidth(text) {
+  return [...String(text)].reduce((width, char) => width + (/[ᄀ-ￜ]/.test(char) ? 2 : 1), 0);
 }
 
 test('報表有兩個分頁，標題跨欄合併', () => {
@@ -77,4 +86,68 @@ test('數字欄位原樣寫入，不做四捨五入或轉字串', () => {
   assert.equal(sheet.getRow(4).getCell(1).value, '桃園分隊');
   assert.equal(sheet.getRow(4).getCell(2).value, 50);
   assert.equal(sheet.getRow(4).getCell(3).value, 55);
+});
+
+test('每一格都有四邊框線且文字置中', () => {
+  const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE);
+  for (const sheet of workbook.worksheets) {
+    sheet.eachRow((row, rowNumber) => {
+      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+        const cell = row.getCell(column);
+        const border = cell.border ?? {};
+        for (const side of ['top', 'left', 'bottom', 'right']) {
+          assert.equal(border[side]?.style, REPORT_FORMAT.borderStyle,
+            `${sheet.name} 第 ${rowNumber} 列第 ${column} 欄缺 ${side} 框線`);
+        }
+        assert.equal(cell.alignment?.horizontal, 'center');
+        assert.equal(cell.alignment?.vertical, 'middle');
+      }
+    });
+  }
+});
+
+test('內文字級為 12、標題列為 16', () => {
+  const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE);
+  for (const sheet of workbook.worksheets) {
+    sheet.eachRow((row, rowNumber) => {
+      const expected = rowNumber === 1 ? REPORT_FORMAT.titleFontSize : REPORT_FORMAT.fontSize;
+      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+        assert.equal(row.getCell(column).font?.size, expected,
+          `${sheet.name} 第 ${rowNumber} 列第 ${column} 欄字級應為 ${expected}`);
+      }
+    });
+  }
+});
+
+test('大隊列上色後仍保有框線與字級（樣式不互相覆蓋）', () => {
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const cell = sheet.getRow(3).getCell(1);
+  assert.equal(fillArgbOf(cell), REPORT_FORMAT.brigadeRowStyle.fillArgb);
+  assert.equal(cell.font.bold, true);
+  assert.equal(cell.font.size, REPORT_FORMAT.fontSize, '上色不可把字級蓋掉');
+  assert.equal(cell.border.left.style, REPORT_FORMAT.borderStyle, '上色不可把框線蓋掉');
+});
+
+test('欄寬足以容納最長的內容，文字不會被截斷', () => {
+  const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE);
+  const scale = REPORT_FORMAT.fontSize / 11;
+  for (const sheet of workbook.worksheets) {
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // 標題列跨欄合併，不受單欄寬度限制
+      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+        const value = row.getCell(column).value;
+        const text = column === 4 && typeof value === 'number'
+          ? `${(value * 100).toFixed(2)}%`
+          : String(value ?? '');
+        assert.ok(displayWidth(text) * scale <= sheet.getColumn(column).width,
+          `${sheet.name} 第 ${rowNumber} 列第 ${column} 欄「${text}」放不下`);
+      }
+    });
+  }
+});
+
+test('標題列與資料列都有設定列高', () => {
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  assert.equal(sheet.getRow(1).height, REPORT_FORMAT.titleRowHeight);
+  assert.equal(sheet.getRow(3).height, REPORT_FORMAT.rowHeight);
 });

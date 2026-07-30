@@ -194,7 +194,19 @@ export const REPORT_FORMAT = {
   columns: ['', '有送醫有預警案件', '有送醫案件', '到院前預警率'],
   /** 比率欄的 Excel 數值格式。 */
   ratioNumberFormat: '0.00%',
+  /** 欄寬下限；實際寬度會依內容自動加寬，確保文字不被截掉。 */
   columnWidths: [16, 18, 14, 14],
+
+  /** 字級：內文一律 12，第一列標題 16。 */
+  fontSize: 12,
+  titleFontSize: 16,
+  /** 列高（配合字級，避免文字上下被切到）。 */
+  titleRowHeight: 24,
+  rowHeight: 18,
+  /** 框線樣式（Excel 的一般粗細）。 */
+  borderStyle: 'thin',
+  /** 所有儲存格對齊方式。 */
+  alignment: { horizontal: 'center', vertical: 'middle' },
 
   /**
    * 大隊列的樣式（要改顏色就改這裡，色碼為 ARGB，前兩碼是透明度固定 FF）。

@@ -73,14 +73,53 @@ export function printReport(groupedRows, sortedStats, monthRange) {
   printTable('各分隊（依到院前預警率由高到低）', sortedStats);
 }
 
+/** 四邊皆為一般粗細的框線。 */
+function thinBorder() {
+  const style = REPORT_FORMAT.borderStyle;
+  return { top: { style }, left: { style }, bottom: { style }, right: { style } };
+}
+
+/** 逐格套用框線與置中（含合併的標題列，否則合併範圍右側會缺框線）。 */
+function applyGridStyle(row, fontSize) {
+  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+    const cell = row.getCell(column);
+    cell.border = thinBorder();
+    cell.alignment = { ...REPORT_FORMAT.alignment };
+    cell.font = { ...(cell.font ?? {}), size: fontSize };
+  }
+}
+
 /** 把大隊列標成紅底，方便一眼與轄下分隊區分。 */
 function applyBrigadeStyle(row) {
   const { fillArgb, fontArgb, bold } = REPORT_FORMAT.brigadeRowStyle;
   for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
     const cell = row.getCell(column);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
-    cell.font = { bold, color: { argb: fontArgb } };
+    cell.font = { ...(cell.font ?? {}), bold, color: { argb: fontArgb } };
   }
+}
+
+/**
+ * 依內容計算欄寬，避免文字被截掉。
+ *
+ * Excel 的欄寬以「預設字型的字元數」為單位，而中日韓字元約佔兩個字元寬，
+ * 且本報表字級為 12（大於預設的 11），故加上比例與邊距後再取整。
+ *
+ * @param {{squad: string, alertCount: number, totalCount: number, ratio: number|null}[]} stats
+ * @returns {number[]}
+ */
+function computeColumnWidths(stats) {
+  const textRows = [
+    [...REPORT_FORMAT.columns],
+    ...stats.map((stat) => toRowTexts(stat)),
+  ];
+  const scale = REPORT_FORMAT.fontSize / 11;
+  const padding = 3;
+  return REPORT_FORMAT.columns.map((_, index) => {
+    const widest = Math.max(...textRows.map((row) => displayWidth(String(row[index] ?? ''))));
+    const minimum = REPORT_FORMAT.columnWidths[index] ?? 10;
+    return Math.max(minimum, Math.ceil(widest * scale) + padding);
+  });
 }
 
 /**
@@ -92,21 +131,33 @@ function applyBrigadeStyle(row) {
  */
 function buildSheet(workbook, sheetName, title, stats) {
   const sheet = workbook.addWorksheet(sheetName);
-  sheet.columns = REPORT_FORMAT.columnWidths.map((width) => ({ width }));
 
-  sheet.addRow([title]);
+  const titleRow = sheet.addRow([title]);
   sheet.mergeCells(1, 1, 1, REPORT_FORMAT.columns.length);
-  sheet.getRow(1).font = { bold: true };
+  titleRow.getCell(1).font = { bold: true };
+  titleRow.height = REPORT_FORMAT.titleRowHeight;
+  applyGridStyle(titleRow, REPORT_FORMAT.titleFontSize);
 
   const headerRow = sheet.addRow(REPORT_FORMAT.columns);
-  headerRow.font = { bold: REPORT_FORMAT.headerRowStyle.bold };
+  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+    headerRow.getCell(column).font = { bold: REPORT_FORMAT.headerRowStyle.bold };
+  }
+  headerRow.height = REPORT_FORMAT.rowHeight;
+  applyGridStyle(headerRow, REPORT_FORMAT.fontSize);
 
   for (const stat of stats) {
     const row = sheet.addRow([stat.squad, stat.alertCount, stat.totalCount, stat.ratio]);
     // 比率以數值寫入並套百分比格式，使用者可直接在 Excel 內再排序或製圖。
     row.getCell(4).numFmt = REPORT_FORMAT.ratioNumberFormat;
+    row.height = REPORT_FORMAT.rowHeight;
     if (stat.level === 'brigade') applyBrigadeStyle(row);
+    // 框線與字級最後套，才不會被大隊樣式覆蓋掉。
+    applyGridStyle(row, REPORT_FORMAT.fontSize);
   }
+
+  computeColumnWidths(stats).forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
   return sheet;
 }
 
@@ -138,7 +189,20 @@ export async function writeReport(groupedRows, sortedStats, monthRange) {
   await fs.mkdir(PATHS.reportDir, { recursive: true });
   const workbook = buildWorkbook(groupedRows, sortedStats, monthRange);
   const filePath = path.join(PATHS.reportDir, `到院前預警比率-${monthRange.label}.xlsx`);
-  await workbook.xlsx.writeFile(filePath);
+
+  try {
+    await workbook.xlsx.writeFile(filePath);
+  } catch (error) {
+    // Excel 開著同一個檔案時會鎖住它，Node 只會拋出 EBUSY／EPERM 這種看不懂的訊息。
+    if (error?.code === 'EBUSY' || error?.code === 'EPERM') {
+      throw new Error(
+        `報表檔正被其他程式開啟（通常是 Excel），無法覆寫：${filePath}\n` +
+          '請關閉該檔案後重新執行；查詢結果不需要重跑，只差寫檔這一步。',
+      );
+    }
+    throw error;
+  }
+
   log.ok(`報表已產出：${path.relative(process.cwd(), filePath)}`);
   return filePath;
 }
