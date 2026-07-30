@@ -2,14 +2,17 @@
 cd /d "%~dp0.."
 title EMS Record Unlock (DRY RUN)
 
-rem This shortcut needs Node.js installed on this PC.
-rem For a PC where you cannot install anything, run "建立可攜版.bat" first
+rem NOTE: keep this file pure ASCII. The console runs in a DBCS code page,
+rem where non-ASCII bytes swallow the following characters and break parsing.
+rem
+rem This shortcut needs Node.js installed on this PC. For a PC where you
+rem cannot install anything, run the "build portable version" shortcut first
 rem and use the launcher inside the generated folder instead.
 where npm >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Node.js / npm not found.
   echo Please install Node.js from https://nodejs.org, or use the portable
-  echo version created by "建立可攜版.bat".
+  echo version built by the "build portable version" shortcut.
   echo.
   pause
   exit /b 1
