@@ -200,9 +200,12 @@ export const REPORT_FORMAT = {
   /** 字級：內文一律 12，第一列標題 16。 */
   fontSize: 12,
   titleFontSize: 16,
-  /** 列高（配合字級，避免文字上下被切到）。 */
-  titleRowHeight: 24,
-  rowHeight: 18,
+  /**
+   * 列高。單位是點（pt），需明顯大於字級才不會顯得擁擠：
+   * 12pt 的字理論上 18 就夠放，但實際看起來很擠，故取約字級的兩倍留出上下空白。
+   */
+  titleRowHeight: 32,
+  rowHeight: 24,
   /** 框線樣式（Excel 的一般粗細）。 */
   borderStyle: 'thin',
   /** 所有儲存格對齊方式。 */
