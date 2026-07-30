@@ -195,6 +195,19 @@ export const REPORT_FORMAT = {
   /** 比率欄的 Excel 數值格式。 */
   ratioNumberFormat: '0.00%',
   columnWidths: [16, 18, 14, 14],
+
+  /**
+   * 大隊列的樣式（要改顏色就改這裡，色碼為 ARGB，前兩碼是透明度固定 FF）。
+   * 預設為淺紅底＋深紅粗體字：底色夠明顯可一眼區分大隊與分隊，
+   * 又不會像純紅底那樣把黑字壓到看不清楚。
+   */
+  brigadeRowStyle: {
+    fillArgb: 'FFFFC7CE',
+    fontArgb: 'FF9C0006',
+    bold: true,
+  },
+  /** 欄位標題列的樣式。 */
+  headerRowStyle: { bold: true },
   /** 匯出檔中出現、但不在 BRIGADES 內的單位，歸到這一組並提醒使用者。 */
   unmappedGroupName: '未對應大隊',
 };

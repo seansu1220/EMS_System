@@ -10,10 +10,14 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import XLSX from './xlsxNode.mjs';
+import ExcelJS from 'exceljs';
 import { PATHS, REPORT_FORMAT } from './config.mjs';
 import { formatRatio } from './aggregate.mjs';
 import { log } from './logger.mjs';
+
+// 輸出改用 ExcelJS 而非 SheetJS：SheetJS 的免費版**不會寫入儲存格底色**
+// （樣式屬付費功能，寫進去讀回來會變成 patternType: none），無法標示大隊列。
+// 讀取匯出檔仍用 SheetJS，因為 ExcelJS 不支援舊的 .xls 格式。
 
 /** 報表標題，例如「本局6/1-6/30到院前預警案件執行率」。 */
 function buildTitle(monthRange) {
@@ -69,24 +73,58 @@ export function printReport(groupedRows, sortedStats, monthRange) {
   printTable('各分隊（依到院前預警率由高到低）', sortedStats);
 }
 
-/** 建立一個分頁：標題列（跨欄合併）＋ 欄位標題 ＋ 資料列。 */
-function buildSheet(title, stats) {
-  const sheetData = [
-    [title],
-    REPORT_FORMAT.columns,
-    ...stats.map((stat) => [stat.squad, stat.alertCount, stat.totalCount, stat.ratio]),
-  ];
-  const sheet = XLSX.utils.aoa_to_sheet(sheetData);
-  sheet['!cols'] = REPORT_FORMAT.columnWidths.map((width) => ({ wch: width }));
-  sheet['!merges'] = [{ s: { c: 0, r: 0 }, e: { c: REPORT_FORMAT.columns.length - 1, r: 0 } }];
+/** 把大隊列標成紅底，方便一眼與轄下分隊區分。 */
+function applyBrigadeStyle(row) {
+  const { fillArgb, fontArgb, bold } = REPORT_FORMAT.brigadeRowStyle;
+  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+    const cell = row.getCell(column);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
+    cell.font = { bold, color: { argb: fontArgb } };
+  }
+}
 
-  // 比率欄以數值寫入並套百分比格式，使用者可直接在 Excel 內再排序或製圖。
-  for (const cellRef of Object.keys(sheet)) {
-    if (cellRef.startsWith('D') && typeof sheet[cellRef].v === 'number') {
-      sheet[cellRef].z = REPORT_FORMAT.ratioNumberFormat;
-    }
+/**
+ * 建立一個分頁：標題列（跨欄合併）＋ 欄位標題 ＋ 資料列。
+ * @param {import('exceljs').Workbook} workbook
+ * @param {string} sheetName
+ * @param {string} title
+ * @param {(import('./aggregate.mjs').SquadStat & {level?: string})[]} stats
+ */
+function buildSheet(workbook, sheetName, title, stats) {
+  const sheet = workbook.addWorksheet(sheetName);
+  sheet.columns = REPORT_FORMAT.columnWidths.map((width) => ({ width }));
+
+  sheet.addRow([title]);
+  sheet.mergeCells(1, 1, 1, REPORT_FORMAT.columns.length);
+  sheet.getRow(1).font = { bold: true };
+
+  const headerRow = sheet.addRow(REPORT_FORMAT.columns);
+  headerRow.font = { bold: REPORT_FORMAT.headerRowStyle.bold };
+
+  for (const stat of stats) {
+    const row = sheet.addRow([stat.squad, stat.alertCount, stat.totalCount, stat.ratio]);
+    // 比率以數值寫入並套百分比格式，使用者可直接在 Excel 內再排序或製圖。
+    row.getCell(4).numFmt = REPORT_FORMAT.ratioNumberFormat;
+    if (stat.level === 'brigade') applyBrigadeStyle(row);
   }
   return sheet;
+}
+
+/**
+ * 組出報表活頁簿（不寫檔）。與 `writeReport` 分開，讓測試能在記憶體中檢查樣式，
+ * 而不會覆寫使用者目前的報表檔。
+ *
+ * @param {import('./aggregate.mjs').GroupedStat[]} groupedRows 大隊＋轄下分隊
+ * @param {import('./aggregate.mjs').SquadStat[]} sortedStats 各分隊依預警率排序
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {import('exceljs').Workbook}
+ */
+export function buildWorkbook(groupedRows, sortedStats, monthRange) {
+  const title = buildTitle(monthRange);
+  const workbook = new ExcelJS.Workbook();
+  buildSheet(workbook, REPORT_FORMAT.sheets.grouped, title, groupedRows);
+  buildSheet(workbook, REPORT_FORMAT.sheets.sorted, title, sortedStats);
+  return workbook;
 }
 
 /**
@@ -98,14 +136,9 @@ function buildSheet(title, stats) {
  */
 export async function writeReport(groupedRows, sortedStats, monthRange) {
   await fs.mkdir(PATHS.reportDir, { recursive: true });
-  const title = buildTitle(monthRange);
-
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, buildSheet(title, groupedRows), REPORT_FORMAT.sheets.grouped);
-  XLSX.utils.book_append_sheet(workbook, buildSheet(title, sortedStats), REPORT_FORMAT.sheets.sorted);
-
+  const workbook = buildWorkbook(groupedRows, sortedStats, monthRange);
   const filePath = path.join(PATHS.reportDir, `到院前預警比率-${monthRange.label}.xlsx`);
-  XLSX.writeFile(workbook, filePath);
+  await workbook.xlsx.writeFile(filePath);
   log.ok(`報表已產出：${path.relative(process.cwd(), filePath)}`);
   return filePath;
 }
