@@ -251,8 +251,8 @@ export const UNLOCK = {
    * 命中第一個就停，因此把最精確的放前面。
    */
   fieldLabels: {
-    /** 救護紀錄表查詢頁的 TEMSIS 編號欄。 */
-    temsis: ['TEMSIS編號', 'TEMSIS'],
+    /** 救護紀錄表查詢頁的 TEMSIS 編號欄（實測標籤為「TEMSIS ID」，欄位 `#_txtTEMSISID`）。 */
+    temsis: ['TEMSIS ID', 'TEMSIS編號', 'TEMSIS'],
     /** 案件列表頁的派遣案號欄。 */
     dispatchNo: ['派遣案號', '指派案號', '案號'],
   },

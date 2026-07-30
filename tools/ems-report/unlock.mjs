@@ -114,7 +114,10 @@ async function applyTextCondition(page, labelCandidates, value, fieldName) {
     );
   }
   log.info(`${fieldName} 欄位＝${field.selector}（靠標籤「${field.labelText}」的${field.matchedBy}找到）`);
-  await fillField(content(page), field.selector, value, fieldName);
+  // TEMSIS 與派遣案號可識別個案，畫面與紀錄檔一律只顯示末 4 碼。
+  await fillField(content(page), field.selector, value, fieldName, {
+    displayValue: maskCode(value),
+  });
 }
 
 /**
@@ -336,11 +339,15 @@ async function processTemsis(context, page, temsis, range) {
  */
 export async function promptTemsisList() {
   log.step('請貼上要解鎖的 TEMSIS 編號');
-  log.info('一行一個，可以整批貼上；貼完後按一次 Enter（空白行）開始執行。');
+  log.info('一個一行：貼上一個就按 Enter，游標會跳到下一行等你貼下一個。');
+  log.info('全部貼完後，在「空白的那一行」再按一次 Enter，才會開始執行。');
+  log.info('（只有一筆的話就是：貼上 → Enter → 再按一次 Enter）');
   /** @type {string[]} */
   const collected = [];
   for (;;) {
-    const line = await prompt(`  [${collected.length + 1}] `);
+    // 第一行特別附上說明，使用者才不會以為按了 Enter 就直接開跑。
+    const hint = collected.length === 0 ? '（貼完按 Enter 換行，空白行開始執行）' : '';
+    const line = await prompt(`  [${collected.length + 1}]${hint} `);
     // null 代表輸入串流結束（EOF），空字串代表使用者按了 Enter，兩者都視為輸入完畢。
     if (line === null || line === '') break;
     collected.push(...line.split(/[\s,，;；]+/).filter(Boolean));

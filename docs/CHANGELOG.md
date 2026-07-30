@@ -75,6 +75,33 @@
 實跑 `make-portable.ps1` 打包成功（214MB，Node.js v22.23.2），
 並以可攜版內附的 `node.exe` 與其啟動捷徑各執行一次，確認完全不需系統的 Node.js。
 
+### 後續修正（同日）：第一次實跑，卡在「讀不到救護紀錄表的內容」
+
+**問題**：三筆 TEMSIS 全部失敗於 `紀錄表視窗開起來了，但頁面沒有任何文字`。
+在此之前每一步都成功（期間、TEMSIS 欄位自動定位、查詢、按鈕都對）。
+
+**根本原因**（三個一起造成）：
+1. 只讀新視窗主文件的 `document.body` —— 這系統的頁面常是 **frameset，根本沒有 `<body>`**。
+2. 一判斷「不是 PDF」就立刻放棄，實際只等了 4 秒（設定明明是 60 秒）；
+   而視窗通常是先開好、內容才由後續的 POST 填進來。
+3. PDF 判斷只看 `embed` 標籤，漏掉 Chrome 內建閱讀器的情形。
+
+**修改的檔案與內容**：
+- `tools/ems-report/recordSheet.mjs`：
+  - 新增 `readAllFramesText()`，走訪視窗內**所有 frame** 取文字。
+  - 等待改為「**拿到內容才結束**」，中途不再提早判定失敗。
+  - 新增 `isPdfPage()`，以 `document.contentType === 'application/pdf'` 為主要判準。
+  - 新增 `describeOpenedPages()`：失敗訊息附上每個視窗的結構
+    （contentType／有無 body／frame 數／文字長度／readyState），只有結構、沒有內容。
+- `tools/ems-report/config.mjs`：TEMSIS 標籤候選補上實測的「TEMSIS ID」並放首位。
+- **個資漏洞修正**：`formFill.mjs` 的 `fillField()` 原本把填入值原樣寫進紀錄檔，
+  導致完整 TEMSIS 出現在 `out/last-run.log`。新增 `displayValue` 參數，
+  敏感欄位只顯示末 4 碼，**連回讀失敗的錯誤訊息也只說長度、不印原值**；
+  `unlock.mjs` 填 TEMSIS 與派遣案號時一律傳入遮蔽值。新增測試釘住此行為。
+- `tools/ems-report/unlock.mjs`、`formFill.test.mjs`、`docs/TOOLS_SPEC.md` 2.9 節同步更新。
+
+**驗證**：`npm run tool:ems:test` 76 項全數通過。待使用者再次實跑確認。
+
 ### 驗證
 `npm run tool:ems:test` 75 項全數通過（新增 30 項）；`npm run build` 通過。
 PDF 解析以程式現造的最小 PDF 實測，確認「位元組 → 文字 → 欄位」整條路徑可用。

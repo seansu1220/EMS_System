@@ -15,9 +15,11 @@ import { log } from './logger.mjs';
  * @param {string} selector
  * @param {string} value
  * @param {string} label 供訊息顯示的欄位名稱
+ * @param {{displayValue?: string}} [options] 值屬個人資料時，傳入遮蔽後的字串；
+ *   **給了這個參數就代表「真值不可出現在畫面與紀錄檔」**，連錯誤訊息也不會印出原值
  * @returns {Promise<void>}
  */
-export async function fillField(frame, selector, value, label) {
+export async function fillField(frame, selector, value, label, options = {}) {
   const field = frame.locator(selector);
   const isReadonly = await field
     .evaluate((element) => element.hasAttribute('readonly') || element.readOnly === true)
@@ -51,11 +53,16 @@ export async function fillField(frame, selector, value, label) {
     { fieldSelector: selector, fieldValue: value },
   );
 
+  const shownValue = options.displayValue ?? value;
   const actual = await field.inputValue().catch(() => null);
   if (actual !== value) {
-    throw new Error(`${label} 填入後回讀不符：預期「${value}」，實際「${actual}」`);
+    // 敏感欄位連「實際讀到什麼」都不能印，只說長度，足夠判斷是「沒填進去」還是「填錯」。
+    const shownActual = options.displayValue
+      ? `${String(actual ?? '').length} 個字元`
+      : `「${actual}」`;
+    throw new Error(`${label} 填入後回讀不符：預期「${shownValue}」，實際 ${shownActual}`);
   }
-  log.info(`${label}＝${value}（已確認）`);
+  log.info(`${label}＝${shownValue}（已確認）`);
 }
 
 /**

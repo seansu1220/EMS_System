@@ -64,6 +64,19 @@ test('fillField 回讀不符時必須拋錯，不可以放行', async () => {
   });
 });
 
+test('fillField 對敏感欄位只顯示遮蔽值，錯誤訊息也不可洩漏原值', async () => {
+  const frame = createFakeFrame({ acceptWrite: false });
+  const temsis = '2026070210100302465701';
+  await assert.rejects(
+    () => fillField(frame, '#_txtTEMSISID', temsis, 'TEMSIS', { displayValue: '******5701' }),
+    (error) => {
+      assert.ok(!error.message.includes(temsis), '錯誤訊息不可出現完整編號');
+      assert.match(error.message, /\*{6}5701/, '要顯示遮蔽後的值供核對');
+      return true;
+    },
+  );
+});
+
 test('fillField 對唯讀欄位（日曆元件）仍能寫入', async () => {
   const frame = createFakeFrame({ readonly: true });
   await fillField(frame, '#_txtToDate', '2026-06-30 23:59:59', '迄日');
