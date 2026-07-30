@@ -12,103 +12,33 @@ import path from 'node:path';
 import { SITE, PATHS, QUERY_CRITERIA, DATASETS, DOWNLOAD_TIMEOUT_MS } from './config.mjs';
 import { formatDateForSite } from './dateRange.mjs';
 import { log } from './logger.mjs';
+import {
+  fillField as fillFrameField,
+  selectField as selectFrameField,
+  detectDateFormat as detectFrameDateFormat,
+} from './formFill.mjs';
 import { getFrame, gotoRecordQuery, ensureFieldVisible } from './navigation.mjs';
 
 /**
- * 讀取日期欄位的 My97DatePicker 設定，取得系統採用的日期格式。
- * 偵測不到就沿用設定檔的預設值，並在畫面上說明用了哪一種。
+ * 讀取查詢頁的日期格式（實作見 formFill.mjs，解鎖流程共用同一套）。
  * @returns {Promise<string>} 例如 `yyyy-MM-dd`
  */
 async function detectDateFormat(page) {
   const content = getFrame(page, SITE.frames.content);
-  const attributeText = await content
-    .locator(SITE.queryFields.dateFrom)
-    .evaluate((element) =>
-      ['onfocus', 'onclick', 'onchange'].map((name) => element.getAttribute(name) || '').join(' '),
-    )
-    .catch(() => '');
-  const matched = /dateFmt\s*:\s*'([^']+)'/.exec(attributeText);
-  if (matched) {
-    log.info(`日期格式：${matched[1]}（自系統日期元件偵測）`);
-    return matched[1];
-  }
-  log.warn(`偵測不到系統日期格式，改用預設值 ${SITE.defaultDateFormat}`);
-  return SITE.defaultDateFormat;
+  return detectFrameDateFormat(content, SITE.queryFields.dateFrom, SITE.defaultDateFormat);
 }
 
 /**
- * 在內容框填入一個欄位的值。
- *
- * 日期欄位用的是 My97DatePicker，這類欄位常被設成 readonly 強迫使用者從日曆挑選，
- * 而 Playwright 的 `fill()` 遇到 readonly 會直接拋錯，因此保留「直接寫入 value 並
- * 補送 input/change 事件」的備援寫法。
+ * 在內容框填入一個欄位的值（填完會回讀驗證，見 formFill.mjs）。
+ * 這裡只負責「每次都重新取得內容框」——frame 每次導航都會重建，不可快取。
  */
 async function fillField(page, selector, value, label) {
-  const content = getFrame(page, SITE.frames.content);
-  const field = content.locator(selector);
-  const isReadonly = await field
-    .evaluate((element) => element.hasAttribute('readonly') || element.readOnly === true)
-    .catch(() => false);
-
-  if (isReadonly) {
-    log.info(`${label} 為唯讀欄位（只能用日曆點選），直接寫入值`);
-  } else {
-    try {
-      await content.fill(selector, value, { timeout: 10000 });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
-      log.warn(`${label} 無法直接輸入（${reason}），改用直接寫入`);
-    }
-  }
-
-  await content.evaluate(
-    ({ fieldSelector, fieldValue }) => {
-      const element = document.querySelector(fieldSelector);
-      if (!element) return;
-      element.removeAttribute('readonly');
-      element.value = fieldValue;
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-    },
-    { fieldSelector: selector, fieldValue: value },
-  );
-
-  // 回讀驗證：條件沒真的填進去卻繼續查詢，會撈到全部資料（曾發生過），故一律確認。
-  const actual = await field.inputValue().catch(() => null);
-  if (actual !== value) {
-    throw new Error(`${label} 填入後回讀不符：預期「${value}」，實際「${actual}」`);
-  }
-  log.info(`${label}＝${value}（已確認）`);
+  return fillFrameField(getFrame(page, SITE.frames.content), selector, value, label);
 }
 
-/**
- * 在內容框選擇一個下拉選項（以 value 指定，避免文字有全半形差異）。
- * 選單若因版面因素無法互動，同樣改用直接設定並補送 change 事件。
- */
+/** 在內容框選擇一個下拉選項（以 value 指定，避免文字有全半形差異）。 */
 async function selectField(page, selector, value, label) {
-  const content = getFrame(page, SITE.frames.content);
-  try {
-    await content.selectOption(selector, value, { timeout: 10000 });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
-    log.warn(`${label} 無法直接選取（${reason}），改用直接寫入`);
-    await content.evaluate(
-      ({ fieldSelector, fieldValue }) => {
-        const element = document.querySelector(fieldSelector);
-        if (!element) return;
-        element.value = fieldValue;
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      },
-      { fieldSelector: selector, fieldValue: value },
-    );
-  }
-
-  // 與日期欄位同理：一律回讀確認，條件沒設定成功就不該繼續查詢。
-  const actual = await content.locator(selector).inputValue().catch(() => null);
-  if (actual !== value) {
-    throw new Error(`${label} 選取後回讀不符：預期「${value}」，實際「${actual}」`);
-  }
-  log.info(`${label}（已確認）`);
+  return selectFrameField(getFrame(page, SITE.frames.content), selector, value, label);
 }
 
 /**

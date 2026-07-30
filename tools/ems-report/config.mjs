@@ -97,6 +97,11 @@ export const DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
 
 /** 瀏覽器啟動設定。使用本機已安裝的 Chrome，不另外下載 Chromium。 */
 export const BROWSER = {
+  /**
+   * 依序嘗試的瀏覽器：公家電腦不一定裝了 Chrome，但幾乎必有 Edge
+   * （兩者同為 Chromium 核心，Playwright 的操作方式完全相同）。
+   */
+  channels: ['chrome', 'msedge'],
   channel: 'chrome',
   /** 必須有頭：驗證碼要由使用者本人辨識輸入。 */
   headless: false,
@@ -225,6 +230,65 @@ export const REPORT_FORMAT = {
   headerRowStyle: { bold: true },
   /** 匯出檔中出現、但不在 BRIGADES 內的單位，歸到這一組並提醒使用者。 */
   unmappedGroupName: '未對應大隊',
+};
+
+/**
+ * 解鎖救護紀錄表（把已結案的案件調整為未結案）的設定。
+ *
+ * 這個流程走的畫面比統計流程多，且**元件 id 未經探測確認**，
+ * 因此一律以「畫面上看得到的文字」定位（見 `pageFinder.mjs`）：
+ * 系統改版換 id 不影響，只有改字時才需要動這裡。
+ */
+export const UNLOCK = {
+  /** 查詢期間：今天往回推幾個月（使用者指定「近兩個月」）。 */
+  lookbackMonths: 2,
+
+  /** 案件列表功能在左側選單的文字。 */
+  caseListMenuText: '案件列表',
+
+  /**
+   * 各欄位的標籤文字候選（由前往後比對，比對時忽略空白與全半形差異）。
+   * 命中第一個就停，因此把最精確的放前面。
+   */
+  fieldLabels: {
+    /** 救護紀錄表查詢頁的 TEMSIS 編號欄。 */
+    temsis: ['TEMSIS編號', 'TEMSIS'],
+    /** 案件列表頁的派遣案號欄。 */
+    dispatchNo: ['派遣案號', '指派案號', '案號'],
+  },
+
+  /**
+   * 按鈕／連結的文字候選。
+   * 「救護紀錄PDF(桃)」要排在「救護紀錄PDF」前面，否則會被前者的子字串比對搶先命中。
+   */
+  buttonTexts: {
+    /** 查詢結果列上開啟救護紀錄表的按鈕。 */
+    openRecordSheet: ['救護紀錄PDF(桃)', '救護紀錄PDF'],
+    /**
+     * 「救護紀錄」連結，兩個地方都用這個文字：
+     * 案件列表上點了是進入案件內部，案件內部點了是跳出那張救護紀錄表。
+     * 比對時用**完全相等**，否則會連「救護紀錄PDF」一起命中。
+     * 實跑後若發現兩處文字不同，就拆成兩個設定。
+     */
+    openCase: ['救護紀錄'],
+    /** 案件內部把案件解鎖的按鈕。 */
+    unlock: ['調整為未結案'],
+  },
+
+  /**
+   * 救護紀錄表上要抓的兩個欄位標籤。
+   * 抓法：找到標籤文字後，取其後方最近的一段編號（見 `sheetFields.mjs`）。
+   */
+  sheetLabels: {
+    dispatchNo: ['救災救護指揮中心指派案號', '指揮中心指派案號', '指派案號'],
+    temsis: ['TEMSIS'],
+  },
+
+  /** 開啟救護紀錄表後，等待內容（PDF 或網頁）就緒的上限（毫秒）。 */
+  sheetTimeoutMs: 60 * 1000,
+
+  /** 每次查詢後的緩衝時間（毫秒）。 */
+  settleMs: 2500,
 };
 
 /**

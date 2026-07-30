@@ -11,12 +11,15 @@
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
  *   npm run tool:ems -- probe --manual       改為手動點選的探測模式
  *   npm run tool:ems -- check-sheet          檢查增減用的 Google 試算表能否讀取
+ *   npm run tool:ems -- unlock               解鎖救護紀錄表（試跑：只定位不解鎖）
+ *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
-import { resolveMonthRange } from './dateRange.mjs';
+import { resolveMonthRange, getRecentRange } from './dateRange.mjs';
+import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
 import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
 import {
@@ -28,7 +31,7 @@ import {
   applyAdjustments,
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
-import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT } from './config.mjs';
+import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT, UNLOCK } from './config.mjs';
 import {
   resolveSheetSource,
   fetchSheetRows,
@@ -38,27 +41,36 @@ import {
 } from './adjustSheet.mjs';
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
+/** 可用的指令。 */
+const COMMANDS = ['run', 'probe', 'check-sheet', 'unlock'];
+
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'} command
+ * @property {'probe'|'run'|'check-sheet'|'unlock'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
+ * @property {string[]} temsis
+ * @property {boolean} execute
  */
 
 /** 解析命令列參數。 */
 function parseArgs(argv) {
   const args = argv.slice(2);
   const command = args.find((arg) => !arg.startsWith('--')) ?? 'run';
-  if (!['run', 'probe', 'check-sheet'].includes(command)) {
-    throw new Error(`未知的指令：${command}（可用：run、probe、check-sheet）`);
+  if (!COMMANDS.includes(command)) {
+    throw new Error(`未知的指令：${command}（可用：${COMMANDS.join('、')}）`);
   }
+  const temsisArg = args.find((arg) => arg.startsWith('--temsis='))?.split('=')[1] ?? '';
   return {
     command,
     month: args.find((arg) => arg.startsWith('--month='))?.split('=')[1],
     keepRaw: args.includes('--keep-raw'),
     /** probe 預設全自動；自動導航失敗時可用 --manual 改回手動點選。 */
     manual: args.includes('--manual'),
+    temsis: temsisArg.split(/[\s,，;；]+/).filter(Boolean),
+    /** 保留給日後開放實際解鎖用；本版一律拒絕，見 runUnlockCommand。 */
+    execute: args.includes('--execute'),
   };
 }
 
@@ -223,28 +235,16 @@ async function adjustStats(stats, monthRange) {
   return result.stats;
 }
 
-async function main() {
-  const options = parseArgs(process.argv);
-  const monthRange = resolveMonthRange(options.month);
-
-  log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
-
-  if (options.command === 'check-sheet') {
-    log.info(`試算期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
-    await checkAdjustSheet(monthRange);
-    return;
-  }
-
-  log.info(`查詢期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
+/**
+ * 開瀏覽器、登入，然後執行指定動作。
+ * 失敗時把當下的 frame 狀態一併記進紀錄檔，方便判斷卡在哪一頁。
+ * @param {(session: import('./session.mjs').EmsSession) => Promise<void>} action
+ */
+async function withSession(action) {
   const session = await startSession();
   try {
-    if (options.command === 'probe') {
-      await (options.manual ? runInteractiveProbe(session.context) : runAutoProbe(session.context, session.page));
-      return;
-    }
-    await runReportFlow(session, monthRange, options.keepRaw);
+    await action(session);
   } catch (error) {
-    // 失敗時把當下的 frame 狀態一併記進紀錄檔，方便判斷卡在哪一頁。
     log.info('失敗當下的頁面狀態：');
     for (const frame of session.page.frames()) {
       log.info(`  frame ${frame.name() || '(主文件)'} → ${frame.url()}`);
@@ -255,6 +255,58 @@ async function main() {
     closePrompt();
     log.info('瀏覽器已關閉');
   }
+}
+
+/**
+ * 解鎖救護紀錄表。
+ *
+ * ⚠ 本版是**試跑**：只查詢、比對、告訴你「該解哪一張」，
+ *   絕不按下「調整為未結案」。等使用者確認比對邏輯無誤後才會開放實際解鎖。
+ */
+async function runUnlockCommand(options) {
+  if (options.execute) {
+    log.warn('本版尚未開放實際解鎖（--execute 無效）。');
+    log.info('請先用試跑確認每一筆都定位正確，再回報，屆時才會加上真正按下按鈕的功能。');
+    return;
+  }
+  const range = getRecentRange(UNLOCK.lookbackMonths);
+  const temsisList = options.temsis.length > 0 ? options.temsis : await promptTemsisList();
+  if (temsisList.length === 0) {
+    log.warn('沒有輸入任何 TEMSIS，結束。');
+    return;
+  }
+  await withSession(async (session) => {
+    const outcomes = await runUnlockFlow(session, { temsisList, range });
+    printUnlockSummary(outcomes);
+  });
+}
+
+async function main() {
+  const options = parseArgs(process.argv);
+  log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
+
+  if (options.command === 'unlock') {
+    await runUnlockCommand(options);
+    return;
+  }
+
+  const monthRange = resolveMonthRange(options.month);
+  if (options.command === 'check-sheet') {
+    log.info(`試算期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
+    await checkAdjustSheet(monthRange);
+    return;
+  }
+
+  log.info(`查詢期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
+  await withSession(async (session) => {
+    if (options.command === 'probe') {
+      await (options.manual
+        ? runInteractiveProbe(session.context)
+        : runAutoProbe(session.context, session.page));
+      return;
+    }
+    await runReportFlow(session, monthRange, options.keepRaw);
+  });
 }
 
 main()

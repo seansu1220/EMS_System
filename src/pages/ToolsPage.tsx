@@ -13,6 +13,8 @@ const LOCAL_TOOLS: readonly {
   purpose: string;
   shortcut: string;
   steps: readonly string[];
+  /** 額外提醒（選填），例如目前的限制。 */
+  note?: string;
 }[] = [
   {
     title: '救護紀錄表查詢（到院前預警比率）',
@@ -24,6 +26,19 @@ const LOCAL_TOOLS: readonly {
       '程式會自動開啟 Chrome 並停在登入頁，請你本人輸入驗證碼後按登入。',
       '登入成功後程式自動接手查詢與匯出，最後在電腦上產出各分隊的比較表。',
     ],
+  },
+  {
+    title: '解鎖救護紀錄表（目前是試跑版）',
+    purpose:
+      '給一組 TEMSIS 編號，程式自動查出對應的指派案號，到案件列表找出那件案子，並判斷該把哪一張救護紀錄表調整為未結案。',
+    shortcut: '捷徑 \\ 解鎖救護紀錄表.bat',
+    steps: [
+      '雙擊上面那個檔案，把要解鎖的 TEMSIS 一行一個貼上，貼完按一次 Enter。',
+      '程式開啟瀏覽器停在登入頁，請你本人輸入驗證碼後按登入。',
+      '接著全自動：查紀錄表 → 讀指派案號 → 查案件列表 → 進入案件；同一件有多張紀錄表時，會逐張比對 TEMSIS 找出正確的那張。',
+      '最後列出每一筆「該解哪一張」的結果供你核對。',
+    ],
+    note: '目前是試跑版：只會告訴你該解哪一張，不會真的按下「調整為未結案」。等你確認每一筆都判斷正確後，才會開放實際解鎖。',
   },
 ];
 
@@ -61,6 +76,8 @@ export function ToolsPage() {
           </pre>
           <p className="mt-1 text-xs text-slate-400">
             需要該台電腦已安裝 Node.js（Windows 沒有內建，可至 nodejs.org 下載安裝）。
+            不能安裝軟體的電腦（例如公務機），可先在自己電腦雙擊「捷徑 \ 建立可攜版.bat」，
+            把工具與 Node.js 打包成一個資料夾複製過去，直接雙擊裡面的捷徑就能用。
           </p>
 
           <p className="mt-4 text-xs font-medium text-slate-500">操作步驟</p>
@@ -69,6 +86,12 @@ export function ToolsPage() {
               <li key={step}>{step}</li>
             ))}
           </ol>
+
+          {tool.note && (
+            <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {tool.note}
+            </p>
+          )}
         </Card>
       ))}
     </div>

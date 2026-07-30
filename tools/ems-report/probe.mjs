@@ -136,6 +136,30 @@ async function captureTo(context, sequence, label) {
   return filePath;
 }
 
+/** 供其他流程呼叫的快照序號（各流程共用同一個計數，檔名才不會互相覆蓋）。 */
+let snapshotSequence = 0;
+
+/**
+ * 在流程進行中存下當下畫面的結構快照。
+ *
+ * 解鎖流程走的畫面尚未探測過，出問題時光看錯誤訊息不夠，
+ * 有快照才知道那一頁實際有哪些欄位與按鈕。內容同樣只有結構、沒有資料。
+ *
+ * @param {import('playwright-core').BrowserContext} context
+ * @param {string} label 檔名用的標籤
+ * @returns {Promise<string|null>} 存檔路徑；失敗時回傳 null（快照失敗不該中斷主流程）
+ */
+export async function captureSnapshot(context, label) {
+  try {
+    await fs.mkdir(PATHS.probeDir, { recursive: true });
+    snapshotSequence += 1;
+    return await captureTo(context, snapshotSequence, label);
+  } catch (error) {
+    log.warn(`存畫面結構快照失敗（不影響主流程）：${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
 /** 記錄所有 frame 的名稱與網址，失敗時用來判斷卡在哪裡。 */
 async function describeFrames(page) {
   return page.frames().map((frame) => ({ name: frame.name(), url: frame.url() }));

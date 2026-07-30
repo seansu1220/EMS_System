@@ -107,17 +107,39 @@ export async function waitForAppReady(page, timeoutMs = APP_READY_TIMEOUT_MS) {
 }
 
 /**
+ * 啟動本機已安裝的瀏覽器（不另外下載 Chromium）。
+ *
+ * 依序嘗試 Chrome 與 Edge：公家電腦不一定裝了 Chrome，但幾乎必有 Edge，
+ * 兩者同為 Chromium 核心，操作方式完全相同。
+ *
+ * @returns {Promise<import('playwright-core').Browser>}
+ */
+async function launchBrowser() {
+  const failures = [];
+  for (const channel of BROWSER.channels) {
+    try {
+      const browser = await chromium.launch({
+        channel,
+        headless: BROWSER.headless,
+        slowMo: BROWSER.slowMo,
+      });
+      log.info(`使用瀏覽器：${channel}`);
+      return browser;
+    } catch (error) {
+      failures.push(`${channel}（${error instanceof Error ? error.message.split('\n')[0] : String(error)}）`);
+    }
+  }
+  throw new Error(`這台電腦找不到可用的瀏覽器，依序試過：${failures.join('、')}`);
+}
+
+/**
  * 開啟瀏覽器並完成登入，回傳可繼續操作的工作階段。
  * @returns {Promise<EmsSession>}
  */
 export async function startSession() {
   const credentials = loadCredentials();
-  log.step('啟動瀏覽器（使用本機 Chrome）');
-  const browser = await chromium.launch({
-    channel: BROWSER.channel,
-    headless: BROWSER.headless,
-    slowMo: BROWSER.slowMo,
-  });
+  log.step('啟動瀏覽器（使用本機已安裝的 Chrome 或 Edge）');
+  const browser = await launchBrowser();
   const context = await browser.newContext({ viewport: BROWSER.viewport, acceptDownloads: true });
   const page = await context.newPage();
 

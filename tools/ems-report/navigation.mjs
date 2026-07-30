@@ -59,6 +59,68 @@ export async function gotoRecordQuery(page) {
   return '直接載入網址（備援）';
 }
 
+/**
+ * 列出左側選單所有可點的項目文字。
+ *
+ * 用途：導航失敗時把「實際有哪些項目」寫進錯誤訊息，不必請使用者回報畫面。
+ * 選單項目是系統功能名稱，不含個人資料。
+ *
+ * @returns {Promise<string[]>}
+ */
+export async function listMenuItems(page) {
+  const sideMenu = getFrame(page, SITE.frames.sideMenu);
+  return sideMenu
+    .evaluate(() =>
+      [...document.querySelectorAll('a')]
+        .map((link) => (link.textContent || '').replace(/\s+/g, '').trim())
+        .filter(Boolean),
+    )
+    .catch(() => []);
+}
+
+/**
+ * 點左側選單的某個項目並等待內容框換頁。
+ *
+ * 用 JS 觸發而非 Playwright 點擊：選單可能是收合狀態，元素不可見時 Playwright 會拒絕點擊。
+ * 比對先求精確相等，沒有才退回「包含」，避免「案件列表」誤點到「案件列表統計」之類的項目。
+ *
+ * @param {import('playwright-core').Page} page
+ * @param {string} menuText 選單文字
+ * @param {{settleMs?: number, timeoutMs?: number}} [options]
+ * @returns {Promise<void>}
+ */
+export async function gotoMenuItem(page, menuText, options = {}) {
+  const urlBefore = getFrame(page, SITE.frames.content).url();
+  const sideMenu = getFrame(page, SITE.frames.sideMenu);
+  const clicked = await sideMenu.evaluate((text) => {
+    const links = [...document.querySelectorAll('a')];
+    const normalize = (value) => (value || '').replace(/\s+/g, '').trim();
+    const target =
+      links.find((link) => normalize(link.textContent) === text)
+      ?? links.find((link) => normalize(link.textContent).includes(text));
+    if (!target) return false;
+    target.click();
+    return true;
+  }, menuText);
+
+  if (!clicked) {
+    const available = await listMenuItems(page);
+    throw new Error(
+      `左側選單找不到「${menuText}」。目前選單項目：${available.join('、') || '(讀不到)'}`,
+    );
+  }
+
+  // 這套系統以 POST 換頁，網址有時不變，因此「網址改變」與「載入完成」兩者取其一即可。
+  const deadline = Date.now() + (options.timeoutMs ?? 20000);
+  while (Date.now() < deadline) {
+    const current = page.frames().find((frame) => frame.name() === SITE.frames.content);
+    if (current && current.url() !== urlBefore) break;
+    await page.waitForTimeout(500);
+  }
+  await page.waitForLoadState('load', { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(options.settleMs ?? SITE.querySettleMs);
+}
+
 /** 呼叫頁面上的展開函式（進階搜尋區塊）。 */
 async function callToggle(frame, toggleFnName) {
   return frame.evaluate((fnName) => {

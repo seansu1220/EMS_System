@@ -20,6 +20,9 @@ firebase-service-account*.json
 # 小工具產出：含系統匯出的個案明細與彙總報表，絕不進版控
 tools/**/out/
 
+# 可攜版打包產物（內含整份 Node.js 與套件，由 scripts/make-portable.ps1 產生）
+可攜版/
+
 # Python
 __pycache__/
 *.pyc

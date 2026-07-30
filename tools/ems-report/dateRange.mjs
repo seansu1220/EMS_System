@@ -45,6 +45,40 @@ export function getPreviousMonthRange(today = new Date()) {
 }
 
 /**
+ * 取得「今天往回推 N 個月」到今天的區間，供解鎖流程查詢用。
+ *
+ * 起日採「先退月份、再夾到該月實際天數」的算法：
+ * 直接 `setMonth(-2)` 遇到 4/30 這種日子會溢位成 3/2，反而讓查詢期間變短而漏案。
+ *
+ * @param {number} [months] 往回推幾個月
+ * @param {Date} [today] 基準日期（可注入以便測試）
+ * @returns {MonthRange} label 為說明文字，start/end 為 `YYYY-MM-DD`
+ */
+export function getRecentRange(months = 2, today = new Date()) {
+  if (!Number.isInteger(months) || months < 1) {
+    throw new RangeError(`往回推的月份數必須是 1 以上的整數，收到：${months}`);
+  }
+  const endYear = today.getFullYear();
+  const endMonth = today.getMonth();
+  const endDay = today.getDate();
+
+  const startMonthFirstDay = new Date(endYear, endMonth - months, 1);
+  const daysInStartMonth = new Date(
+    startMonthFirstDay.getFullYear(),
+    startMonthFirstDay.getMonth() + 1,
+    0,
+  ).getDate();
+  const startDay = Math.min(endDay, daysInStartMonth);
+
+  const toIso = (year, monthIndex, day) => `${year}-${pad2(monthIndex + 1)}-${pad2(day)}`;
+  return {
+    label: `近 ${months} 個月`,
+    start: toIso(startMonthFirstDay.getFullYear(), startMonthFirstDay.getMonth(), startDay),
+    end: toIso(endYear, endMonth, endDay),
+  };
+}
+
+/**
  * 解析 `--month=YYYY-MM` 參數；未提供時回傳上個月。
  * @param {string|undefined} monthArg
  * @param {Date} [today]
