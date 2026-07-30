@@ -193,6 +193,13 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
       `紀錄表讀得到內容，但找不到「${UNLOCK.sheetLabels.dispatchNo[0]}」欄位（格式：${codes.kind}）`,
     );
   }
+  // 紀錄表上讀不到 TEMSIS 的話，多張紀錄表時就無從比對，先示警讓使用者知道要調標籤。
+  if (!codes.temsis) {
+    log.warn(
+      `紀錄表上找不到 TEMSIS 欄位（試過的標籤：${UNLOCK.sheetLabels.temsis.join('、')}）。`
+        + '案件內若有多張紀錄表將無法比對，請回報以便調整標籤設定。',
+    );
+  }
   // 防呆：紀錄表上的 TEMSIS 應與輸入的一致，不一致代表查詢條件沒生效或點錯列。
   if (codes.temsis && !isSameCode(codes.temsis, temsis)) {
     throw new Error(
@@ -246,14 +253,21 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   const readCodes = deps.readCodes ?? readSheetCodes;
   const paired = await findPairedRows(
     content(page),
-    UNLOCK.buttonTexts.openCase,
+    UNLOCK.buttonTexts.openRecordInCase,
     UNLOCK.buttonTexts.unlock,
-    { recordExact: true },
+    { recordExact: false },
   );
   log.info(
     `案件內部：紀錄表 ${paired.recordCount} 張、`
       + `「${UNLOCK.buttonTexts.unlock[0]}」按鈕 ${paired.unlockCount} 個`,
   );
+  // 把配對結果攤開來，方便核對「第幾張紀錄表配到第幾個按鈕」是否合理（只有序號，沒有內容）。
+  if (paired.pairs.length > 0) {
+    const mapping = paired.pairs
+      .map((pair) => `第${pair.recordIndex + 1}張→${pair.unlockIndex < 0 ? '同列無按鈕' : `第${pair.unlockIndex + 1}個按鈕`}`)
+      .join('、');
+    log.info(`  配對結果：${mapping}`);
+  }
 
   if (paired.unlockCount === 0) {
     return {
@@ -271,17 +285,21 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       temsis,
       status: '需人工處理',
       detail: `有 ${paired.unlockCount} 個解鎖按鈕，但找不到可點開的`
-        + `「${UNLOCK.buttonTexts.openCase[0]}」，無法比對是哪一張。`
+        + `「${UNLOCK.buttonTexts.openRecordInCase[0]}」，無法比對是哪一張。`
         + await describeClickableOptions(page),
     };
   }
 
   log.info(`有 ${paired.recordCount} 張紀錄表，逐張開啟比對 TEMSIS`);
   for (const pair of paired.pairs) {
-    // exact 必須與上面 findPairedRows 的 recordExact 一致，否則序號會對到別張紀錄表。
-    const codes = await readCodes(context, page, UNLOCK.buttonTexts.openCase, pair.recordIndex, {
-      exact: true,
-    });
+    // 文字候選與 exact 都必須與上面 findPairedRows 完全一致，否則序號會對到別張紀錄表。
+    const codes = await readCodes(
+      context,
+      page,
+      UNLOCK.buttonTexts.openRecordInCase,
+      pair.recordIndex,
+      { exact: false },
+    );
     if (!codes.temsis) {
       log.warn(`第 ${pair.recordIndex + 1} 張紀錄表讀不到 TEMSIS，跳過這張`);
       continue;
