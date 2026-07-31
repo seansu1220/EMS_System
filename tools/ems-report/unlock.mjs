@@ -45,8 +45,10 @@ import {
  * @property {'已解鎖'|'已定位'|'查無案件'|'需人工處理'|'失敗'} status
  * @property {string} detail 給人看的說明
  * @property {number} [unlockIndex] 目標是第幾個解鎖按鈕（0 起算）
+ * @property {number} [recordIndex] 目標是第幾張紀錄表（0 起算）
  * @property {string|null} [caseDate] 案件日期（供事後追查，抓不到為 null）
- * @property {string|null} [vehicle] 出勤車輛（供事後追查，抓不到為 null）
+ * @property {string|null} [vehicle] 該張紀錄表的派遣車輛（供事後追查，抓不到為 null）
+ * @property {string|null} [squad] 該張紀錄表的派遣分隊
  */
 
 /** 取得目前的內容框（每次動作都會重載，不可快取）。 */
@@ -164,27 +166,53 @@ async function submitQuery(page) {
  * @returns {Promise<{caseDate: string|null, vehicle: string|null, headers: string[]}>}
  */
 async function readListRowInfo(page, index) {
-  const wanted = [...UNLOCK.listColumns.caseDate, ...UNLOCK.listColumns.vehicle];
   const row = await readRowFields(
     content(page),
     UNLOCK.buttonTexts.openRecordSheet,
     index,
+    UNLOCK.listColumns.caseDate,
+  ).catch(() => null);
+  return {
+    caseDate: pickFirstValue(row, UNLOCK.listColumns.caseDate),
+    headers: row?.headers ?? [],
+  };
+}
+
+/**
+ * 依候選欄名的順序，取第一個有值的欄位。
+ * @param {{values?: Record<string,string>}|null} row
+ * @param {string[]} candidates
+ * @returns {string|null}
+ */
+function pickFirstValue(row, candidates) {
+  for (const name of candidates) {
+    const value = row?.values?.[name];
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
+ * 從案件內部「要解鎖的那一列」讀出派遣車輛與派遣分隊。
+ *
+ * 案件內部的表格是**一列一張紀錄表**，因此讀到的正是要解鎖的那一張所屬的車輛，
+ * 而不是整件案子的（一件案子可能出動兩台車）。
+ *
+ * @param {number} recordIndex 目標紀錄表在該頁的序號
+ * @returns {Promise<{vehicle: string|null, squad: string|null, headers: string[]}>}
+ */
+async function readCaseRowInfo(page, recordIndex) {
+  const wanted = [...UNLOCK.caseColumns.vehicle, ...UNLOCK.caseColumns.squad];
+  const row = await readRowFields(
+    content(page),
+    UNLOCK.buttonTexts.openRecordInCase,
+    recordIndex,
     wanted,
   ).catch(() => null);
-  if (!row) return { caseDate: null, vehicle: null, headers: [] };
-
-  /** 依候選欄名的順序取第一個有值的。 */
-  const pick = (candidates) => {
-    for (const name of candidates) {
-      const value = row.values[name];
-      if (value) return value;
-    }
-    return null;
-  };
   return {
-    caseDate: pick(UNLOCK.listColumns.caseDate),
-    vehicle: pick(UNLOCK.listColumns.vehicle),
-    headers: row.headers,
+    vehicle: pickFirstValue(row, UNLOCK.caseColumns.vehicle),
+    squad: pickFirstValue(row, UNLOCK.caseColumns.squad),
+    headers: row?.headers ?? [],
   };
 }
 
@@ -308,23 +336,17 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   }
   log.ok(`指派案號：${maskCode(codes.dispatchNo)}`);
   // 使用者要求：解鎖時要能看出這是哪一天、哪一台車的案件，供事後回頭核對。
-  // 查詢結果那一列優先（欄位有標題可對照）；讀不到才退回紀錄表 PDF 抽出來的值。
+  // 日期取自查詢結果那一列（HTML 有標題列可對照）；讀不到才退回紀錄表 PDF 抽出來的值。
   const caseDate = listInfo.caseDate ?? codes.caseDate;
-  const vehicle = listInfo.vehicle ?? codes.vehicle;
-  const describeField = (value, source) => (value ? `${value}（取自${source}）` : '（讀不到）');
-  log.info(
-    `案件日期：${describeField(caseDate, listInfo.caseDate ? '查詢結果' : `紀錄表的「${codes.caseDateLabel}」`)}`
-      + `　出勤單位：${describeField(vehicle, listInfo.vehicle ? '查詢結果' : `紀錄表的「${codes.vehicleLabel}」`)}`,
-  );
-  if (!caseDate || !vehicle) {
-    const missing = [!caseDate && '案件日期', !vehicle && '出勤單位'].filter(Boolean);
-    log.warn(`找不到「${missing.join('」與「')}」，請依下列實際欄名調整 config.mjs：`);
+  if (caseDate) {
+    log.info(`案件日期：${caseDate}（取自${listInfo.caseDate ? '查詢結果' : `紀錄表的「${codes.caseDateLabel}」`}）`);
+  } else {
+    log.warn('讀不到案件日期，請依實際欄名調整 config.mjs 的 UNLOCK.listColumns：');
     log.info(`　查詢結果的欄位：${listInfo.headers.join('｜') || '(讀不到表格)'}`);
-    if (codes.availableLabels.length > 0) {
-      log.info(`　紀錄表上的欄位：${codes.availableLabels.join('｜')}`);
-    }
   }
-  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis, caseDate, vehicle };
+  // 出勤車輛不在這裡讀：一件案子可能出動兩台車，要等確定解哪一張紀錄表後，
+  // 才從案件內部那一列讀（見 readCaseRowInfo）。
+  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis, caseDate };
 }
 
 /** 步驟 3~4：以指派案號在案件列表找到案件並進入內部。 */
@@ -398,6 +420,7 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       temsis,
       status: '已定位',
       unlockIndex: 0,
+      recordIndex: paired.pairs[0]?.recordIndex ?? 0,
       detail: '案件內只有一張紀錄表，該張即為解鎖目標',
     };
   }
@@ -462,6 +485,7 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     temsis,
     status: '已定位',
     unlockIndex: target.unlockIndex,
+    recordIndex: target.recordIndex,
     detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
       + `對應同一列的第 ${target.unlockIndex + 1} 個解鎖按鈕`,
   };
@@ -472,7 +496,8 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
  * @param {UnlockOutcome} outcome 會被就地補上解鎖後的狀態
  */
 async function unlockLocatedTarget(page, outcome) {
-  const caseInfo = `${outcome.caseDate ?? '日期讀不到'}　${outcome.vehicle ?? '車輛讀不到'}`;
+  const caseInfo = `${outcome.caseDate ?? '日期讀不到'}　`
+    + `${outcome.vehicle ?? outcome.squad ?? '車輛讀不到'}`;
   log.step(`按下「${UNLOCK.buttonTexts.unlock[0]}」（${caseInfo}）`);
   const result = await performUnlock(page, outcome.unlockIndex);
 
@@ -500,8 +525,20 @@ async function processTemsis(context, page, temsis, range, options) {
     await openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range);
     const outcome = await locateUnlockTarget(context, page, temsis);
     outcome.caseDate = caseInfo.caseDate;
-    outcome.vehicle = caseInfo.vehicle;
     log[outcome.status === '已定位' ? 'ok' : 'warn'](`${maskCode(temsis)}：${outcome.detail}`);
+
+    // 確定是哪一張之後，才讀得到「那一張」所屬的車輛（一件案子可能出動兩台車）。
+    if (outcome.status === '已定位') {
+      const caseRow = await readCaseRowInfo(page, outcome.recordIndex);
+      outcome.vehicle = caseRow.vehicle;
+      outcome.squad = caseRow.squad;
+      if (caseRow.vehicle || caseRow.squad) {
+        log.info(`出勤車輛：${caseRow.vehicle ?? '（讀不到）'}　派遣分隊：${caseRow.squad ?? '（讀不到）'}`);
+      } else {
+        log.warn('讀不到出勤車輛，請依實際欄名調整 config.mjs 的 UNLOCK.caseColumns：');
+        log.info(`　案件內部表格的欄位：${caseRow.headers.join('｜') || '(讀不到表格)'}`);
+      }
+    }
 
     // 只有明確定位到目標才會動手；其餘狀態一律略過，交給人處理。
     if (outcome.status === '已定位' && !options.dryRun) {
@@ -587,7 +624,11 @@ export function printUnlockSummary(outcomes, options = {}) {
     return value + ' '.repeat(Math.max(0, width - displayWidth));
   };
   for (const outcome of outcomes) {
-    const line = `${pad(outcome.caseDate ?? '日期讀不到', 16)}${pad(outcome.vehicle ?? '車輛讀不到', 12)}`
+    // 車輛後面附上分隊（例如「平鎮92（平鎮分隊）」），事後回頭找案件比較好認。
+    const vehicle = outcome.vehicle
+      ? `${outcome.vehicle}${outcome.squad ? `（${outcome.squad}）` : ''}`
+      : outcome.squad ?? '車輛讀不到';
+    const line = `${pad(outcome.caseDate ?? '日期讀不到', 22)}${pad(vehicle, 20)}`
       + `${maskCode(outcome.temsis)}　${outcome.status}　${outcome.detail}`;
     if (outcome.status === '已解鎖' || outcome.status === '已定位') log.ok(line);
     else log.warn(line);
