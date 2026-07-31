@@ -76,8 +76,14 @@ test('extractLabeledValue 找不到標籤時回傳 null', () => {
   assert.equal(extractLabeledValue('這張表沒有那一欄', ['出勤車輛']), null);
 });
 
-test('listSheetLabels 只列出欄位名稱，不列出值', () => {
+test('listSheetLabels 有冒號時只列出欄位名稱，不把值帶出來', () => {
   const labels = listSheetLabels('出勤車輛：桃園91\n受理時間：2026/07/02\n姓名：某某某');
   assert.deepEqual(labels, ['出勤車輛', '受理時間', '姓名']);
-  assert.ok(!labels.join('').includes('桃園91'), '不可帶出任何值');
+  assert.ok(!labels.join('').includes('桃園'), '有冒號可用時就不該啟用會混入值的備援樣式');
+});
+
+test('listSheetLabels 沒有冒號時寧可什麼都不給，也不猜', () => {
+  // 曾試過「中文詞後面接數字」的備援樣式，但它抓到的是值（「桃園」）而不是欄位名，
+  // 既不可靠又可能帶出內容，因此刻意不做。
+  assert.deepEqual(listSheetLabels('受理時間 2026/07/02 出勤車輛 桃園91'), []);
 });

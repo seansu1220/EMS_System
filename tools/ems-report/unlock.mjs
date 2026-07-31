@@ -263,8 +263,15 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   log.ok(`指派案號：${maskCode(codes.dispatchNo)}`);
   // 使用者要求：解鎖時要能看出這是哪一天、哪一台車的案件，供事後回頭核對。
   log.info(`案件日期：${codes.caseDate ?? '（紀錄表上讀不到）'}　出勤車輛：${codes.vehicle ?? '（紀錄表上讀不到）'}`);
-  if ((!codes.caseDate || !codes.vehicle) && codes.availableLabels.length > 0) {
-    log.info(`　紀錄表上實際有的欄位：${codes.availableLabels.join('｜')}`);
+  if (!codes.caseDate || !codes.vehicle) {
+    const missing = [!codes.caseDate && '案件日期', !codes.vehicle && '出勤車輛'].filter(Boolean);
+    log.warn(`紀錄表上找不到「${missing.join('」與「')}」，請依下列實際欄位調整 config.mjs 的 sheetLabels：`);
+    log.info(
+      codes.availableLabels.length > 0
+        ? `　紀錄表上的欄位名稱：${codes.availableLabels.join('｜')}`
+        : '　這張表的排版沒有用冒號分隔，抽不出欄位名稱；'
+          + '請打開任一張救護紀錄表，看那兩欄的標題實際寫什麼，再據以調整設定。',
+    );
   }
   return {
     dispatchNo: codes.dispatchNo,

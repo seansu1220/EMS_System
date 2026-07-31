@@ -11,8 +11,8 @@
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
  *   npm run tool:ems -- probe --manual       改為手動點選的探測模式
  *   npm run tool:ems -- check-sheet          檢查增減用的 Google 試算表能否讀取
- *   npm run tool:ems -- unlock               解鎖救護紀錄表（會實際調整為未結案）
- *   npm run tool:ems -- unlock --dry-run     只找出該解哪一張，不動手（排查用）
+ *   npm run tool:ems -- unlock               試跑：只找出該解哪一張，不會動到系統
+ *   npm run tool:ems -- unlock --execute     真的按下「調整為未結案」
  *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
  */
 import fs from 'node:fs/promises';
@@ -70,8 +70,11 @@ function parseArgs(argv) {
     /** probe 預設全自動；自動導航失敗時可用 --manual 改回手動點選。 */
     manual: args.includes('--manual'),
     temsis: temsisArg.split(/[\s,，;；]+/).filter(Boolean),
-    /** unlock 預設會實際解鎖；加這個參數則只定位不動手（排查或驗證時用）。 */
-    dryRun: args.includes('--dry-run'),
+    /**
+     * unlock **預設是試跑**（只定位不動手），要真的解鎖必須明確加 `--execute`。
+     * 解鎖不可復原，預設值就該是安全的那一邊；`--dry-run` 寫不寫都一樣是試跑。
+     */
+    dryRun: !args.includes('--execute'),
   };
 }
 
@@ -261,9 +264,9 @@ async function withSession(action) {
 /**
  * 解鎖救護紀錄表。
  *
- * ⚠ 預設會**實際按下**「調整為未結案」（使用者 2026-07-31 在試跑驗證通過後決定採全自動）。
- *   只有明確定位到目標的案件才會動手，其餘一律略過；
- *   加 `--dry-run` 可回到「只定位不解鎖」的試跑模式。
+ * ⚠ **預設是試跑**（只定位不動手）。要真的解鎖必須明確加 `--execute`：
+ *   解鎖無法復原，預設值就該站在安全的那一邊。
+ *   實際解鎖時也只有明確定位到目標的案件才會動手，其餘一律略過。
  */
 async function runUnlockCommand(options) {
   const range = getRecentRange(UNLOCK.lookbackMonths);
