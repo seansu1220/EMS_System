@@ -26,6 +26,7 @@ import {
   findPairedRows,
   listFields,
   listClickableTexts,
+  readRowFields,
   groupByRow,
 } from './pageFinder.mjs';
 import { captureSnapshot } from './probe.mjs';
@@ -153,6 +154,41 @@ async function submitQuery(page) {
 }
 
 /**
+ * 從救護紀錄表查詢結果的那一列，讀出案件日期與出勤單位。
+ *
+ * 這是給使用者事後追查用的資訊。優先用這裡而不是 PDF：
+ * 查詢結果是 HTML 表格，欄位有標題列可以對照；PDF 的文字順序則是
+ * 「標題1 標題2 … 值1 值2 …」，抓標籤後面的字會抓到下一個標題（實測踩過）。
+ *
+ * @param {number} index 第幾個紀錄表按鈕（用來定位那一列）
+ * @returns {Promise<{caseDate: string|null, vehicle: string|null, headers: string[]}>}
+ */
+async function readListRowInfo(page, index) {
+  const wanted = [...UNLOCK.listColumns.caseDate, ...UNLOCK.listColumns.vehicle];
+  const row = await readRowFields(
+    content(page),
+    UNLOCK.buttonTexts.openRecordSheet,
+    index,
+    wanted,
+  ).catch(() => null);
+  if (!row) return { caseDate: null, vehicle: null, headers: [] };
+
+  /** 依候選欄名的順序取第一個有值的。 */
+  const pick = (candidates) => {
+    for (const name of candidates) {
+      const value = row.values[name];
+      if (value) return value;
+    }
+    return null;
+  };
+  return {
+    caseDate: pick(UNLOCK.listColumns.caseDate),
+    vehicle: pick(UNLOCK.listColumns.vehicle),
+    headers: row.headers,
+  };
+}
+
+/**
  * 開啟一張救護紀錄表，讀出指派案號與 TEMSIS。
  *
  * @param {number} index 第幾個「救護紀錄PDF」按鈕
@@ -247,6 +283,9 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
     log.warn(`這個 TEMSIS 查到 ${rows.length} 筆案件，取第一筆處理；請自行確認是否合理`);
   }
 
+  // 先從查詢結果那一列讀日期與出勤單位（HTML 表格有標題列可對照，比從 PDF 抓可靠）。
+  const listInfo = await readListRowInfo(page, rows[0][0].index);
+
   const codes = await readSheetCodes(context, page, UNLOCK.buttonTexts.openRecordSheet, rows[0][0].index);
   if (!codes.dispatchNo) {
     await captureSnapshot(context, '解鎖-紀錄表讀不到指派案號');
@@ -269,28 +308,23 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   }
   log.ok(`指派案號：${maskCode(codes.dispatchNo)}`);
   // 使用者要求：解鎖時要能看出這是哪一天、哪一台車的案件，供事後回頭核對。
-  // 標示值是從哪個欄位抓來的：抓錯欄位時光看值不一定看得出來，帶上欄位名才好判斷。
-  const describeField = (value, label) => (value ? `${value}（取自「${label}」）` : '（紀錄表上讀不到）');
+  // 查詢結果那一列優先（欄位有標題可對照）；讀不到才退回紀錄表 PDF 抽出來的值。
+  const caseDate = listInfo.caseDate ?? codes.caseDate;
+  const vehicle = listInfo.vehicle ?? codes.vehicle;
+  const describeField = (value, source) => (value ? `${value}（取自${source}）` : '（讀不到）');
   log.info(
-    `案件日期：${describeField(codes.caseDate, codes.caseDateLabel)}`
-      + `　出勤車輛：${describeField(codes.vehicle, codes.vehicleLabel)}`,
+    `案件日期：${describeField(caseDate, listInfo.caseDate ? '查詢結果' : `紀錄表的「${codes.caseDateLabel}」`)}`
+      + `　出勤單位：${describeField(vehicle, listInfo.vehicle ? '查詢結果' : `紀錄表的「${codes.vehicleLabel}」`)}`,
   );
-  if (!codes.caseDate || !codes.vehicle) {
-    const missing = [!codes.caseDate && '案件日期', !codes.vehicle && '出勤車輛'].filter(Boolean);
-    log.warn(`紀錄表上找不到「${missing.join('」與「')}」，請依下列實際欄位調整 config.mjs 的 sheetLabels：`);
-    log.info(
-      codes.availableLabels.length > 0
-        ? `　紀錄表上的欄位名稱：${codes.availableLabels.join('｜')}`
-        : '　這張表的排版沒有用冒號分隔，抽不出欄位名稱；'
-          + '請打開任一張救護紀錄表，看那兩欄的標題實際寫什麼，再據以調整設定。',
-    );
+  if (!caseDate || !vehicle) {
+    const missing = [!caseDate && '案件日期', !vehicle && '出勤單位'].filter(Boolean);
+    log.warn(`找不到「${missing.join('」與「')}」，請依下列實際欄名調整 config.mjs：`);
+    log.info(`　查詢結果的欄位：${listInfo.headers.join('｜') || '(讀不到表格)'}`);
+    if (codes.availableLabels.length > 0) {
+      log.info(`　紀錄表上的欄位：${codes.availableLabels.join('｜')}`);
+    }
   }
-  return {
-    dispatchNo: codes.dispatchNo,
-    sheetTemsis: codes.temsis,
-    caseDate: codes.caseDate,
-    vehicle: codes.vehicle,
-  };
+  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis, caseDate, vehicle };
 }
 
 /** 步驟 3~4：以指派案號在案件列表找到案件並進入內部。 */

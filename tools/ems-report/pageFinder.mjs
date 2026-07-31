@@ -136,6 +136,31 @@ function queryPage(params) {
     return [...seen];
   }
 
+  if (params.mode === 'rowFields') {
+    // 讀取「某個按鈕所在的那一列」的指定欄位。
+    // 表格有標題列可以對照，比從 PDF 硬抓可靠得多
+    // （PDF 的文字順序是「標題1 標題2 … 值1 值2 …」，抓標籤後面的字會抓到下一個標題）。
+    const target = collectClickables(params.texts, params.exact, true)[params.index];
+    if (!target) return null;
+    const row = target.closest('tr');
+    const table = row ? row.closest('table') : null;
+    if (!row || !table) return null;
+
+    const textOf = (cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim();
+    // 標題列：優先找含 <th> 的列，沒有就用表格第一列。
+    const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+    const headers = headerRow && headerRow !== row ? [...headerRow.cells].map(textOf) : [];
+    const cells = [...row.cells].map(textOf);
+
+    // ⚠ 個資：**只回傳指定欄位的值**，其餘儲存格內容一律不帶出去。
+    const values = {};
+    for (const wanted of params.wantedHeaders) {
+      const index = headers.findIndex((header) => normalize(header).includes(normalize(wanted)));
+      if (index >= 0 && cells[index] !== undefined) values[wanted] = cells[index].slice(0, 40);
+    }
+    return { headers, values, columnCount: cells.length };
+  }
+
   if (params.mode === 'click') {
     const target = collectClickables(params.texts, params.exact, params.onlyVisible)[params.index];
     if (!target) return false;
@@ -353,6 +378,29 @@ export async function clickMatch(frame, textCandidates, index = 0, options = {})
     index,
     exact: options.exact ?? false,
     onlyVisible: options.onlyVisible ?? true,
+  });
+}
+
+/**
+ * 讀取「某個按鈕所在那一列」的指定欄位。
+ *
+ * ⚠ 個資：只回傳 `wantedHeaders` 命中的欄位值，其餘儲存格內容不會被帶出來；
+ *   `headers`（欄位名稱）屬表格結構，可安全記錄，用來排查欄名對不上的情況。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} textCandidates 用來定位那一列的按鈕文字
+ * @param {number} index 第幾個符合的按鈕
+ * @param {string[]} wantedHeaders 想取得的欄位名稱（以「包含」比對）
+ * @param {{exact?: boolean}} [options] 必須與取得 index 時的比對方式一致
+ * @returns {Promise<{headers: string[], values: Record<string,string>, columnCount: number}|null>}
+ */
+export async function readRowFields(frame, textCandidates, index, wantedHeaders, options = {}) {
+  return frame.evaluate(queryPage, {
+    mode: 'rowFields',
+    texts: textCandidates,
+    index,
+    wantedHeaders,
+    exact: options.exact ?? false,
   });
 }
 
