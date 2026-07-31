@@ -74,7 +74,10 @@ export function extractLabeledCode(text, labelCandidates, options = {}) {
  *
  * @param {string} text 紀錄表全文
  * @param {string[]} labelCandidates
- * @param {{maxLength?: number}} [options]
+ * @param {{maxLength?: number, singleToken?: boolean}} [options]
+ *   singleToken＝true 時只取到第一個空白為止。PDF 常把好幾欄排在同一行
+ *   （`出勤單位 桃園91 出勤人員`），值本身不含空白時開這個才不會把下一欄也吃進來；
+ *   日期這種值裡有空白的（`07-02 07:32`）就不能開。
  * @returns {{value: string, label: string}|null}
  */
 export function extractLabeledValue(text, labelCandidates, options = {}) {
@@ -90,12 +93,12 @@ export function extractLabeledValue(text, labelCandidates, options = {}) {
 
     const labelEndInSource = indexMap[hit + compactedLabel.length - 1];
     if (labelEndInSource === undefined) continue;
-    const value = text
+    const afterLabel = text
       .slice(labelEndInSource + 1)
-      // 值之前常有冒號與空白，先清掉；再取到換行為止。
-      .replace(/^[\s　:：]+/, '')
-      .split('\n')[0]
-      .trim()
+      // 值之前常有冒號與空白（含換行，值在下一行也接得到），先清掉。
+      .replace(/^[\s　:：]+/, '');
+    const firstLine = afterLabel.split('\n')[0].trim();
+    const value = (options.singleToken ? (/^\S+/.exec(firstLine)?.[0] ?? '') : firstLine)
       .slice(0, maxLength);
     if (value) return { value, label };
   }

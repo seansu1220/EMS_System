@@ -87,3 +87,15 @@ test('listSheetLabels 沒有冒號時寧可什麼都不給，也不猜', () => {
   // 既不可靠又可能帶出內容，因此刻意不做。
   assert.deepEqual(listSheetLabels('受理時間 2026/07/02 出勤車輛 桃園91'), []);
 });
+
+test('extractLabeledValue 的 singleToken 只取第一段，不把同一行的下一欄吃進來', () => {
+  // PDF 常把好幾欄排在同一行：出勤單位 桃園91 出勤人員 ...
+  const text = '出勤單位 桃園91 出勤人員 某某某';
+  assert.equal(extractLabeledValue(text, ['出勤單位'], { singleToken: true })?.value, '桃園91');
+  // 不開 singleToken 時會取整行（日期這種值裡有空白的欄位需要）
+  assert.equal(extractLabeledValue('日期 07-02 07:32', ['日期'])?.value, '07-02 07:32');
+});
+
+test('extractLabeledValue 值排在標籤的下一行也接得到', () => {
+  assert.equal(extractLabeledValue('出勤單位\n楊梅95\n出勤人員', ['出勤單位'], { singleToken: true })?.value, '楊梅95');
+});

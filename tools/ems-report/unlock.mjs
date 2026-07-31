@@ -165,13 +165,20 @@ async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
   const temsis = extractLabeledCode(sheet.text, UNLOCK.sheetLabels.temsis);
   // 日期與車輛只是留給使用者事後追查的參考，抓不到不影響解鎖。
   const caseDate = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.caseDate, { maxLength: 24 });
-  const vehicle = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.vehicle, { maxLength: 16 });
+  // 車號不含空白，只取第一段，才不會把同一行的下一個欄位也吃進來。
+  const vehicle = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.vehicle, {
+    maxLength: 16,
+    singleToken: true,
+  });
   log.info(`紀錄表已讀取（${sheet.kind}／${sheet.source}），共 ${sheet.text.length} 個字元`);
   return {
     dispatchNo: dispatchNo?.value ?? null,
     temsis: temsis?.value ?? null,
     caseDate: caseDate?.value ?? null,
     vehicle: vehicle?.value ?? null,
+    /** 值是從哪個欄位抓來的，印在紀錄裡讓使用者能一眼判斷抓對了沒。 */
+    caseDateLabel: caseDate?.label ?? null,
+    vehicleLabel: vehicle?.label ?? null,
     kind: sheet.kind,
     /** 欄位抓不到時用來排查的標籤清單（只有欄位名稱，沒有內容）。 */
     availableLabels: dispatchNo && caseDate && vehicle ? [] : listSheetLabels(sheet.text),
@@ -262,7 +269,12 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   }
   log.ok(`指派案號：${maskCode(codes.dispatchNo)}`);
   // 使用者要求：解鎖時要能看出這是哪一天、哪一台車的案件，供事後回頭核對。
-  log.info(`案件日期：${codes.caseDate ?? '（紀錄表上讀不到）'}　出勤車輛：${codes.vehicle ?? '（紀錄表上讀不到）'}`);
+  // 標示值是從哪個欄位抓來的：抓錯欄位時光看值不一定看得出來，帶上欄位名才好判斷。
+  const describeField = (value, label) => (value ? `${value}（取自「${label}」）` : '（紀錄表上讀不到）');
+  log.info(
+    `案件日期：${describeField(codes.caseDate, codes.caseDateLabel)}`
+      + `　出勤車輛：${describeField(codes.vehicle, codes.vehicleLabel)}`,
+  );
   if (!codes.caseDate || !codes.vehicle) {
     const missing = [!codes.caseDate && '案件日期', !codes.vehicle && '出勤車輛'].filter(Boolean);
     log.warn(`紀錄表上找不到「${missing.join('」與「')}」，請依下列實際欄位調整 config.mjs 的 sheetLabels：`);
@@ -533,9 +545,16 @@ export async function runUnlockFlow(session, options) {
  */
 export function printUnlockSummary(outcomes, options = {}) {
   log.step('執行結果');
+  // 日期與車輛擺在最前面：這是使用者事後回頭追查案件時最先要找的兩個欄位。
+  const pad = (text, width) => {
+    const value = String(text ?? '');
+    // 中文字在終端機約佔兩個字元寬，補空白時要算進去才對得齊。
+    const displayWidth = [...value].reduce((sum, char) => sum + (/[一-龥]/.test(char) ? 2 : 1), 0);
+    return value + ' '.repeat(Math.max(0, width - displayWidth));
+  };
   for (const outcome of outcomes) {
-    const caseInfo = `${outcome.caseDate ?? '日期讀不到'}｜${outcome.vehicle ?? '車輛讀不到'}`;
-    const line = `${maskCode(outcome.temsis)}　${caseInfo}　${outcome.status}　${outcome.detail}`;
+    const line = `${pad(outcome.caseDate ?? '日期讀不到', 16)}${pad(outcome.vehicle ?? '車輛讀不到', 12)}`
+      + `${maskCode(outcome.temsis)}　${outcome.status}　${outcome.detail}`;
     if (outcome.status === '已解鎖' || outcome.status === '已定位') log.ok(line);
     else log.warn(line);
   }
