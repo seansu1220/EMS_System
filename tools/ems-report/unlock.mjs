@@ -9,8 +9,9 @@
  *   5. 只有一張紀錄表 → 那張就是目標
  *      有多張 → 逐張開啟比對 TEMSIS，只有相符的那張才是目標
  *
- * ⚠ 安全設計：**本版只做到「找出目標」為止，絕不按下「調整為未結案」**。
- *   解鎖是不可復原的寫入動作，等使用者用試跑結果確認比對邏輯無誤後才會開放。
+ * ⚠ 安全設計：**預設是試跑**（只找出目標，不按下「調整為未結案」），
+ *   要真的解鎖必須明確加 `--execute`。解鎖是不可復原的寫入動作，
+ *   且只有「明確定位到唯一目標」的案件才會動手，其餘一律略過。
  *
  * ⚠ 個資原則：紀錄表全文只存在記憶體，用完即棄；畫面與紀錄檔一律只顯示遮蔽後的編號末 4 碼。
  */
@@ -130,6 +131,19 @@ async function applyTextCondition(page, labelCandidates, value, fieldName) {
   await fillField(content(page), field.selector, value, fieldName, {
     displayValue: maskCode(value),
   });
+}
+
+/**
+ * 找可點元素；一個都沒有時多等一輪再找一次。
+ *
+ * 查詢結果是非同步回填的，第一次找不到未必代表真的沒有——
+ * 直接判定「查無案件」會冤枉掉存在的案件，多等一次的成本則很低。
+ */
+async function findClickablesWithRetry(page, textCandidates, options = {}) {
+  const found = await findClickables(content(page), textCandidates, options);
+  if (found.length > 0) return found;
+  await page.waitForTimeout(UNLOCK.settleMs);
+  return findClickables(content(page), textCandidates, options);
 }
 
 /**
@@ -298,7 +312,7 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   await applyTextCondition(page, UNLOCK.fieldLabels.temsis, temsis, 'TEMSIS');
   await submitQuery(page);
 
-  const buttons = await findClickables(content(page), UNLOCK.buttonTexts.openRecordSheet);
+  const buttons = await findClickablesWithRetry(page, UNLOCK.buttonTexts.openRecordSheet);
   const rows = groupByRow(buttons);
   if (rows.length === 0) {
     await captureSnapshot(context, '解鎖-救護紀錄表查詢無結果');
@@ -359,7 +373,7 @@ async function openCaseByDispatchNo(context, page, dispatchNo, range) {
   await submitQuery(page);
 
   // 用完全相同比對：「救護紀錄」若用包含比對，會連「救護紀錄PDF」一起命中。
-  const links = await findClickables(content(page), UNLOCK.buttonTexts.openCase, { exact: true });
+  const links = await findClickablesWithRetry(page, UNLOCK.buttonTexts.openCase, { exact: true });
   const rows = groupByRow(links);
   if (rows.length === 0) {
     await captureSnapshot(context, '解鎖-案件列表無結果');
@@ -371,12 +385,61 @@ async function openCaseByDispatchNo(context, page, dispatchNo, range) {
   if (rows.length > 1) {
     log.warn(`案件列表查到 ${rows.length} 筆，取第一筆進入；請自行確認是否合理`);
   }
-  if (!(await clickMatch(content(page), UNLOCK.buttonTexts.openCase, rows[0][0].index, { exact: true }))) {
-    throw new Error('點不開案件（「救護紀錄」連結在點擊當下消失了）');
+  // 點完之後**必須確認真的換頁了**才能往下做。
+  // 只固定等幾秒的話，頁面還沒切換時會把案件列表誤當成案件內部，
+  // 於是回報「找不到解鎖按鈕」——實跑時三筆有兩筆栽在這裡。
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const clicked = await clickMatch(
+      content(page),
+      UNLOCK.buttonTexts.openCase,
+      rows[0][0].index,
+      { exact: true },
+    );
+    if (!clicked) throw new Error('點不開案件（「救護紀錄」連結在點擊當下消失了）');
+
+    await page.waitForLoadState('load', { timeout: 60000 }).catch(() => {});
+    if (await waitForCaseDetail(page)) {
+      await captureSnapshot(context, '解鎖-案件內部');
+      return;
+    }
+    log.warn(`點了「${UNLOCK.buttonTexts.openCase[0]}」但還沒進入案件內部（第 ${attempt} 次）`);
   }
-  await page.waitForLoadState('load', { timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(UNLOCK.settleMs);
-  await captureSnapshot(context, '解鎖-案件內部');
+
+  await captureSnapshot(context, '解鎖-進不了案件內部');
+  throw new Error(
+    `點了「${UNLOCK.buttonTexts.openCase[0]}」兩次，`
+      + `${UNLOCK.caseDetailTimeoutMs / 1000} 秒內都沒有出現案件內部的畫面`
+      + `（判斷依據：出現「${UNLOCK.caseDetailMarkers.join('」「')}」任一個）。`
+      + await describeClickableOptions(page),
+  );
+}
+
+/**
+ * 等待畫面真的變成「案件內部」。
+ *
+ * 以畫面上出現特定字樣為準，而不是等固定秒數：頁面切換的快慢會隨網路與資料量變動，
+ * 用時間猜必然有時對有時錯。
+ *
+ * ⚠ 只回傳「有沒有出現特徵字」這個布林值，不把頁面內容帶出來。
+ *
+ * @returns {Promise<boolean>}
+ */
+async function waitForCaseDetail(page) {
+  const deadline = Date.now() + UNLOCK.caseDetailTimeoutMs;
+  while (Date.now() < deadline) {
+    const arrived = await content(page)
+      .evaluate(
+        (markers) => {
+          const text = document.body?.innerText ?? '';
+          return markers.some((marker) => text.includes(marker));
+        },
+        UNLOCK.caseDetailMarkers,
+      )
+      .catch(() => false);
+    if (arrived) return true;
+    await page.waitForTimeout(500);
+  }
+  return false;
 }
 
 /**
