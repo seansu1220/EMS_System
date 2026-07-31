@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0.."
-title EMS Record Unlock (DRY RUN)
+title EMS Record Unlock
 
 rem NOTE: keep this file pure ASCII. The console runs in a DBCS code page,
 rem where non-ASCII bytes swallow the following characters and break parsing.
@@ -33,15 +33,19 @@ if not exist "node_modules\pdfjs-dist\" (
 
 echo.
 echo ============================================
-echo   Unlock Ambulance Records (DRY RUN)
+echo   Unlock Ambulance Records
 echo   ----------------------------------------
 echo   1. Paste TEMSIS numbers, one per line.
-echo   2. Press Enter on an empty line to start.
+echo      Enter = next line, NOT start.
+echo   2. Press Enter on an EMPTY line to start.
 echo   3. A browser opens - type the CAPTCHA
 echo      and sign in. The rest is automatic.
 echo.
-echo   This version ONLY reports which record
-echo   would be unlocked. It never clicks it.
+echo   *** THIS REALLY UNLOCKS THE RECORDS ***
+echo   Cases it cannot identify are skipped,
+echo   never guessed. The date and vehicle of
+echo   every case are written to the log file
+echo   tools\ems-report\out\last-run.log
 echo.
 echo   KEEP THIS WINDOW OPEN until it finishes.
 echo ============================================

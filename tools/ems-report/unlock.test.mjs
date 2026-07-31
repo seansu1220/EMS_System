@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { locateUnlockTarget } from './unlock.mjs';
+import { locateUnlockTarget, performUnlock } from './unlock.mjs';
 import { groupByRow, normalizeText } from './pageFinder.mjs';
 import { getRecentRange } from './dateRange.mjs';
 import { SITE } from './config.mjs';
@@ -137,6 +137,59 @@ test('TEMSIS 相符但同一列找不到解鎖按鈕時，寧可人工處理也�
   });
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /同一列/);
+});
+
+/**
+ * 造一個假 page 給 performUnlock 用：
+ * 解鎖前有 buttonCounts[0] 個按鈕，按下去之後變成 buttonCounts[1] 個。
+ */
+function createUnlockPage(buttonCounts, { clickSucceeds = true } = {}) {
+  let clicked = false;
+  const frame = {
+    name: () => SITE.frames.content,
+    async evaluate(_fn, params) {
+      if (params.mode === 'click') {
+        clicked = clickSucceeds;
+        return clickSucceeds;
+      }
+      const count = clicked ? buttonCounts[1] : buttonCounts[0];
+      return Array.from({ length: count }, (_value, index) => ({
+        index,
+        tag: 'a',
+        text: '調整為未結案',
+        visible: true,
+        rowIndex: index,
+      }));
+    },
+  };
+  return {
+    frames: () => [frame],
+    on() {},
+    off() {},
+    async waitForLoadState() {},
+    async waitForTimeout() {},
+  };
+}
+
+test('解鎖後按鈕變少才算成功', async () => {
+  const result = await performUnlock(createUnlockPage([2, 1]), 0);
+  assert.deepEqual(result, { before: 2, after: 1, confirmed: true });
+});
+
+test('按了但按鈕數量沒變，不可以當成解鎖成功', async () => {
+  // 這種情況可能是根本沒生效（例如確認視窗被取消），必須讓使用者知道要自己確認。
+  const result = await performUnlock(createUnlockPage([2, 2]), 0);
+  assert.equal(result.confirmed, false);
+});
+
+test('按不到解鎖按鈕時要拋錯，不可以安靜地當作做完了', async () => {
+  await assert.rejects(
+    () => performUnlock(createUnlockPage([2, 2], { clickSucceeds: false }), 1),
+    (error) => {
+      assert.match(error.message, /按不到第 2 個/);
+      return true;
+    },
+  );
 });
 
 test('groupByRow 把同一列的多個按鈕算成一筆案件', () => {

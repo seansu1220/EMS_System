@@ -11,7 +11,8 @@
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
  *   npm run tool:ems -- probe --manual       改為手動點選的探測模式
  *   npm run tool:ems -- check-sheet          檢查增減用的 Google 試算表能否讀取
- *   npm run tool:ems -- unlock               解鎖救護紀錄表（試跑：只定位不解鎖）
+ *   npm run tool:ems -- unlock               解鎖救護紀錄表（會實際調整為未結案）
+ *   npm run tool:ems -- unlock --dry-run     只找出該解哪一張，不動手（排查用）
  *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
  */
 import fs from 'node:fs/promises';
@@ -51,7 +52,7 @@ const COMMANDS = ['run', 'probe', 'check-sheet', 'unlock'];
  * @property {boolean} keepRaw
  * @property {boolean} manual
  * @property {string[]} temsis
- * @property {boolean} execute
+ * @property {boolean} dryRun
  */
 
 /** 解析命令列參數。 */
@@ -69,8 +70,8 @@ function parseArgs(argv) {
     /** probe 預設全自動；自動導航失敗時可用 --manual 改回手動點選。 */
     manual: args.includes('--manual'),
     temsis: temsisArg.split(/[\s,，;；]+/).filter(Boolean),
-    /** 保留給日後開放實際解鎖用；本版一律拒絕，見 runUnlockCommand。 */
-    execute: args.includes('--execute'),
+    /** unlock 預設會實際解鎖；加這個參數則只定位不動手（排查或驗證時用）。 */
+    dryRun: args.includes('--dry-run'),
   };
 }
 
@@ -260,15 +261,11 @@ async function withSession(action) {
 /**
  * 解鎖救護紀錄表。
  *
- * ⚠ 本版是**試跑**：只查詢、比對、告訴你「該解哪一張」，
- *   絕不按下「調整為未結案」。等使用者確認比對邏輯無誤後才會開放實際解鎖。
+ * ⚠ 預設會**實際按下**「調整為未結案」（使用者 2026-07-31 在試跑驗證通過後決定採全自動）。
+ *   只有明確定位到目標的案件才會動手，其餘一律略過；
+ *   加 `--dry-run` 可回到「只定位不解鎖」的試跑模式。
  */
 async function runUnlockCommand(options) {
-  if (options.execute) {
-    log.warn('本版尚未開放實際解鎖（--execute 無效）。');
-    log.info('請先用試跑確認每一筆都定位正確，再回報，屆時才會加上真正按下按鈕的功能。');
-    return;
-  }
   const range = getRecentRange(UNLOCK.lookbackMonths);
   const temsisList = options.temsis.length > 0 ? options.temsis : await promptTemsisList();
   if (temsisList.length === 0) {
@@ -276,8 +273,8 @@ async function runUnlockCommand(options) {
     return;
   }
   await withSession(async (session) => {
-    const outcomes = await runUnlockFlow(session, { temsisList, range });
-    printUnlockSummary(outcomes);
+    const outcomes = await runUnlockFlow(session, { temsisList, range, dryRun: options.dryRun });
+    printUnlockSummary(outcomes, { dryRun: options.dryRun });
   });
 }
 

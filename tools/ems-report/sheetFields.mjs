@@ -67,6 +67,61 @@ export function extractLabeledCode(text, labelCandidates, options = {}) {
 }
 
 /**
+ * 找出某個標籤後面接的一段文字（值不是編號時用，例如車輛名稱「桃園91」）。
+ *
+ * 與 `extractLabeledCode` 的差別：不限定英數字，改成「取到換行或下一個標籤為止」。
+ * 因此**可能連到下一欄的內容**，只適合用在給人看的參考資訊，不可用於比對判斷。
+ *
+ * @param {string} text 紀錄表全文
+ * @param {string[]} labelCandidates
+ * @param {{maxLength?: number}} [options]
+ * @returns {{value: string, label: string}|null}
+ */
+export function extractLabeledValue(text, labelCandidates, options = {}) {
+  if (!text) return null;
+  const maxLength = options.maxLength ?? 20;
+  const { compacted, indexMap } = compactWithIndex(text);
+
+  for (const label of labelCandidates) {
+    const { compacted: compactedLabel } = compactWithIndex(label);
+    if (!compactedLabel) continue;
+    const hit = compacted.indexOf(compactedLabel);
+    if (hit === -1) continue;
+
+    const labelEndInSource = indexMap[hit + compactedLabel.length - 1];
+    if (labelEndInSource === undefined) continue;
+    const value = text
+      .slice(labelEndInSource + 1)
+      // 值之前常有冒號與空白，先清掉；再取到換行為止。
+      .replace(/^[\s　:：]+/, '')
+      .split('\n')[0]
+      .trim()
+      .slice(0, maxLength);
+    if (value) return { value, label };
+  }
+  return null;
+}
+
+/**
+ * 列出文字中看起來像「欄位標籤」的字串（`中文：` 形式），去重。
+ *
+ * 只在需要的欄位抓不到時用來排查——**標籤是表單的結構，不是個人資料**，
+ * 與探測模式只記錄欄位名稱的作法一致。
+ *
+ * @param {string} text
+ * @param {number} [limit]
+ * @returns {string[]}
+ */
+export function listSheetLabels(text, limit = 40) {
+  const labels = new Set();
+  for (const matched of String(text ?? '').matchAll(/([一-龥A-Za-z]{2,12})\s*[:：]/g)) {
+    labels.add(matched[1]);
+    if (labels.size >= limit) break;
+  }
+  return [...labels];
+}
+
+/**
  * 兩個編號是否視為同一筆。
  *
  * 比對前去掉空白與常見分隔符號並轉大寫：同一個 TEMSIS 在不同畫面上

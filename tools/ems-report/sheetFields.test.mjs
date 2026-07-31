@@ -7,7 +7,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractLabeledCode, isSameCode, maskCode } from './sheetFields.mjs';
+import {
+  extractLabeledCode,
+  extractLabeledValue,
+  listSheetLabels,
+  isSameCode,
+  maskCode,
+} from './sheetFields.mjs';
 
 test('extractLabeledCode 取得標籤後面的編號', () => {
   const text = '救災救護指揮中心指派案號：1150701000123\n姓名：某某某';
@@ -58,4 +64,20 @@ test('maskCode 只留末 4 碼', () => {
   assert.equal(maskCode('1150701000123'), '*********0123');
   assert.equal(maskCode('123'), '***');
   assert.equal(maskCode(''), '(空白)');
+});
+
+test('extractLabeledValue 取得非編號的值（例如車輛名稱）', () => {
+  const text = '出勤車輛：桃園91\n受理時間：2026/07/02 10:10:03';
+  assert.equal(extractLabeledValue(text, ['出勤車輛'])?.value, '桃園91');
+  assert.equal(extractLabeledValue(text, ['受理時間'])?.value, '2026/07/02 10:10:03');
+});
+
+test('extractLabeledValue 找不到標籤時回傳 null', () => {
+  assert.equal(extractLabeledValue('這張表沒有那一欄', ['出勤車輛']), null);
+});
+
+test('listSheetLabels 只列出欄位名稱，不列出值', () => {
+  const labels = listSheetLabels('出勤車輛：桃園91\n受理時間：2026/07/02\n姓名：某某某');
+  assert.deepEqual(labels, ['出勤車輛', '受理時間', '姓名']);
+  assert.ok(!labels.join('').includes('桃園91'), '不可帶出任何值');
 });

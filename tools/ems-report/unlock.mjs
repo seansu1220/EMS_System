@@ -30,13 +30,22 @@ import {
 } from './pageFinder.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
-import { extractLabeledCode, isSameCode, maskCode } from './sheetFields.mjs';
+import {
+  extractLabeledCode,
+  extractLabeledValue,
+  listSheetLabels,
+  isSameCode,
+  maskCode,
+} from './sheetFields.mjs';
 
 /**
  * @typedef {Object} UnlockOutcome
  * @property {string} temsis 使用者輸入的 TEMSIS（顯示時會遮蔽）
- * @property {'已定位'|'查無案件'|'需人工處理'|'失敗'} status
+ * @property {'已解鎖'|'已定位'|'查無案件'|'需人工處理'|'失敗'} status
  * @property {string} detail 給人看的說明
+ * @property {number} [unlockIndex] 目標是第幾個解鎖按鈕（0 起算）
+ * @property {string|null} [caseDate] 案件日期（供事後追查，抓不到為 null）
+ * @property {string|null} [vehicle] 出勤車輛（供事後追查，抓不到為 null）
  */
 
 /** 取得目前的內容框（每次動作都會重載，不可快取）。 */
@@ -154,12 +163,57 @@ async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
   const sheet = await openRecordSheet(context, content(page), buttonTexts, index, options);
   const dispatchNo = extractLabeledCode(sheet.text, UNLOCK.sheetLabels.dispatchNo);
   const temsis = extractLabeledCode(sheet.text, UNLOCK.sheetLabels.temsis);
+  // 日期與車輛只是留給使用者事後追查的參考，抓不到不影響解鎖。
+  const caseDate = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.caseDate, { maxLength: 24 });
+  const vehicle = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.vehicle, { maxLength: 16 });
   log.info(`紀錄表已讀取（${sheet.kind}／${sheet.source}），共 ${sheet.text.length} 個字元`);
   return {
     dispatchNo: dispatchNo?.value ?? null,
     temsis: temsis?.value ?? null,
+    caseDate: caseDate?.value ?? null,
+    vehicle: vehicle?.value ?? null,
     kind: sheet.kind,
+    /** 欄位抓不到時用來排查的標籤清單（只有欄位名稱，沒有內容）。 */
+    availableLabels: dispatchNo && caseDate && vehicle ? [] : listSheetLabels(sheet.text),
   };
+}
+
+/**
+ * 真的按下「調整為未結案」。
+ *
+ * ⚠ 這是整個工具唯一會**改動系統資料**的地方，而且無法復原。
+ * 呼叫前必須已經確定目標（`locateUnlockTarget` 回報「已定位」）。
+ *
+ * @param {number} unlockIndex 第幾個解鎖按鈕（0 起算）
+ * @returns {Promise<{before: number, after: number, confirmed: boolean}>}
+ */
+export async function performUnlock(page, unlockIndex) {
+  const countUnlockButtons = async () =>
+    (await findClickables(content(page), UNLOCK.buttonTexts.unlock)).length;
+  const before = await countUnlockButtons();
+
+  // 系統很可能跳確認視窗。**Playwright 預設會自動按取消**，
+  // 不自己接手的話會靜靜地什麼都沒解到，卻看起來像成功了。
+  const onDialog = async (dialog) => {
+    const message = dialog.message().replace(/\d{5,}/g, '#####').slice(0, 80);
+    log.info(`系統跳出確認視窗：「${message}」→ 按下確定`);
+    await dialog.accept().catch(() => {});
+  };
+  page.on('dialog', onDialog);
+  try {
+    const clicked = await clickMatch(content(page), UNLOCK.buttonTexts.unlock, unlockIndex);
+    if (!clicked) {
+      throw new Error(`按不到第 ${unlockIndex + 1} 個「${UNLOCK.buttonTexts.unlock[0]}」按鈕`);
+    }
+    await page.waitForLoadState('load', { timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(UNLOCK.settleMs);
+  } finally {
+    page.off('dialog', onDialog);
+  }
+
+  // 回讀驗證：解鎖成功的話，那一列的解鎖按鈕就不該再出現。
+  const after = await countUnlockButtons();
+  return { before, after, confirmed: after < before };
 }
 
 /**
@@ -207,7 +261,17 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
     );
   }
   log.ok(`指派案號：${maskCode(codes.dispatchNo)}`);
-  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis };
+  // 使用者要求：解鎖時要能看出這是哪一天、哪一台車的案件，供事後回頭核對。
+  log.info(`案件日期：${codes.caseDate ?? '（紀錄表上讀不到）'}　出勤車輛：${codes.vehicle ?? '（紀錄表上讀不到）'}`);
+  if ((!codes.caseDate || !codes.vehicle) && codes.availableLabels.length > 0) {
+    log.info(`　紀錄表上實際有的欄位：${codes.availableLabels.join('｜')}`);
+  }
+  return {
+    dispatchNo: codes.dispatchNo,
+    sheetTemsis: codes.temsis,
+    caseDate: codes.caseDate,
+    vehicle: codes.vehicle,
+  };
 }
 
 /** 步驟 3~4：以指派案號在案件列表找到案件並進入內部。 */
@@ -277,7 +341,12 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     };
   }
   if (paired.unlockCount === 1) {
-    return { temsis, status: '已定位', detail: '案件內只有一張紀錄表，該張即為解鎖目標' };
+    return {
+      temsis,
+      status: '已定位',
+      unlockIndex: 0,
+      detail: '案件內只有一張紀錄表，該張即為解鎖目標',
+    };
   }
   if (paired.recordCount === 0) {
     // 有多個解鎖按鈕卻找不到可點開的紀錄表，就無從比對 TEMSIS，此時任何選擇都是猜的。
@@ -339,21 +408,52 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   return {
     temsis,
     status: '已定位',
+    unlockIndex: target.unlockIndex,
     detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
       + `對應同一列的第 ${target.unlockIndex + 1} 個解鎖按鈕`,
   };
 }
 
 /**
+ * 定位成功後，真的按下解鎖並確認結果。
+ * @param {UnlockOutcome} outcome 會被就地補上解鎖後的狀態
+ */
+async function unlockLocatedTarget(page, outcome) {
+  const caseInfo = `${outcome.caseDate ?? '日期讀不到'}　${outcome.vehicle ?? '車輛讀不到'}`;
+  log.step(`按下「${UNLOCK.buttonTexts.unlock[0]}」（${caseInfo}）`);
+  const result = await performUnlock(page, outcome.unlockIndex);
+
+  if (result.confirmed) {
+    outcome.status = '已解鎖';
+    outcome.detail = `${outcome.detail}；已解鎖（解鎖按鈕由 ${result.before} 個減為 ${result.after} 個）`;
+    log.ok(`已解鎖：${caseInfo}　TEMSIS ${maskCode(outcome.temsis)}`);
+    return;
+  }
+  // 按了但畫面沒變化：可能沒生效，也可能系統本來就不會移除按鈕。不臆測，如實回報。
+  outcome.status = '需人工處理';
+  outcome.detail = `${outcome.detail}；已按下按鈕，但解鎖按鈕數量沒有變少`
+    + `（前後都是 ${result.before} 個），無法確認是否生效，請自行到系統確認`;
+  log.warn(`${maskCode(outcome.temsis)}：${outcome.detail}`);
+}
+
+/**
  * 處理一筆 TEMSIS。
+ * @param {{dryRun: boolean}} options dryRun＝true 時只定位，不按下解鎖
  * @returns {Promise<UnlockOutcome>}
  */
-async function processTemsis(context, page, temsis, range) {
+async function processTemsis(context, page, temsis, range, options) {
   try {
-    const { dispatchNo } = await findDispatchNoByTemsis(context, page, temsis, range);
-    await openCaseByDispatchNo(context, page, dispatchNo, range);
+    const caseInfo = await findDispatchNoByTemsis(context, page, temsis, range);
+    await openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range);
     const outcome = await locateUnlockTarget(context, page, temsis);
+    outcome.caseDate = caseInfo.caseDate;
+    outcome.vehicle = caseInfo.vehicle;
     log[outcome.status === '已定位' ? 'ok' : 'warn'](`${maskCode(temsis)}：${outcome.detail}`);
+
+    // 只有明確定位到目標才會動手；其餘狀態一律略過，交給人處理。
+    if (outcome.status === '已定位' && !options.dryRun) {
+      await unlockLocatedTarget(page, outcome);
+    }
     return outcome;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -391,15 +491,21 @@ export async function promptTemsisList() {
 }
 
 /**
- * 解鎖流程主入口（本版為試跑：只定位目標，不按下解鎖）。
+ * 解鎖流程主入口。
  *
  * @param {import('./session.mjs').EmsSession} session
- * @param {{temsisList: string[], range: import('./dateRange.mjs').MonthRange}} options
+ * @param {{temsisList: string[], range: import('./dateRange.mjs').MonthRange,
+ *   dryRun?: boolean}} options dryRun＝true 時只定位、不解鎖
  * @returns {Promise<UnlockOutcome[]>}
  */
 export async function runUnlockFlow(session, options) {
-  const { temsisList, range } = options;
-  log.step(`試跑模式：只找出「該解哪一張」，不會按下「${UNLOCK.buttonTexts.unlock[0]}」`);
+  const { temsisList, range, dryRun = false } = options;
+  if (dryRun) {
+    log.step(`試跑模式：只找出「該解哪一張」，不會按下「${UNLOCK.buttonTexts.unlock[0]}」`);
+  } else {
+    log.step(`正式模式：定位到目標後會**實際按下**「${UNLOCK.buttonTexts.unlock[0]}」`);
+    log.info('定位不明確的案件一律略過，不會亂解。每筆都會記下案件日期與出勤車輛供事後核對。');
+  }
   log.info(`查詢期間：${range.start} ~ ${range.end}（${range.label}）`);
   log.info(`共 ${temsisList.length} 筆 TEMSIS 要處理`);
 
@@ -407,20 +513,36 @@ export async function runUnlockFlow(session, options) {
   const outcomes = [];
   for (const [position, temsis] of temsisList.entries()) {
     log.step(`第 ${position + 1} / ${temsisList.length} 筆：${maskCode(temsis)}`);
-    outcomes.push(await processTemsis(session.context, session.page, temsis, range));
+    outcomes.push(await processTemsis(session.context, session.page, temsis, range, { dryRun }));
   }
   return outcomes;
 }
 
-/** 把結果整理成終端機摘要。 */
-export function printUnlockSummary(outcomes) {
+/**
+ * 把結果整理成終端機摘要。
+ *
+ * 每一列都帶上案件日期與出勤車輛：使用者無法逐筆人工比對，
+ * 這份紀錄是他日後回頭查「到底解了哪些案件」的唯一依據（使用者 2026-07-31 指定）。
+ */
+export function printUnlockSummary(outcomes, options = {}) {
   log.step('執行結果');
   for (const outcome of outcomes) {
-    const line = `${maskCode(outcome.temsis)}　${outcome.status}　${outcome.detail}`;
-    if (outcome.status === '已定位') log.ok(line);
+    const caseInfo = `${outcome.caseDate ?? '日期讀不到'}｜${outcome.vehicle ?? '車輛讀不到'}`;
+    const line = `${maskCode(outcome.temsis)}　${caseInfo}　${outcome.status}　${outcome.detail}`;
+    if (outcome.status === '已解鎖' || outcome.status === '已定位') log.ok(line);
     else log.warn(line);
   }
+
+  const unlocked = outcomes.filter((item) => item.status === '已解鎖').length;
   const located = outcomes.filter((item) => item.status === '已定位').length;
-  log.info(`共 ${outcomes.length} 筆：定位成功 ${located} 筆、其餘 ${outcomes.length - located} 筆需確認`);
-  log.warn('本版為試跑，沒有任何案件被實際解鎖。');
+  const rest = outcomes.length - unlocked - located;
+  if (options.dryRun) {
+    log.info(`共 ${outcomes.length} 筆：定位成功 ${located} 筆、其餘 ${rest} 筆需確認`);
+    log.warn('本次為試跑，沒有任何案件被實際解鎖。');
+    return;
+  }
+  log.info(`共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆、未處理 ${outcomes.length - unlocked} 筆`);
+  if (unlocked < outcomes.length) {
+    log.warn('未解鎖的案件請自行到系統處理（原因見上方每一列的說明）。');
+  }
 }
