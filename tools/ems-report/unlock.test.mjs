@@ -82,6 +82,24 @@ test('多張紀錄表時，只鎖定 TEMSIS 相符的那一張', async () => {
   assert.match(outcome.detail, /第 2 個解鎖按鈕/);
 });
 
+test('多張紀錄表的 TEMSIS 都相符時停下來讓人看，不自己挑', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 2,
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  // 兩張讀到同一個 TEMSIS：可能是序號沒生效、每次都開到同一張，這種情況不能照解。
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => ({ dispatchNo: '1150701000123', temsis: 'T115070100001', kind: 'pdf' }),
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /都相符/);
+});
+
 test('多張紀錄表都對不上時回報需人工處理，絕不隨便挑一張', async () => {
   const page = createFakePage({
     pairs: [
@@ -101,15 +119,21 @@ test('多張紀錄表都對不上時回報需人工處理，絕不隨便挑一�
 test('TEMSIS 相符但同一列找不到解鎖按鈕時，寧可人工處理也不猜按鈕', async () => {
   const page = createFakePage({
     pairs: [
-      { recordIndex: 0, unlockIndex: -1, recordText: '救護紀錄' },
-      { recordIndex: 1, unlockIndex: -1, recordText: '救護紀錄' },
+      { recordIndex: 0, unlockIndex: -1, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: -1, recordText: '救護紀錄(鎖)' },
     ],
     recordCount: 2,
     unlockCount: 2,
     unlockTexts: [],
   });
+  // 只有第 1 張相符，才測得到「相符卻配不到按鈕」這條路（兩張都相符會先被另一道檢查擋下）。
+  const sheetTemsis = ['T115070100001', 'T115070100002'];
   const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
-    readCodes: async () => ({ dispatchNo: '1150701000123', temsis: 'T115070100001', kind: 'pdf' }),
+    readCodes: async (_context, _page, _texts, index) => ({
+      dispatchNo: '1150701000123',
+      temsis: sheetTemsis[index],
+      kind: 'pdf',
+    }),
   });
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /同一列/);

@@ -291,6 +291,10 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   }
 
   log.info(`有 ${paired.recordCount} 張紀錄表，逐張開啟比對 TEMSIS`);
+  // 找到相符就停下來比較快，但這樣「每一張讀到的是不是真的不同」就無從驗證
+  // （若序號沒生效、每次都開到同一張，光看結果是看不出來的）。
+  // 全部掃過的代價只是多開幾張，換到的是可核對的完整比對表，以及「多張相符」這種異常也能發現。
+  const matches = [];
   for (const pair of paired.pairs) {
     // 文字候選與 exact 都必須與上面 findPairedRows 完全一致，否則序號會對到別張紀錄表。
     const codes = await readCodes(
@@ -300,30 +304,43 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       pair.recordIndex,
       { exact: false },
     );
-    if (!codes.temsis) {
-      log.warn(`第 ${pair.recordIndex + 1} 張紀錄表讀不到 TEMSIS，跳過這張`);
-      continue;
-    }
-    if (!isSameCode(codes.temsis, temsis)) continue;
-    if (pair.unlockIndex < 0) {
-      return {
-        temsis,
-        status: '需人工處理',
-        detail: `第 ${pair.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
-          + '但同一列裡沒有解鎖按鈕，無法確定該按哪一個（不猜，請人工處理）',
-      };
-    }
+    const isMatch = Boolean(codes.temsis) && isSameCode(codes.temsis, temsis);
+    const shown = codes.temsis ? maskCode(codes.temsis) : '（讀不到 TEMSIS）';
+    log.info(`  第 ${pair.recordIndex + 1} 張：${shown}　${isMatch ? '✅ 相符' : '不相符'}`);
+    if (isMatch) matches.push(pair);
+  }
+
+  if (matches.length === 0) {
     return {
       temsis,
-      status: '已定位',
-      detail: `第 ${pair.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
-        + `對應同一列的第 ${pair.unlockIndex + 1} 個解鎖按鈕`,
+      status: '需人工處理',
+      detail: `${paired.recordCount} 張紀錄表都沒有相符的 TEMSIS`,
+    };
+  }
+  if (matches.length > 1) {
+    // 同一件案子裡兩張紀錄表有相同的 TEMSIS 並不合理，寧可停下來讓人看。
+    return {
+      temsis,
+      status: '需人工處理',
+      detail: `有 ${matches.length} 張紀錄表的 TEMSIS 都相符`
+        + `（第 ${matches.map((pair) => pair.recordIndex + 1).join('、')} 張），無法判斷該解哪一張`,
+    };
+  }
+
+  const target = matches[0];
+  if (target.unlockIndex < 0) {
+    return {
+      temsis,
+      status: '需人工處理',
+      detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
+        + '但同一列裡沒有解鎖按鈕，無法確定該按哪一個（不猜，請人工處理）',
     };
   }
   return {
     temsis,
-    status: '需人工處理',
-    detail: `${paired.recordCount} 張紀錄表都沒有相符的 TEMSIS`,
+    status: '已定位',
+    detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
+      + `對應同一列的第 ${target.unlockIndex + 1} 個解鎖按鈕`,
   };
 }
 
