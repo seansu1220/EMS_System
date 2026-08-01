@@ -503,26 +503,45 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   // （若序號沒生效、每次都開到同一張，光看結果是看不出來的）。
   // 全部掃過的代價只是多開幾張，換到的是可核對的完整比對表，以及「多張相符」這種異常也能發現。
   const matches = [];
+  /** 打不開的紀錄表：不能當成「不相符」，因為它有沒有相符根本不知道。 */
+  const unopened = [];
   for (const pair of paired.pairs) {
     // 文字候選與 exact 都必須與上面 findPairedRows 完全一致，否則序號會對到別張紀錄表。
-    const codes = await readCodes(
-      context,
-      page,
-      UNLOCK.buttonTexts.openRecordInCase,
-      pair.recordIndex,
-      { exact: false },
-    );
+    let codes;
+    try {
+      codes = await readCodes(
+        context,
+        page,
+        UNLOCK.buttonTexts.openRecordInCase,
+        pair.recordIndex,
+        { exact: false },
+      );
+    } catch (error) {
+      // 單張打不開就整筆放棄的話，連「已經比對出來的結果」都會一起丟掉。
+      // 這裡改成記下來繼續掃，最後再依「有沒有沒掃到的」決定能不能動手。
+      const reason = error instanceof Error ? error.message : String(error);
+      unopened.push({ recordIndex: pair.recordIndex, reason });
+      log.warn(`  第 ${pair.recordIndex + 1} 張：打不開，無法比對（${reason}）`);
+      continue;
+    }
     const isMatch = Boolean(codes.temsis) && isSameCode(codes.temsis, temsis);
     const shown = codes.temsis ? maskCode(codes.temsis) : '（讀不到 TEMSIS）';
     log.info(`  第 ${pair.recordIndex + 1} 張：${shown}　${isMatch ? '✅ 相符' : '不相符'}`);
     if (isMatch) matches.push(pair);
   }
 
+  /** 打不開的張數描述，接在其他說明後面。 */
+  const unopenedNote = unopened.length === 0 ? ''
+    : `；另有第 ${unopened.map((item) => item.recordIndex + 1).join('、')} 張打不開`
+      + `（${unopened[0].reason}）`;
+
   if (matches.length === 0) {
     return {
       temsis,
       status: '需人工處理',
-      detail: `${paired.recordCount} 張紀錄表都沒有相符的 TEMSIS`,
+      detail: unopened.length === paired.recordCount
+        ? `${paired.recordCount} 張紀錄表全部打不開，無法比對（${unopened[0].reason}）`
+        : `${paired.recordCount - unopened.length} 張打得開的紀錄表都沒有相符的 TEMSIS${unopenedNote}`,
     };
   }
   if (matches.length > 1) {
@@ -540,8 +559,21 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     return {
       temsis,
       status: '需人工處理',
+      recordIndex: target.recordIndex,
       detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
         + '但同一列裡沒有解鎖按鈕，無法確定該按哪一個（不猜，請人工處理）',
+    };
+  }
+  if (unopened.length > 0) {
+    // 只有一張相符，但還有沒掃到的張數——萬一那張也相符，動手就是解錯張。
+    // 目標仍照實回報（含車輛與日期），讓使用者可以自行到系統核對後手動處理。
+    return {
+      temsis,
+      status: '需人工處理',
+      recordIndex: target.recordIndex,
+      detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符`
+        + `（對應第 ${target.unlockIndex + 1} 個解鎖按鈕）`
+        + `${unopenedNote}，無法確認沒有第二張也相符，因此不自動解鎖`,
     };
   }
   return {
@@ -591,7 +623,8 @@ async function processTemsis(context, page, temsis, range, options) {
     log[outcome.status === '已定位' ? 'ok' : 'warn'](`${maskCode(temsis)}：${outcome.detail}`);
 
     // 確定是哪一張之後，才讀得到「那一張」所屬的車輛（一件案子可能出動兩台車）。
-    if (outcome.status === '已定位') {
+    // 只要知道是哪一列就讀，「需人工處理」也一樣——那正是使用者要拿去人工核對的線索。
+    if (typeof outcome.recordIndex === 'number' && outcome.recordIndex >= 0) {
       const caseRow = await readCaseRowInfo(page, outcome.recordIndex);
       outcome.vehicle = caseRow.vehicle;
       outcome.squad = caseRow.squad;
@@ -637,12 +670,15 @@ export async function promptTemsisList() {
   await startLineBuffering();
   try {
     for (;;) {
-      // 第一行特別附上說明，使用者才不會以為按了 Enter 就直接開跑。
-      const hint = collected.length === 0 ? '（貼完按 Enter 換行，空白行開始執行）' : '';
-      const line = await prompt(`  [${collected.length + 1}]${hint} `);
+      // 提示字串刻意維持**短且純 ASCII**：Windows 傳統主控台（conhost）上，
+      // readline 按下 Enter 後會依提示字寬重繪該行，提示含全形字或整行過長時
+      // 會把剛輸入的內容抹掉——讀是讀到了，但使用者看不到自己貼了什麼。
+      const line = await prompt(`  [${collected.length + 1}] `);
       // null 代表輸入串流結束（EOF），空字串代表使用者按了 Enter，兩者都視為輸入完畢。
       if (line === null || line === '') break;
       collected.push(...line.split(/[\s,，;；]+/).filter(Boolean));
+      // 上面那行可能被主控台抹掉，因此另外印一行回條，讓使用者確定收到了幾筆。
+      log.info(`已收到 ${collected.length} 筆`);
     }
   } finally {
     stopLineBuffering();

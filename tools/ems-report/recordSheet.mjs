@@ -128,9 +128,21 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
       log.warn(`讀取下載的紀錄表失敗：${error instanceof Error ? error.message : String(error)}`);
     }
   };
+  /** 系統用 alert／confirm 擋下時的訊息（已遮蔽長數字），沒被擋則為 null。 */
+  let blockedMessage = null;
+  const onDialog = async (dialog) => {
+    blockedMessage = dialog.message().replace(/\d{5,}/g, '#####').slice(0, 80);
+    log.warn(`系統跳出訊息：「${blockedMessage}」`);
+    // 維持 Playwright 的預設動作（關閉／取消）：這裡只是唯讀地開紀錄表，
+    // 按下確定有可能觸發我們沒預期的動作，寧可如實記下訊息交給人判斷。
+    await dialog.dismiss().catch(() => {});
+  };
   const attach = (target) => {
     target.on('response', onResponse);
     target.on('download', onDownload);
+    // 不接手的話 Playwright 會自動關掉對話框且不留任何痕跡，
+    // 程式只會傻等到逾時，事後完全看不出系統其實有回話。
+    target.on('dialog', onDialog);
   };
   const onNewPage = (newPage) => {
     openedPages.push(newPage);
@@ -177,6 +189,8 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
         if (text.trim()) return { text, kind: 'html', source: '另開視窗的網頁' };
       }
       if (pdfBytes) break;
+      // 系統已經明說開不了，再等下去也不會有紀錄表，早點結束才不會白等一分鐘。
+      if (blockedMessage) break;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
@@ -189,6 +203,11 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
     }
 
     const waited = UNLOCK.sheetTimeoutMs / 1000;
+    if (blockedMessage) {
+      throw new Error(
+        `按下「${buttonTexts[0]}」後系統跳出訊息：「${blockedMessage}」，紀錄表沒有開啟`,
+      );
+    }
     if (openedPages.length === 0) {
       throw new Error(
         `按下「${buttonTexts[0]}」後 ${waited} 秒內沒有出現紀錄表（沒有新視窗、也沒有下載）`,
@@ -203,6 +222,7 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
     for (const target of [...context.pages(), ...openedPages]) {
       target.off('response', onResponse);
       target.off('download', onDownload);
+      target.off('dialog', onDialog);
     }
     // 紀錄表視窗用完立刻關閉，畫面上不留個案明細。
     for (const openedPage of openedPages) {

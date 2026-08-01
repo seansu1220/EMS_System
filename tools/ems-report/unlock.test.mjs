@@ -266,3 +266,66 @@ test('貼上的一行含多個號碼、且重複的只留一筆', async () => {
   const parsed = await collectPastedTemsis('A123 B456\nA123\nC789,D012\n\n');
   assert.deepEqual(parsed, ['A123', 'B456', 'C789', 'D012']);
 });
+
+test('其中一張紀錄表打不開時：不整筆失敗，但也不自動解鎖', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 3,
+    unlockCount: 3,
+    unlockTexts: [],
+  });
+  // 第 1 張就相符，但第 2 張打不開——那張有沒有也相符無從得知，因此不能動手。
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async (_context, _page, _texts, index) => {
+      if (index === 1) throw new Error('按下「救護紀錄(鎖)」後系統跳出訊息：「查無資料」，紀錄表沒有開啟');
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /第 1 張紀錄表的 TEMSIS 相符/);
+  assert.match(outcome.detail, /第 2 張打不開/);
+  // 已經比對出來的線索要留著，使用者才有辦法接手人工處理。
+  assert.equal(outcome.recordIndex, 0);
+});
+
+test('打得開的都不相符、另有打不開的張數時，說明要分開講', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 2,
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100009', {
+    readCodes: async (_context, _page, _texts, index) => {
+      if (index === 1) throw new Error('60 秒內沒有出現紀錄表');
+      return { dispatchNo: '1150701000123', temsis: 'T115070100001', kind: 'pdf' };
+    },
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /1 張打得開的紀錄表都沒有相符/);
+  assert.match(outcome.detail, /第 2 張打不開/);
+});
+
+test('全部紀錄表都打不開時，明說是打不開而不是不相符', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 2,
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => { throw new Error('60 秒內沒有出現紀錄表'); },
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /全部打不開/);
+});
