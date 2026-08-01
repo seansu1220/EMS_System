@@ -232,3 +232,37 @@ test('getRecentRange 跨年也要正確', () => {
   assert.equal(range.start, '2025-11-15');
   assert.equal(range.end, '2026-01-15');
 });
+
+/**
+ * 一次貼上多行時，行與行之間沒有停頓，全部會在同一瞬間進入 stdin。
+ * 這裡開子行程真的餵一段多行輸入，確認每一行都收得到（而不是只吃到第一行）。
+ *
+ * @param {string} input 餵給子行程的原始輸入
+ * @returns {Promise<string[]>} promptTemsisList() 的解析結果
+ */
+async function collectPastedTemsis(input) {
+  const { spawn } = await import('node:child_process');
+  const moduleUrl = new URL('./unlock.mjs', import.meta.url).href;
+  const script = `import(${JSON.stringify(moduleUrl)}).then(async (mod) => {
+    const list = await mod.promptTemsisList();
+    process.stdout.write('RESULT:' + JSON.stringify(list));
+    process.exit(0);
+  });`;
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'inherit'] });
+  child.stdin.end(input);
+  let stdout = '';
+  for await (const chunk of child.stdout) stdout += chunk;
+  const marker = stdout.lastIndexOf('RESULT:');
+  assert.notEqual(marker, -1, `子行程沒有回報結果：${stdout}`);
+  return JSON.parse(stdout.slice(marker + 'RESULT:'.length));
+}
+
+test('一次貼上多行 TEMSIS，後面幾行不可以被吃掉', async () => {
+  const parsed = await collectPastedTemsis('A123\nB456\nC789\n\n');
+  assert.deepEqual(parsed, ['A123', 'B456', 'C789']);
+});
+
+test('貼上的一行含多個號碼、且重複的只留一筆', async () => {
+  const parsed = await collectPastedTemsis('A123 B456\nA123\nC789,D012\n\n');
+  assert.deepEqual(parsed, ['A123', 'B456', 'C789', 'D012']);
+});

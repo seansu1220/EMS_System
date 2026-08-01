@@ -74,6 +74,47 @@ let readlineInterface = null;
 let inputClosed = false;
 
 /**
+ * 尚未被 prompt() 取用的輸入行。
+ *
+ * `null`＝不緩衝（預設）；陣列＝緩衝中，見 {@link startLineBuffering}。
+ * @type {string[]|null}
+ */
+let bufferedLines = null;
+
+/** 建立（或取回）共用的 readline 介面。 */
+async function ensureInterface() {
+  if (readlineInterface) return readlineInterface;
+  const { createInterface } = await import('node:readline/promises');
+  readlineInterface = createInterface({ input: process.stdin, output: process.stdout });
+  readlineInterface.on('close', () => {
+    inputClosed = true;
+  });
+  // 沒有 question() 在等待時，readline 照樣會把輸入讀走並發出 line 事件；
+  // 不接住的話，「一次貼上多行」只有第一行收得到，其餘會憑空消失。
+  readlineInterface.on('line', (line) => {
+    bufferedLines?.push(line);
+  });
+  return readlineInterface;
+}
+
+/**
+ * 開始緩衝輸入行，讓使用者可以「一次貼上多行」而不漏行。
+ *
+ * 只在連續讀取多行的情境開啟（例如貼上 TEMSIS 清單）；其餘等待單一按鍵的場合
+ * 維持不緩衝，避免使用者在等待登入時誤按的 Enter 被留到後面才生效。
+ * 用完務必呼叫 {@link stopLineBuffering}（建議放在 finally）。
+ */
+export async function startLineBuffering() {
+  bufferedLines = [];
+  await ensureInterface();
+}
+
+/** 停止緩衝，並丟棄尚未取用的行。 */
+export function stopLineBuffering() {
+  bufferedLines = null;
+}
+
+/**
  * 在終端機等待使用者輸入一行（直接按 Enter 則回傳空字串）。
  *
  * 用 readline 而非直接監聽 stdin：本工具透過 .bat → npm → node 多層轉手執行，
@@ -84,14 +125,16 @@ let inputClosed = false;
  *   （呼叫端須視為「結束」，不可當成空字串繼續迴圈，否則會無限循環）
  */
 export async function prompt(question) {
-  if (inputClosed) return null;
-  if (!readlineInterface) {
-    const { createInterface } = await import('node:readline/promises');
-    readlineInterface = createInterface({ input: process.stdin, output: process.stdout });
-    readlineInterface.on('close', () => {
-      inputClosed = true;
-    });
+  await ensureInterface();
+  // 先消化緩衝：輸入串流已經結束（例如整段一次灌進來）時，
+  // 緩衝裡往往還有沒處理完的行，不先取用就會被當成「沒輸入」。
+  if (bufferedLines?.length) {
+    const buffered = bufferedLines.shift();
+    // 貼上的內容雖已由終端機回顯，仍補印一次，讓畫面上「第幾筆＝哪個號碼」對得起來。
+    process.stdout.write(`${question}${buffered}\n`);
+    return buffered.trim();
   }
+  if (inputClosed) return null;
   // readline 關閉時，等待中的 question() 永遠不會 resolve，故一併競賽 close 事件。
   const closed = new Promise((resolve) => readlineInterface.once('close', () => resolve(null)));
   const answer = await Promise.race([readlineInterface.question(question), closed]);
@@ -103,4 +146,5 @@ export function closePrompt() {
   readlineInterface?.close();
   readlineInterface = null;
   inputClosed = false;
+  bufferedLines = null;
 }

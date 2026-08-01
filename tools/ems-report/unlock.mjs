@@ -18,7 +18,7 @@
 import { SITE, UNLOCK } from './config.mjs';
 import { formatDateForSite } from './dateRange.mjs';
 import { fillField, detectDateFormat } from './formFill.mjs';
-import { log, prompt } from './logger.mjs';
+import { log, prompt, startLineBuffering, stopLineBuffering } from './logger.mjs';
 import { getFrame, gotoRecordQuery, gotoMenuItem } from './navigation.mjs';
 import {
   findField,
@@ -627,18 +627,25 @@ async function processTemsis(context, page, temsis, range, options) {
  */
 export async function promptTemsisList() {
   log.step('請貼上要解鎖的 TEMSIS 編號');
-  log.info('一個一行：貼上一個就按 Enter，游標會跳到下一行等你貼下一個。');
+  log.info('可以一次貼上整欄（多行一起貼沒問題），也可以一行貼一個再按 Enter。');
   log.info('全部貼完後，在「空白的那一行」再按一次 Enter，才會開始執行。');
   log.info('（只有一筆的話就是：貼上 → Enter → 再按一次 Enter）');
+  log.info('貼不上去時：在黑色視窗內按「滑鼠右鍵」就是貼上（Ctrl+V 常被輸入法吃掉）。');
   /** @type {string[]} */
   const collected = [];
-  for (;;) {
-    // 第一行特別附上說明，使用者才不會以為按了 Enter 就直接開跑。
-    const hint = collected.length === 0 ? '（貼完按 Enter 換行，空白行開始執行）' : '';
-    const line = await prompt(`  [${collected.length + 1}]${hint} `);
-    // null 代表輸入串流結束（EOF），空字串代表使用者按了 Enter，兩者都視為輸入完畢。
-    if (line === null || line === '') break;
-    collected.push(...line.split(/[\s,，;；]+/).filter(Boolean));
+  // 一次貼上整欄號碼時，多出來的行會在兩次 prompt 之間到達，必須先開緩衝才不會漏。
+  await startLineBuffering();
+  try {
+    for (;;) {
+      // 第一行特別附上說明，使用者才不會以為按了 Enter 就直接開跑。
+      const hint = collected.length === 0 ? '（貼完按 Enter 換行，空白行開始執行）' : '';
+      const line = await prompt(`  [${collected.length + 1}]${hint} `);
+      // null 代表輸入串流結束（EOF），空字串代表使用者按了 Enter，兩者都視為輸入完畢。
+      if (line === null || line === '') break;
+      collected.push(...line.split(/[\s,，;；]+/).filter(Boolean));
+    }
+  } finally {
+    stopLineBuffering();
   }
   return [...new Set(collected)];
 }

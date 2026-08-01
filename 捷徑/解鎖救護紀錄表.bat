@@ -35,8 +35,9 @@ echo.
 echo ============================================
 echo   Unlock Ambulance Records (DRY RUN)
 echo   ----------------------------------------
-echo   1. Paste TEMSIS numbers, one per line.
-echo      Enter = next line, NOT start.
+echo   1. Paste the TEMSIS numbers. Pasting a whole
+echo      column at once is fine. Cannot paste with
+echo      Ctrl+V? Just RIGHT-CLICK in this window.
 echo   2. Press Enter on an EMPTY line to start.
 echo   3. A browser opens - type the CAPTCHA
 echo      and sign in. The rest is automatic.
