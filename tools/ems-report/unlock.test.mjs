@@ -329,3 +329,84 @@ test('全部紀錄表都打不開時，明說是打不開而不是不相符', as
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /全部打不開/);
 });
+
+/**
+ * 造一個能控制「畫面還在不在案件內部」的假 page。
+ *
+ * `hasCaseDetail()` 傳給 evaluate 的參數是特徵字**陣列**，
+ * 配對查詢傳的則是物件，用這點區分兩種呼叫。
+ *
+ * @param {boolean[]} detailStates 每次被問「還在案件內部嗎」時依序回答
+ */
+function createFakePageWithDetail(pairsResult, detailStates) {
+  const answers = [...detailStates];
+  const frame = {
+    name: () => SITE.frames.content,
+    async evaluate(_fn, params) {
+      if (Array.isArray(params)) return answers.length > 0 ? answers.shift() : true;
+      return pairsResult;
+    },
+  };
+  return { frames: () => [frame] };
+}
+
+test('紀錄表按下去把畫面導走時，重新進入案件再繼續比對剩下幾張', async () => {
+  const page = createFakePageWithDetail(
+    {
+      pairs: [
+        { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+        { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+        { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
+      ],
+      recordCount: 3,
+      unlockCount: 3,
+      unlockTexts: [],
+    },
+    // 第 2 張失敗後被問到時回答「不在案件內部了」，重新進入後恢復正常。
+    [false],
+  );
+  const opened = [];
+  let reentered = 0;
+  const outcome = await locateUnlockTarget({}, page, 'T115070100003', {
+    readCodes: async (_context, _page, _texts, index) => {
+      opened.push(index);
+      if (index === 1) throw new Error('畫面就離開了案件內部，紀錄表沒有開出來');
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+    reenterCase: async () => { reentered += 1; },
+  });
+  assert.deepEqual(opened, [0, 1, 2], '第 3 張必須照樣比對到，不能因為第 2 張失敗就停手');
+  assert.equal(reentered, 1, '畫面被導走時要重新進入案件一次');
+  // 第 3 張才是相符的那張，但第 2 張沒掃到，所以仍不自動解鎖。
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /第 3 張紀錄表的 TEMSIS 相符/);
+  assert.match(outcome.detail, /第 2 張打不開/);
+});
+
+test('畫面被導走又回不去時，其餘幾張要記成「沒有比對到」而不是不相符', async () => {
+  const page = createFakePageWithDetail(
+    {
+      pairs: [
+        { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+        { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+        { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
+      ],
+      recordCount: 3,
+      unlockCount: 3,
+      unlockTexts: [],
+    },
+    [false],
+  );
+  const opened = [];
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async (_context, _page, _texts, index) => {
+      opened.push(index);
+      if (index === 1) throw new Error('畫面就離開了案件內部，紀錄表沒有開出來');
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+    reenterCase: async () => { throw new Error('案件列表查不到這個派遣案號'); },
+  });
+  assert.deepEqual(opened, [0, 1], '回不去就不該再盲點下去');
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /第 2、3 張打不開/);
+});

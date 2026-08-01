@@ -98,8 +98,11 @@ async function describeOpenedPages(pages) {
  * @param {import('playwright-core').Frame} frame 放著「救護紀錄PDF」按鈕的 frame
  * @param {string[]} buttonTexts 按鈕文字候選
  * @param {number} index 第幾個符合的按鈕（0 起算）
- * @param {{exact?: boolean}} [options] 文字比對方式，**必須與當初算出 index 時完全相同**，
- *   否則兩邊的符合集合不一樣，序號會對到別張紀錄表
+ * @param {{exact?: boolean, shouldAbort?: () => Promise<string|null>}} [options]
+ *   `exact`：文字比對方式，**必須與當初算出 index 時完全相同**，
+ *   否則兩邊的符合集合不一樣，序號會對到別張紀錄表。
+ *   `shouldAbort`：每輪檢查一次，回傳非空字串就立刻放棄等待並以該字串說明原因
+ *   （用來偵測「按下去之後原本的畫面被導走了」，這種情況再等下去也不會有紀錄表）
  * @returns {Promise<{text: string, kind: 'pdf'|'html', source: string}>}
  */
 export async function openRecordSheet(context, frame, buttonTexts, index = 0, options = {}) {
@@ -161,6 +164,10 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
     // 一路等到「真的拿到內容」為止，不能一看到視窗就判定成敗：
     // 視窗常是先開好、內容才由後續的 POST 填進來（實跑時因此只等了 4 秒就誤判失敗）。
     const deadline = Date.now() + UNLOCK.sheetTimeoutMs;
+    // 點下去到頁面真的動起來需要一點時間，太早檢查會把「還沒開始」誤判成「被導走」。
+    const abortCheckStart = Date.now() + UNLOCK.abortCheckDelayMs;
+    /** 被導走等原因造成的提早放棄；null＝沒事。 */
+    let abortReason = null;
     // 取回 PDF 每個網址只試一次：失敗多半是該網址本身不能重取（POST 產生的），
     // 每半秒重打一次只是徒增對方系統的負擔。
     const fetchedUrls = new Set();
@@ -191,6 +198,10 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
       if (pdfBytes) break;
       // 系統已經明說開不了，再等下去也不會有紀錄表，早點結束才不會白等一分鐘。
       if (blockedMessage) break;
+      if (options.shouldAbort && Date.now() >= abortCheckStart) {
+        abortReason = await options.shouldAbort().catch(() => null);
+        if (abortReason) break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
@@ -203,6 +214,9 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
     }
 
     const waited = UNLOCK.sheetTimeoutMs / 1000;
+    if (abortReason) {
+      throw new Error(`按下「${buttonTexts[0]}」後${abortReason}`);
+    }
     if (blockedMessage) {
       throw new Error(
         `按下「${buttonTexts[0]}」後系統跳出訊息：「${blockedMessage}」，紀錄表沒有開啟`,

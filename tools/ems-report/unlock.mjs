@@ -427,19 +427,29 @@ async function openCaseByDispatchNo(context, page, dispatchNo, range) {
 async function waitForCaseDetail(page) {
   const deadline = Date.now() + UNLOCK.caseDetailTimeoutMs;
   while (Date.now() < deadline) {
-    const arrived = await content(page)
-      .evaluate(
-        (markers) => {
-          const text = document.body?.innerText ?? '';
-          return markers.some((marker) => text.includes(marker));
-        },
-        UNLOCK.caseDetailMarkers,
-      )
-      .catch(() => false);
-    if (arrived) return true;
+    if (await hasCaseDetail(page)) return true;
     await page.waitForTimeout(500);
   }
   return false;
+}
+
+/**
+ * 現在這一刻畫面是不是還在案件內部（只看一次，不等待）。
+ *
+ * ⚠ 同樣只回傳布林值，不把頁面內容帶出來。
+ *
+ * @returns {Promise<boolean>}
+ */
+async function hasCaseDetail(page) {
+  return content(page)
+    .evaluate(
+      (markers) => {
+        const text = document.body?.innerText ?? '';
+        return markers.some((marker) => text.includes(marker));
+      },
+      UNLOCK.caseDetailMarkers,
+    )
+    .catch(() => false);
 }
 
 /**
@@ -448,7 +458,10 @@ async function waitForCaseDetail(page) {
  * 只有一張時直接鎖定；多張時逐張開啟比對 TEMSIS，
  * **比對不到就回報需人工處理，絕不退而求其次挑一張**。
  *
- * @param {{readCodes?: typeof readSheetCodes}} [deps] 讀取紀錄表的方式（測試時可注入假的）
+ * @param {{readCodes?: typeof readSheetCodes, reenterCase?: () => Promise<void>}} [deps]
+ *   `readCodes`：讀取紀錄表的方式（測試時可注入假的）。
+ *   `reenterCase`：重新進入這件案子的方式。有些紀錄表按下去會把畫面導走，
+ *   不先回到案件內部，後面幾張連按鈕都找不到。
  * @returns {Promise<UnlockOutcome>}
  */
 export async function locateUnlockTarget(context, page, temsis, deps = {}) {
@@ -498,14 +511,16 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     };
   }
 
+  // 紀錄檔是給使用者看的，「第幾張」這種內部說法要順帶說明它代表什麼。
   log.info(`有 ${paired.recordCount} 張紀錄表，逐張開啟比對 TEMSIS`);
+  log.info(`（同一件案子出動幾台車就有幾張紀錄表，逐張打開才知道你要的那筆是哪一張）`);
   // 找到相符就停下來比較快，但這樣「每一張讀到的是不是真的不同」就無從驗證
   // （若序號沒生效、每次都開到同一張，光看結果是看不出來的）。
   // 全部掃過的代價只是多開幾張，換到的是可核對的完整比對表，以及「多張相符」這種異常也能發現。
   const matches = [];
   /** 打不開的紀錄表：不能當成「不相符」，因為它有沒有相符根本不知道。 */
   const unopened = [];
-  for (const pair of paired.pairs) {
+  for (const [position, pair] of paired.pairs.entries()) {
     // 文字候選與 exact 都必須與上面 findPairedRows 完全一致，否則序號會對到別張紀錄表。
     let codes;
     try {
@@ -514,7 +529,14 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
         page,
         UNLOCK.buttonTexts.openRecordInCase,
         pair.recordIndex,
-        { exact: false },
+        {
+          exact: false,
+          // 有些紀錄表按下去不是另開視窗，而是把案件內部的畫面整個換掉。
+          // 這種情況再等下去也不會有紀錄表，早點收手才不會白等一分鐘。
+          shouldAbort: async () => (await hasCaseDetail(page)
+            ? null
+            : '畫面就離開了案件內部，紀錄表沒有開出來'),
+        },
       );
     } catch (error) {
       // 單張打不開就整筆放棄的話，連「已經比對出來的結果」都會一起丟掉。
@@ -522,6 +544,24 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       const reason = error instanceof Error ? error.message : String(error);
       unopened.push({ recordIndex: pair.recordIndex, reason });
       log.warn(`  第 ${pair.recordIndex + 1} 張：打不開，無法比對（${reason}）`);
+      // 畫面被換掉時，後面幾張連按鈕都找不到（實跑時第 3、4 張就是這樣連環失敗），
+      // 因此先回到案件內部再繼續，不然剩下的等於全部沒掃到。
+      if (!(await hasCaseDetail(page))) {
+        const returned = deps.reenterCase
+          ? await deps.reenterCase().then(() => true).catch(() => false)
+          : false;
+        if (!returned) {
+          for (const skipped of paired.pairs.slice(position + 1)) {
+            unopened.push({
+              recordIndex: skipped.recordIndex,
+              reason: '畫面已離開案件內部且回不去，沒有比對到',
+            });
+          }
+          log.warn('  畫面已離開案件內部且回不去，其餘幾張都沒有比對到');
+          break;
+        }
+        log.info('  畫面被導走，已重新進入案件內部，繼續比對下一張');
+      }
       continue;
     }
     const isMatch = Boolean(codes.temsis) && isSameCode(codes.temsis, temsis);
@@ -618,7 +658,10 @@ async function processTemsis(context, page, temsis, range, options) {
   try {
     const caseInfo = await findDispatchNoByTemsis(context, page, temsis, range);
     await openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range);
-    const outcome = await locateUnlockTarget(context, page, temsis);
+    const outcome = await locateUnlockTarget(context, page, temsis, {
+      // 走同一條路重新查一次案件；比對到一半畫面被導走時才用得到。
+      reenterCase: () => openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range),
+    });
     outcome.caseDate = caseInfo.caseDate;
     log[outcome.status === '已定位' ? 'ok' : 'warn'](`${maskCode(temsis)}：${outcome.detail}`);
 
