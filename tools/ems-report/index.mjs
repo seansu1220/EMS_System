@@ -14,6 +14,8 @@
  *   npm run tool:ems -- unlock               試跑：只找出該解哪一張，不會動到系統
  *   npm run tool:ems -- unlock --execute     真的按下「調整為未結案」
  *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
+ *
+ * 任何指令都可加 --fresh-login：捨棄上次保存的登入狀態，強制重新登入。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -53,6 +55,7 @@ const COMMANDS = ['run', 'probe', 'check-sheet', 'unlock'];
  * @property {boolean} manual
  * @property {string[]} temsis
  * @property {boolean} dryRun
+ * @property {boolean} freshLogin
  */
 
 /** 解析命令列參數。 */
@@ -75,6 +78,8 @@ function parseArgs(argv) {
      * 解鎖不可復原，預設值就該是安全的那一邊；`--dry-run` 寫不寫都一樣是試跑。
      */
     dryRun: !args.includes('--execute'),
+    /** 保存的登入狀態怪怪的時候，用這個強制重新登入。 */
+    freshLogin: args.includes('--fresh-login'),
   };
 }
 
@@ -243,9 +248,10 @@ async function adjustStats(stats, monthRange) {
  * 開瀏覽器、登入，然後執行指定動作。
  * 失敗時把當下的 frame 狀態一併記進紀錄檔，方便判斷卡在哪一頁。
  * @param {(session: import('./session.mjs').EmsSession) => Promise<void>} action
+ * @param {{ freshLogin?: boolean }} [sessionOptions]
  */
-async function withSession(action) {
-  const session = await startSession();
+async function withSession(action, sessionOptions = {}) {
+  const session = await startSession(sessionOptions);
   try {
     await action(session);
   } catch (error) {
@@ -278,7 +284,7 @@ async function runUnlockCommand(options) {
   await withSession(async (session) => {
     const outcomes = await runUnlockFlow(session, { temsisList, range, dryRun: options.dryRun });
     printUnlockSummary(outcomes, { dryRun: options.dryRun });
-  });
+  }, { freshLogin: options.freshLogin });
 }
 
 async function main() {
@@ -306,7 +312,7 @@ async function main() {
       return;
     }
     await runReportFlow(session, monthRange, options.keepRaw);
-  });
+  }, { freshLogin: options.freshLogin });
 }
 
 main()

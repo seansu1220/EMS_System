@@ -4,10 +4,22 @@
  * 設計取捨：驗證碼一律由「使用者本人」在瀏覽器辨識輸入，
  * 本工具不做驗證碼自動辨識——那等於繞過系統的防自動化機制。
  * 帳號密碼為選填，只是省去每次打字，沒設定就整段自己手動輸入即可。
+ *
+ * 為了不必每一輪都重打驗證碼，**本人登入成功後的工作階段會存起來**，
+ * 下一輪直接沿用（見 `SESSION_STATE`）。這是沿用自己已經解過的登入結果，
+ * 不是繞過驗證碼；沿用失敗一律安靜地退回正常登入流程。
  */
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
-import { BROWSER, SITE, LOGIN_TIMEOUT_MS, APP_READY_TIMEOUT_MS, PATHS } from './config.mjs';
+import {
+  BROWSER,
+  SITE,
+  LOGIN_TIMEOUT_MS,
+  APP_READY_TIMEOUT_MS,
+  SESSION_STATE,
+  PATHS,
+} from './config.mjs';
 import { log, maskAccount, prompt } from './logger.mjs';
 
 /**
@@ -29,6 +41,48 @@ function loadCredentials() {
     username: process.env.EMS_USERNAME ?? '',
     password: process.env.EMS_PASSWORD ?? '',
   };
+}
+
+/**
+ * 讀取上次保存的登入狀態；沒有、過期或內容毀損時回傳 null（代表要正常登入）。
+ *
+ * @param {string} [filePath]
+ * @param {number} [maxAgeMs]
+ * @returns {Promise<object|null>}
+ */
+export async function loadSessionState(filePath = SESSION_STATE.file, maxAgeMs = SESSION_STATE.maxAgeMs) {
+  let raw;
+  try {
+    const stat = await fs.stat(filePath);
+    if (Date.now() - stat.mtimeMs > maxAgeMs) {
+      log.info(`上次的登入狀態已超過 ${Math.round(maxAgeMs / 3600000)} 小時，不沿用，改為重新登入`);
+      return null;
+    }
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch {
+    // 檔案不存在（第一次跑、或剛清掉）是正常情況，不必吵。
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    log.warn('保存的登入狀態讀不懂（檔案可能毀損），改為重新登入');
+    return null;
+  }
+}
+
+/**
+ * 保存目前的登入狀態。
+ * ⚠ 內容等同登入憑證，只寫到 `.auth/`（已 gitignore），絕不可放進 out/ 或版控。
+ */
+export async function saveSessionState(context, filePath = SESSION_STATE.file) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await context.storageState({ path: filePath });
+}
+
+/** 刪除保存的登入狀態（檔案不存在也不會出錯）。 */
+export async function clearSessionState(filePath = SESSION_STATE.file) {
+  await fs.rm(filePath, { force: true });
 }
 
 /** 登入頁是否仍顯示（以驗證碼欄位是否存在判定）。 */
@@ -133,20 +187,26 @@ async function launchBrowser() {
 }
 
 /**
- * 開啟瀏覽器並完成登入，回傳可繼續操作的工作階段。
- * @returns {Promise<EmsSession>}
+ * 試著沿用已帶入的登入狀態：登入頁沒出現，且主畫面確實建得起來才算成功。
+ *
+ * 只要有任何一點不對就回傳 false 讓呼叫端改走正常登入——
+ * 這裡是「試探」而不是「確保」，失敗是預期中的正常情形，不該讓整個流程中斷。
+ *
+ * @returns {Promise<boolean>}
  */
-export async function startSession() {
-  const credentials = loadCredentials();
-  log.step('啟動瀏覽器（使用本機已安裝的 Chrome 或 Edge）');
-  const browser = await launchBrowser();
-  const context = await browser.newContext({ viewport: BROWSER.viewport, acceptDownloads: true });
-  const page = await context.newPage();
+export async function tryReuseSession(page, timeoutMs = SESSION_STATE.reuseReadyTimeoutMs) {
+  if (await isLoginPageVisible(page).catch(() => true)) return false;
+  try {
+    await waitForAppReady(page, timeoutMs);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  log.step('開啟緊急救護管理系統登入頁');
-  await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+/** 引導使用者本人完成登入（帳密可代填，驗證碼一律本人輸入）。 */
+async function performLogin(page, credentials) {
   await fillCredentialsIfPresent(page, credentials);
-
   log.info(`帳號：${maskAccount(credentials.username)}${credentials.username ? '（已自 .env 代填）' : '（請自行輸入）'}`);
   log.warn('請在剛開啟的瀏覽器視窗完成登入：輸入驗證碼後按下登入按鈕。');
   log.info('（驗證碼不做自動辨識，必須由你本人輸入）');
@@ -154,6 +214,49 @@ export async function startSession() {
   await waitForLogin(page, credentials);
   log.ok('登入完成，等待系統主畫面載入');
   await waitForAppReady(page);
+}
+
+/**
+ * 開啟瀏覽器並完成登入，回傳可繼續操作的工作階段。
+ *
+ * @param {{ freshLogin?: boolean }} [options] `freshLogin` 為真時捨棄保存的登入狀態，強制重新登入。
+ * @returns {Promise<EmsSession>}
+ */
+export async function startSession(options = {}) {
+  const credentials = loadCredentials();
+  log.step('啟動瀏覽器（使用本機已安裝的 Chrome 或 Edge）');
+  const browser = await launchBrowser();
+
+  if (options.freshLogin) {
+    await clearSessionState().catch(() => {});
+    log.info('依 --fresh-login 捨棄保存的登入狀態，這次重新登入');
+  }
+  const savedState = options.freshLogin ? null : await loadSessionState();
+  const context = await browser.newContext({
+    viewport: BROWSER.viewport,
+    acceptDownloads: true,
+    ...(savedState ? { storageState: savedState } : {}),
+  });
+  const page = await context.newPage();
+
+  log.step('開啟緊急救護管理系統');
+  await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+
+  if (savedState && (await tryReuseSession(page))) {
+    log.ok('沿用上次的登入狀態，這次不用再輸入驗證碼');
+  } else {
+    if (savedState) {
+      log.info('上次的登入狀態已失效（多半是伺服器端逾時），改為重新登入');
+      await clearSessionState().catch(() => {});
+      await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+    }
+    await performLogin(page, credentials);
+    await saveSessionState(context).catch((error) => {
+      // 存不起來只是下次要重打驗證碼，不影響這一輪，不該讓流程掛掉。
+      log.warn(`登入狀態保存失敗（下次仍需重新登入）：${error instanceof Error ? error.message : String(error)}`);
+    });
+    log.info('已保存登入狀態，短時間內再跑一次就不必重打驗證碼');
+  }
   log.ok('主畫面已就緒');
 
   return {
@@ -161,6 +264,8 @@ export async function startSession() {
     context,
     page,
     close: async () => {
+      // 關閉前再存一次：cookie 可能在這一輪被伺服器換過，存最新的才有意義。
+      await saveSessionState(context).catch(() => {});
       await browser.close().catch(() => {});
     },
   };

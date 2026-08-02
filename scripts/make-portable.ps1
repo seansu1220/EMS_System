@@ -30,7 +30,8 @@ Write-Host ''
 Write-Host '=== 建立可攜版 ===' -ForegroundColor Cyan
 Write-Host "產出位置：$toolRoot"
 
-# --- 1. 複製工具程式（不含 out/ 與 .env，避免把個案資料或帳密帶出去）---
+# --- 1. 複製工具程式（只複製 *.mjs 與 README，因此 out/、.env、.auth/ 都不會被帶出去，
+#        個案資料、帳密與登入狀態都留在原本這台電腦）---
 Write-Host ''
 Write-Host '[1/4] 複製工具程式'
 New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
@@ -38,7 +39,7 @@ $sourceDir = Join-Path $projectRoot 'tools\ems-report'
 Copy-Item -Path (Join-Path $sourceDir '*.mjs') -Destination $toolRoot -Force
 $readme = Join-Path $sourceDir 'README.md'
 if (Test-Path $readme) { Copy-Item -Path $readme -Destination $toolRoot -Force }
-Write-Host '      完成（未複製 .env 與 out/，帳密與個案資料不會被帶出去）'
+Write-Host '      完成（未複製 .env、out/ 與 .auth/，帳密、個案資料與登入狀態不會被帶出去）'
 
 # --- 2. 寫一份只列必要套件的 package.json ---
 Write-Host ''

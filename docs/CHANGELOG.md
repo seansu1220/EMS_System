@@ -4,6 +4,58 @@
 
 ---
 
+## 2026-08-02　v1.15.0 登入一次可沿用，短時間內再跑不必重打驗證碼
+
+### 問題描述
+使用者提出：驗證碼每次跑都要打，很煩，能不能改成由程式自動處理。
+
+### 處理方式與取捨
+**驗證碼自動辨識不做。** 那是來源系統用來確認「操作的是人」的機制，
+把它自動解掉等於繞過對方的防自動化控制，這不是使用端能自行決定的事
+（本專案自 `session.mjs` 建立起即載明此原則，TOOLS_SPEC 0.3 亦有）。
+
+改為解決真正的痛點：**不必每一輪都重新登入**。
+
+### 根本原因
+每次執行都建立全新的 `BrowserContext`（沒有任何 cookie），
+所以即使十分鐘前才登入過，系統一律視為未登入而再次要求驗證碼。
+使用者本人其實已經解過驗證碼了，只是那個結果被丟掉。
+
+### 修改內容
+
+| 檔案 | 內容 |
+| --- | --- |
+| `tools/ems-report/config.mjs` | 新增 `SESSION_STATE`：檔案位置 `.auth/state.json`、保存上限 8 小時、沿用試探逾時 15 秒 |
+| `tools/ems-report/session.mjs` | 新增 `loadSessionState` / `saveSessionState` / `clearSessionState` / `tryReuseSession`；`startSession(options)` 支援 `freshLogin`；登入邏輯抽成 `performLogin` |
+| `tools/ems-report/index.mjs` | 新增 `--fresh-login`（任何指令皆可用），`withSession` 轉傳 |
+| `.gitignore` | 新增 `tools/**/.auth/` |
+| `scripts/make-portable.ps1` | 註解與訊息補上「不會複製 `.auth/`」 |
+| `tools/ems-report/session.test.mjs` | 新增 9 個測試（總數 99 → 108） |
+
+流程：進站後若帶著保存的狀態且**登入頁沒出現、主畫面 frameset 也建得起來**，
+即判定沿用成功並跳過登入；否則安靜退回正常登入（刪舊檔、重新進站、本人輸入驗證碼）。
+登入成功後寫一次檔，**關閉瀏覽器前再寫一次**（cookie 可能在這一輪被伺服器換過）。
+
+### 安全上的處理
+保存的 cookie 等同登入憑證，因此：
+
+- 只寫到 `tools/ems-report/.auth/`，已加入 `.gitignore`；
+- 可攜版打包只複製 `*.mjs` 與 README，天然不會帶走；
+- 超過 8 小時即不再沿用（伺服器多半更早就讓 session 過期）；
+- 狀態怪異時用 `--fresh-login` 強制重登。
+
+### 驗證
+`npm run tool:ems:test` 108 項全數通過。新增測試涵蓋：存讀往返、自動建資料夾、
+檔案不存在、超過期限、內容毀損、重複刪除，以及 `tryReuseSession` 的三種情形
+（登入頁還在／主畫面就緒／主畫面等不到）。
+
+### 連帶更新
+`TOOLS_SPEC.md` 升至 v1.15.0（0.3 表格、0.6 可攜版、**新增 0.8 節**、1.2 指令表、1.3 流程）；
+`TODO.md` 第 1.6 節註記：遠端方案的「驗證碼轉發」可因本次變更**降級為之後才做的加強項**，
+改以「沒有登入狀態就回報 `needsLogin`」起步，省下最難的一段。
+
+---
+
 ## 2026-08-02　v1.14.1 整理捷徑資料夾
 
 ### 問題描述
