@@ -453,6 +453,19 @@ async function hasCaseDetail(page) {
 }
 
 /**
+ * 這張紀錄表是不是「鎖住的」（＝已結案，才有解鎖的必要）。
+ *
+ * 讀不到按鈕文字時一律當成鎖住的：寧可多開一張比對，也不要把真正的目標略過。
+ *
+ * @param {string|undefined} recordText 該張紀錄表按鈕上的文字
+ * @returns {boolean}
+ */
+function isLockedRecord(recordText) {
+  if (typeof recordText !== 'string' || recordText === '') return true;
+  return recordText.includes(UNLOCK.buttonTexts.lockedRecordMarker);
+}
+
+/**
  * 步驟 5：在案件內部決定「該解哪一張紀錄表」。
  *
  * 只有一張時直接鎖定；多張時逐張開啟比對 TEMSIS，
@@ -523,7 +536,19 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   const matches = [];
   /** 打不開的紀錄表：不能當成「不相符」，因為它有沒有相符根本不知道。 */
   const unopened = [];
+  /** 沒有鎖頭的紀錄表：目前就是未結案，不是解鎖目標，不列入比對。 */
+  const unlockedAlready = [];
   for (const [position, pair] of paired.pairs.entries()) {
+    // 沒鎖頭那張按下去不會開 PDF，而是進入編輯畫面（畫面因此被導走）。
+    // 它既然已經是未結案，就不可能是解鎖目標，開它只是白費工夫還要重新進案件。
+    if (!isLockedRecord(pair.recordText)) {
+      unlockedAlready.push(pair.recordIndex);
+      log.info(
+        `  第 ${pair.recordIndex + 1} 張：「${pair.recordText}」沒有鎖頭`
+          + '，這張目前已是未結案，不是解鎖目標，略過不開',
+      );
+      continue;
+    }
     // 文字候選與 exact 都必須與上面 findPairedRows 完全一致，否則序號會對到別張紀錄表。
     let codes;
     try {
@@ -581,20 +606,33 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   const unopenedNote = unopened.length === 0 ? ''
     : `；另有第 ${unopened.map((item) => item.recordIndex + 1).join('、')} 張打不開`
       + `（${unopened[0].reason}）`;
+  /** 略過的（沒鎖頭）張數描述。這些不影響能不能動手，但要交代清楚。 */
+  const unlockedNote = unlockedAlready.length === 0 ? ''
+    : `；第 ${unlockedAlready.map((index) => index + 1).join('、')} 張沒有鎖頭`
+      + '（已是未結案），不是解鎖目標故未比對';
+  /** 真的有拿去比對的張數。 */
+  const comparedCount = paired.pairs.length - unopened.length - unlockedAlready.length;
 
   if (matches.length === 0) {
-    // 打得開的都不是，又剛好只剩一張沒掃到——那張幾乎就是要找的目標。
+    if (comparedCount === 0) {
+      return {
+        temsis,
+        status: '需人工處理',
+        detail: unopened.length > 0
+          ? `有鎖頭的紀錄表全部打不開，無法比對（${unopened[0].reason}）${unlockedNote}`
+          : `這件案子的紀錄表都沒有鎖頭（已是未結案），沒有需要解鎖的對象`,
+      };
+    }
+    // 比對過的都不是，又剛好只剩一張沒掃到——那張幾乎就是要找的目標。
     // 仍然不動手（沒親眼比對過就不算數），但要把這個判斷講出來，人才好接手。
     const likelyNote = unopened.length === 1
-      ? `。打得開的都不是，因此你要的很可能就是第 ${unopened[0].recordIndex + 1} 張，請自行到系統確認`
+      ? `。比對過的都不是，因此你要的很可能就是第 ${unopened[0].recordIndex + 1} 張，請自行到系統確認`
       : '';
     return {
       temsis,
       status: '需人工處理',
-      detail: unopened.length === paired.recordCount
-        ? `${paired.recordCount} 張紀錄表全部打不開，無法比對（${unopened[0].reason}）`
-        : `${paired.recordCount - unopened.length} 張打得開的紀錄表都沒有相符的 TEMSIS`
-          + `${unopenedNote}${likelyNote}`,
+      detail: `${comparedCount} 張比對過的紀錄表都沒有相符的 TEMSIS`
+        + `${unopenedNote}${unlockedNote}${likelyNote}`,
     };
   }
   if (matches.length > 1) {
@@ -635,7 +673,7 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     unlockIndex: target.unlockIndex,
     recordIndex: target.recordIndex,
     detail: `第 ${target.recordIndex + 1} 張紀錄表的 TEMSIS 相符，`
-      + `對應同一列的第 ${target.unlockIndex + 1} 個解鎖按鈕`,
+      + `對應同一列的第 ${target.unlockIndex + 1} 個解鎖按鈕${unlockedNote}`,
   };
 }
 

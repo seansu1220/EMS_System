@@ -61,9 +61,10 @@ test('有多個解鎖按鈕卻沒有可比對的紀錄表時，回報需人工�
 test('多張紀錄表時，只鎖定 TEMSIS 相符的那一張', async () => {
   const page = createFakePage({
     pairs: [
-      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄' },
-      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
-      { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄' },
+      // 要逐張比對的都是「鎖住的」紀錄表；沒鎖頭那張已是未結案，另有專門的測試。
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
     ],
     recordCount: 3,
     unlockCount: 3,
@@ -103,8 +104,8 @@ test('多張紀錄表的 TEMSIS 都相符時停下來讓人看，不自己挑', 
 test('多張紀錄表都對不上時回報需人工處理，絕不隨便挑一張', async () => {
   const page = createFakePage({
     pairs: [
-      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄' },
-      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
     ],
     recordCount: 2,
     unlockCount: 2,
@@ -309,7 +310,7 @@ test('打得開的都不相符、另有打不開的張數時，說明要分開�
     },
   });
   assert.equal(outcome.status, '需人工處理');
-  assert.match(outcome.detail, /1 張打得開的紀錄表都沒有相符/);
+  assert.match(outcome.detail, /1 張比對過的紀錄表都沒有相符/);
   assert.match(outcome.detail, /第 2 張打不開/);
 });
 
@@ -431,4 +432,67 @@ test('打得開的都不相符、只剩一張沒掃到時，要點出「你要�
   });
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /很可能就是第 2 張/);
+});
+
+test('沒有鎖頭的紀錄表不是解鎖目標：不開它，也不因此擋下定位', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      // 實測踩到的那張：沒有鎖頭，按下去會被帶進編輯畫面而不是開 PDF。
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
+      { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 3,
+    unlockCount: 3,
+    unlockTexts: [],
+  });
+  const opened = [];
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async (_context, _page, _texts, index) => {
+      opened.push(index);
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+  });
+  assert.deepEqual(opened, [0, 2], '沒鎖頭那張不該去點');
+  assert.equal(outcome.status, '已定位', '沒鎖頭的張數不影響能不能動手');
+  assert.equal(outcome.unlockIndex, 0);
+  assert.match(outcome.detail, /第 2 張沒有鎖頭/);
+});
+
+test('讀不到按鈕文字時寧可多開一張，不可以當成沒鎖頭而略過', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '' },
+      { recordIndex: 1, unlockIndex: 1, recordText: undefined },
+    ],
+    recordCount: 2,
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const opened = [];
+  const outcome = await locateUnlockTarget({}, page, 'T115070100002', {
+    readCodes: async (_context, _page, _texts, index) => {
+      opened.push(index);
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+  });
+  assert.deepEqual(opened, [0, 1]);
+  assert.equal(outcome.status, '已定位');
+});
+
+test('整件案子都沒有鎖頭時，明說沒有需要解鎖的對象', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
+    ],
+    recordCount: 2,
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => assert.fail('沒鎖頭的都不該去點'),
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /都沒有鎖頭/);
 });
