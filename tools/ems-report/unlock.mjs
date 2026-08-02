@@ -843,7 +843,38 @@ export function printUnlockSummary(outcomes, options = {}) {
     return;
   }
   log.info(`共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆、未處理 ${outcomes.length - unlocked} 筆`);
+  printUnlockedList(outcomes);
   if (unlocked < outcomes.length) {
     log.warn('未解鎖的案件請自行到系統處理（原因見上方每一列的說明）。');
   }
+}
+
+/**
+ * 把「這次到底動了哪幾件」單獨列成一張清單。
+ *
+ * 上面那張表混著各種狀態、說明又長，實際解掉的幾筆容易被淹沒；
+ * 這張只列動過的，是事後回系統核對用的依據。
+ *
+ * @param {UnlockOutcome[]} outcomes
+ */
+function printUnlockedList(outcomes) {
+  const unlocked = outcomes.filter((item) => item.status === '已解鎖');
+  if (unlocked.length === 0) {
+    log.warn('這次沒有任何案件被實際解鎖。');
+    return;
+  }
+  log.step(`解鎖清單（實際按下「${UNLOCK.buttonTexts.unlock[0]}」的有 ${unlocked.length} 筆）`);
+  for (const [position, outcome] of unlocked.entries()) {
+    const vehicle = outcome.vehicle
+      ? `${outcome.vehicle}${outcome.squad ? `（${outcome.squad}）` : ''}`
+      : outcome.squad ?? '車輛讀不到';
+    const sheet = typeof outcome.recordIndex === 'number' && outcome.recordIndex >= 0
+      ? `第 ${outcome.recordIndex + 1} 張紀錄表`
+      : '紀錄表張次不明';
+    log.info(
+      `${position + 1}. ${outcome.caseDate ?? '日期讀不到'}　${vehicle}　${sheet}`
+        + `　TEMSIS ${maskCode(outcome.temsis)}`,
+    );
+  }
+  log.info('以上是這次唯一被修改的案件，請自行到系統核對。');
 }

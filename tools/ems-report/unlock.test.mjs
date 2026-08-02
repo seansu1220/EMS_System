@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { locateUnlockTarget, performUnlock } from './unlock.mjs';
+import { locateUnlockTarget, performUnlock, printUnlockSummary } from './unlock.mjs';
 import { groupByRow, normalizeText } from './pageFinder.mjs';
 import { getRecentRange } from './dateRange.mjs';
 import { SITE } from './config.mjs';
@@ -495,4 +495,61 @@ test('整件案子都沒有鎖頭時，明說沒有需要解鎖的對象', async
   });
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /都沒有鎖頭/);
+});
+
+test('正式解鎖後要單獨列出「這次到底動了哪幾件」', () => {
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (text) => printed.push(String(text));
+  console.error = (text) => printed.push(String(text));
+  try {
+    printUnlockSummary([
+      {
+        temsis: 'T115070100001',
+        status: '已解鎖',
+        detail: '第 1 張紀錄表的 TEMSIS 相符；已解鎖',
+        recordIndex: 0,
+        caseDate: '2026/08/01 05:05:03',
+        vehicle: '中壢92',
+        squad: '中壢分隊',
+      },
+      {
+        temsis: 'T115070100009',
+        status: '需人工處理',
+        detail: '定位不明確',
+        caseDate: '2026/08/01 09:15:33',
+      },
+    ], { dryRun: false });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const text = printed.join('\n');
+  assert.match(text, /解鎖清單/);
+  assert.match(text, /2026\/08\/01 05:05:03/, '清單要有案件日期時間');
+  assert.match(text, /中壢92（中壢分隊）/, '清單要有車輛與分隊');
+  assert.match(text, /第 1 張紀錄表/, '清單要說明是第幾張');
+  // 沒動到的那筆不可以混進「動過的清單」裡。
+  const list = text.slice(text.indexOf('解鎖清單'));
+  assert.doesNotMatch(list, /09:15:33/, '沒解鎖的案件不可以出現在解鎖清單中');
+});
+
+test('試跑不會印出解鎖清單，並明說沒有任何案件被解鎖', () => {
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (text) => printed.push(String(text));
+  console.error = (text) => printed.push(String(text));
+  try {
+    printUnlockSummary([
+      { temsis: 'T115070100001', status: '已定位', detail: '第 1 張相符', recordIndex: 0 },
+    ], { dryRun: true });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const text = printed.join('\n');
+  assert.doesNotMatch(text, /解鎖清單/);
+  assert.match(text, /沒有任何案件被實際解鎖/);
 });
