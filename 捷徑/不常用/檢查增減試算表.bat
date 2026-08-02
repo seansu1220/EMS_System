@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0.."
+cd /d "%~dp0..\.."
 title EMS Report - Check Adjustment Google Sheet
 
 where npm >nul 2>nul
