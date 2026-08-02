@@ -410,3 +410,25 @@ test('畫面被導走又回不去時，其餘幾張要記成「沒有比對到�
   assert.equal(outcome.status, '需人工處理');
   assert.match(outcome.detail, /第 2、3 張打不開/);
 });
+
+test('打得開的都不相符、只剩一張沒掃到時，要點出「你要的很可能是那張」', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 2, unlockIndex: 2, recordText: '救護紀錄(鎖)' },
+    ],
+    recordCount: 3,
+    unlockCount: 3,
+    unlockTexts: [],
+  });
+  // 目標是第 2 張，偏偏第 2 張就是打不開的那張。
+  const outcome = await locateUnlockTarget({}, page, 'T115070100002', {
+    readCodes: async (_context, _page, _texts, index) => {
+      if (index === 1) throw new Error('按下「救護紀錄(鎖)」後畫面就離開了案件內部');
+      return { dispatchNo: '1150701000123', temsis: `T11507010000${index + 1}`, kind: 'pdf' };
+    },
+  });
+  assert.equal(outcome.status, '需人工處理');
+  assert.match(outcome.detail, /很可能就是第 2 張/);
+});

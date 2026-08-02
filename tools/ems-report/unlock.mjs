@@ -476,10 +476,13 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     `案件內部：紀錄表 ${paired.recordCount} 張、`
       + `「${UNLOCK.buttonTexts.unlock[0]}」按鈕 ${paired.unlockCount} 個`,
   );
-  // 把配對結果攤開來，方便核對「第幾張紀錄表配到第幾個按鈕」是否合理（只有序號，沒有內容）。
+  // 把配對結果攤開來，方便核對「第幾張紀錄表配到第幾個按鈕」是否合理。
+  // 一併印出每張的按鈕文字：某一張打不開時，這是判斷「它跟其他張哪裡不同」的第一線索
+  // （按鈕文字屬畫面結構，不是個資）。
   if (paired.pairs.length > 0) {
     const mapping = paired.pairs
-      .map((pair) => `第${pair.recordIndex + 1}張→${pair.unlockIndex < 0 ? '同列無按鈕' : `第${pair.unlockIndex + 1}個按鈕`}`)
+      .map((pair) => `第${pair.recordIndex + 1}張「${pair.recordText ?? '?'}」`
+        + `→${pair.unlockIndex < 0 ? '同列無按鈕' : `第${pair.unlockIndex + 1}個按鈕`}`)
       .join('、');
     log.info(`  配對結果：${mapping}`);
   }
@@ -547,6 +550,10 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       // 畫面被換掉時，後面幾張連按鈕都找不到（實跑時第 3、4 張就是這樣連環失敗），
       // 因此先回到案件內部再繼續，不然剩下的等於全部沒掃到。
       if (!(await hasCaseDetail(page))) {
+        // 被導到哪去了？這是查出「這一張為什麼打不開」的關鍵線索，
+        // 先把畫面上可點的東西記下來並存一份結構快照，再回頭繼續。
+        log.info(`  被導走後的畫面：${await describeClickableOptions(page)}`);
+        await captureSnapshot(context, '解鎖-紀錄表把畫面導走');
         const returned = deps.reenterCase
           ? await deps.reenterCase().then(() => true).catch(() => false)
           : false;
@@ -576,12 +583,18 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       + `（${unopened[0].reason}）`;
 
   if (matches.length === 0) {
+    // 打得開的都不是，又剛好只剩一張沒掃到——那張幾乎就是要找的目標。
+    // 仍然不動手（沒親眼比對過就不算數），但要把這個判斷講出來，人才好接手。
+    const likelyNote = unopened.length === 1
+      ? `。打得開的都不是，因此你要的很可能就是第 ${unopened[0].recordIndex + 1} 張，請自行到系統確認`
+      : '';
     return {
       temsis,
       status: '需人工處理',
       detail: unopened.length === paired.recordCount
         ? `${paired.recordCount} 張紀錄表全部打不開，無法比對（${unopened[0].reason}）`
-        : `${paired.recordCount - unopened.length} 張打得開的紀錄表都沒有相符的 TEMSIS${unopenedNote}`,
+        : `${paired.recordCount - unopened.length} 張打得開的紀錄表都沒有相符的 TEMSIS`
+          + `${unopenedNote}${likelyNote}`,
     };
   }
   if (matches.length > 1) {
