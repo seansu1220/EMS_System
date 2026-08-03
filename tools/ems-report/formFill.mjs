@@ -93,6 +93,60 @@ export async function detectDateFormat(frame, selector, fallback) {
 }
 
 /**
+ * 勾選／取消勾選一個勾選框，並回讀確認。
+ *
+ * 為什麼不直接用 Playwright 的 `check()`：目標欄位常在收合的進階搜尋區塊裡，
+ * 元素不可見時 `check()` 會等 10 秒才失敗。這裡沿用 `fillField` 的作法——
+ * 可見就正常點，不可見就直接改 `checked` 並補送 change 事件（系統的 onchange 才會跑到）。
+ *
+ * **一定要回讀**：條件沒真的設定進去而照樣查詢時，這個系統會回傳全部資料，
+ * 統計結果會錯得很難察覺（第 1 章曾因此撈到上萬筆）。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string} selector
+ * @param {boolean} checked 要不要勾起來
+ * @param {string} label 供訊息顯示的欄位名稱
+ * @returns {Promise<void>}
+ */
+export async function setCheckbox(frame, selector, checked, label) {
+  const field = frame.locator(selector);
+  const isVisible = await field.isVisible().catch(() => false);
+
+  if (isVisible) {
+    try {
+      await field.setChecked(checked, { timeout: 10000 });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+      log.warn(`${label} 無法直接點選（${reason}），改用直接寫入`);
+    }
+  } else {
+    log.info(`${label} 目前不可見（可能在收合的搜尋區塊內），直接寫入值`);
+  }
+
+  await frame.evaluate(
+    ({ fieldSelector, fieldChecked }) => {
+      const element = document.querySelector(fieldSelector);
+      if (!element || element.checked === fieldChecked) return;
+      element.checked = fieldChecked;
+      element.dispatchEvent(new Event('click', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    { fieldSelector: selector, fieldChecked: checked },
+  );
+
+  // 回讀給短一點的時間上限：欄位存在時是瞬間就有答案，
+  // 用 Playwright 的預設值（30 秒）只會在「選擇器根本找不到元素」時白等半分鐘。
+  const actual = await field.isChecked({ timeout: 5000 }).catch(() => null);
+  if (actual !== checked) {
+    throw new Error(
+      `${label} 設定後回讀不符：預期「${checked ? '已勾選' : '未勾選'}」，`
+        + `實際「${actual === null ? '讀不到' : actual ? '已勾選' : '未勾選'}」`,
+    );
+  }
+  log.info(`${label}＝${checked ? '已勾選' : '未勾選'}（已確認）`);
+}
+
+/**
  * 在指定 frame 選取下拉選項（以 value 指定，避免文字有全半形差異），並回讀確認。
  *
  * @param {import('playwright-core').Frame} frame

@@ -169,6 +169,215 @@ function queryPage(params) {
     return true;
   }
 
+  /**
+   * 一個元素「旁邊看得到的文字」的所有可能出處，附上**距離**。
+   *
+   * 舊系統的勾選框標籤沒有固定寫法：可能包在 `<label>` 裡、可能就寫在同一格
+   * （`<td><input>EKG檢查</td>`）、也可能在左右相鄰的儲存格（`<td>血糖檢查</td><td><input></td>`）。
+   * 四種都要收，但**距離必須分級**：
+   * 同一列的隔壁格文字，對「我自己」和「隔壁那個勾選框」來說都讀得到，
+   * 不分距離的話，`<td><input A>氣管內管</td><td><input B>EKG檢查</td>` 會讓 A
+   * 因為讀得到隔壁的「EKG檢查」而搶在 B 前面被選中（實測踩到）。
+   *
+   * distance 0＝就是這個元素自己的標籤；1＝隔壁格或相鄰節點。
+   */
+  const nearbyTextsOf = (element) => {
+    const texts = [];
+    const push = (value, distance) => {
+      const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+      if (text) texts.push({ text, distance });
+    };
+
+    if (element.id) {
+      const explicit = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      if (explicit) push(explicit.textContent, 0);
+    }
+    const wrapping = element.closest('label');
+    if (wrapping) push(wrapping.textContent, 0);
+
+    const cell = element.closest('td, th');
+    if (cell) {
+      push(cell.textContent, 0);
+      push(cell.nextElementSibling?.textContent, 1);
+      push(cell.previousElementSibling?.textContent, 1);
+    }
+    // 非表格版面：緊鄰的前後文字節點（`<input><span>EKG檢查</span>` 這種寫法）。
+    push(element.nextElementSibling?.textContent, 1);
+    push(element.nextSibling?.nodeType === 3 ? element.nextSibling.textContent : '', 1);
+    return texts;
+  };
+
+  /** 只取文字（供排查清單顯示）。 */
+  const firstNearbyText = (element) => nearbyTextsOf(element)[0]?.text ?? '';
+
+  /**
+   * 依「旁邊的文字」比對一組候選標籤，回傳命中的候選序號與比對方式。
+   *
+   * 分數越小越好，三個條件依重要性排序：
+   *   1. 候選序號（設定檔把最精確的字樣排前面，這個最優先）
+   *   2. 距離（自己的標籤勝過隔壁格的標籤）
+   *   3. 完全相等勝過包含
+   */
+  const rankByLabels = (entries, wantedLabels) => {
+    let best = null;
+    for (const { text, distance } of entries) {
+      const normalized = normalize(text);
+      if (!normalized) continue;
+      for (const [rank, label] of wantedLabels.entries()) {
+        if (!label) continue;
+        const exact = normalized === label;
+        const hit = exact || normalized.includes(label);
+        if (!hit) continue;
+        const score = rank * 4 + distance * 2 + (exact ? 0 : 1);
+        if (!best || score < best.score) {
+          best = { score, rank, exact, distance, text: text.slice(0, 30) };
+        }
+      }
+    }
+    return best;
+  };
+
+  /** 勾選框（含單選鈕），排除按鈕類的 input。 */
+  const checkboxesIn = () =>
+    [...document.querySelectorAll('input')].filter((element) =>
+      ['checkbox', 'radio'].includes((element.getAttribute('type') || '').toLowerCase()),
+    );
+
+  if (params.mode === 'checkbox' || params.mode === 'checkboxList') {
+    // 這個系統有大量**同名**的勾選框（`_scar`、`_nScar`… 一組幾十個共用一個 name），
+    // 用 name 當選擇器會一次選到一整群。沒有 id 就不回傳選擇器——
+    // 寧可回報找不到，也不要勾錯一個而讓整份統計失真。
+    const selectorOfInput = (element) => (element.id ? `#${CSS.escape(element.id)}` : null);
+
+    if (params.mode === 'checkboxList') {
+      // 找不到目標勾選框時，回報「這一頁的勾選框旁邊各自寫著什麼」。
+      // ⚠ 個資：只取標籤文字（表單結構），且已遮蔽長數字並截斷。
+      const seen = new Set();
+      const listed = [];
+      for (const element of checkboxesIn()) {
+        const text = mask(firstNearbyText(element)).slice(0, 24);
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        listed.push(text);
+        if (listed.length >= params.limit) break;
+      }
+      return listed;
+    }
+
+    const wantedLabels = params.labels.map(normalize);
+    let bestMatch = null;
+    for (const element of checkboxesIn()) {
+      const selector = selectorOfInput(element);
+      if (!selector) continue;
+      const ranked = rankByLabels(nearbyTextsOf(element), wantedLabels);
+      if (!ranked) continue;
+      if (!bestMatch || ranked.score < bestMatch.score) {
+        bestMatch = {
+          score: ranked.score,
+          selector,
+          labelText: ranked.text,
+          exact: ranked.exact,
+          checked: element.checked,
+          visible: isVisible(element),
+          matchedBy: ranked.exact ? '旁邊的文字完全相符' : '旁邊的文字包含此字樣',
+        };
+      }
+    }
+    if (!bestMatch) return null;
+    const { score, ...result } = bestMatch;
+    return result;
+  }
+
+  if (params.mode === 'markedRows') {
+    // 取出「含有指定字樣」的表格列，例如傳輸紀錄畫面中寫著「12導程」的那幾列。
+    //
+    // ⚠ 個資：這是本模組唯一會帶出資料格內容的模式，因為判斷「上傳時間在不在到院之前」
+    //   非做不可。防護作法：只回傳**命中字樣的那幾列**（不是整張表）、每格截斷、
+    //   5 碼以上連續數字遮蔽（時間戳記被 `/`、`:` 隔開，不受影響）。
+    //   呼叫端用完即棄，不落檔（見 ekgVerify.mjs）。
+    const wanted = params.markers.map(normalize);
+
+    /**
+     * 取文字時**把下拉選單的內容拿掉**。
+     *
+     * 查詢頁的「心電圖」下拉本身就有一個叫「12導程心電圖」的選項，
+     * 不排除的話，那一整列查詢條件會被當成一筆 12 導程的上傳紀錄
+     * （實測踩到：一張假頁面上抓出 3 列，其中一列是查詢表單）。
+     * 下拉是「可以選什麼」，不是「這件案子做了什麼」，本來就不該算數。
+     */
+    const visibleTextOf = (node) => {
+      const clone = node.cloneNode(true);
+      for (const control of clone.querySelectorAll('select, option, datalist, script, style')) {
+        control.remove();
+      }
+      return clone.textContent || '';
+    };
+    const textOf = (cell) =>
+      mask(visibleTextOf(cell)).replace(/\s+/g, ' ').trim().slice(0, params.maxCellLength);
+
+    const collected = [];
+    let headers = [];
+    let scanned = 0;
+    for (const table of document.querySelectorAll('table')) {
+      const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+      for (const row of table.rows) {
+        if (row === headerRow) continue;
+        scanned += 1;
+        const rowText = normalize(visibleTextOf(row));
+        if (!wanted.some((marker) => rowText.includes(marker))) continue;
+        if (headers.length === 0 && headerRow && headerRow !== row) {
+          headers = [...headerRow.cells].map(textOf);
+        }
+        collected.push([...row.cells].map(textOf));
+        if (collected.length >= params.maxRows) return { headers, rows: collected, scanned };
+      }
+    }
+    return { headers, rows: collected, scanned };
+  }
+
+  if (params.mode === 'selectByOption' || params.mode === 'selectList') {
+    const selects = [...document.querySelectorAll('select')];
+
+    if (params.mode === 'selectList') {
+      // ⚠ 個資：下拉選項屬系統代碼表（分隊、狀態…），非個人資料，可安全列出；
+      //   這裡只取每個下拉的 id 與前幾個選項，供比對是哪一個欄位。
+      return selects.slice(0, params.limit).map((element) => ({
+        selector: element.id ? `#${element.id}` : '(沒有 id)',
+        nearbyText: mask(firstNearbyText(element)).slice(0, 24),
+        optionCount: element.options.length,
+        sampleOptions: [...element.options].slice(0, 6).map((option) => mask(option.textContent).trim().slice(0, 16)),
+      }));
+    }
+
+    const wantedTexts = params.optionTexts.map(normalize);
+    let bestMatch = null;
+    for (const element of selects) {
+      if (!element.id) continue; // 沒有 id 就無法穩定指定，不猜
+      for (const option of element.options) {
+        const normalized = normalize(option.textContent);
+        if (!normalized) continue;
+        for (const [rank, wanted] of wantedTexts.entries()) {
+          const exact = normalized === wanted;
+          if (!exact && !normalized.includes(wanted)) continue;
+          const score = rank * 2 + (exact ? 0 : 1);
+          if (bestMatch && score >= bestMatch.score) continue;
+          bestMatch = {
+            score,
+            selector: `#${element.id}`,
+            optionValue: option.value,
+            optionText: option.textContent.replace(/\s+/g, ' ').trim().slice(0, 30),
+            nearbyText: firstNearbyText(element).slice(0, 30),
+            visible: isVisible(element),
+            matchedBy: exact ? '選項文字完全相符' : '選項文字包含此字樣',
+          };
+        }
+      }
+    }
+    if (!bestMatch) return null;
+    const { score, ...result } = bestMatch;
+    return result;
+  }
+
   if (params.mode === 'pairs') {
     // 把「紀錄連結」與「解鎖按鈕」以所在的表格列配對。
     // 純粹靠序號配對很危險（順序未必一致），同一列才能確定是同一張紀錄表。
@@ -317,6 +526,80 @@ export async function findField(frame, labelCandidates, options = {}) {
  */
 export async function listFields(frame) {
   return frame.evaluate(queryPage, { mode: 'fieldList' });
+}
+
+/**
+ * 依「旁邊看得到的文字」找勾選框。
+ *
+ * 為什麼不用 id：救護紀錄表查詢頁有 400 多個勾選框，id 全是 `_scarcbc040102`
+ * 這種代碼，光看 id 完全無從得知哪一個是「EKG檢查」。改用人看畫面的方式定位，
+ * 系統改版換 id 也不會壞。
+ *
+ * **沒有 id 的勾選框一律不回傳**：這個系統有大量同名的勾選框，
+ * 用 name 當選擇器會一次選到一整群而勾錯。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} labelCandidates 由前往後比對，最精確的放前面
+ * @returns {Promise<{selector:string, labelText:string, checked:boolean,
+ *   visible:boolean, matchedBy:string}|null>} 找不到時回傳 null（不猜欄位）
+ */
+export async function findCheckbox(frame, labelCandidates) {
+  return frame.evaluate(queryPage, { mode: 'checkbox', labels: labelCandidates });
+}
+
+/**
+ * 列出這一頁所有勾選框旁邊的文字（找不到目標勾選框時的排查用）。
+ * ⚠ 只取標籤文字（表單結構），數字已遮蔽。
+ * @returns {Promise<string[]>}
+ */
+export async function listCheckboxLabels(frame, limit = 60) {
+  return frame.evaluate(queryPage, { mode: 'checkboxList', limit });
+}
+
+/**
+ * 依**選項文字**反推是哪一個下拉選單。
+ *
+ * 為什麼不找標籤：這一頁有 20 幾個下拉，標籤又常常只是隔壁儲存格的一段文字；
+ * 而「12導程心電圖」這種選項只會出現在唯一一個下拉裡，用選項反推精確得多，
+ * 系統把標籤從「心電圖」改成「心電圖類型」也不受影響。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} optionTextCandidates 由前往後比對，最精確的放前面
+ * @returns {Promise<{selector:string, optionValue:string, optionText:string,
+ *   nearbyText:string, visible:boolean, matchedBy:string}|null>}
+ */
+export async function findSelectByOption(frame, optionTextCandidates) {
+  return frame.evaluate(queryPage, { mode: 'selectByOption', optionTexts: optionTextCandidates });
+}
+
+/**
+ * 取出「含有指定字樣」的表格列，例如傳輸紀錄裡寫著「12導程」的那幾列。
+ *
+ * ⚠ 個資：這是本模組唯一會帶出資料格內容的函式。判斷「上傳時間在不在到院之前」
+ *   非讀不可，因此防護放在**限縮範圍**：只回傳命中的那幾列、每格截斷、長數字遮蔽。
+ *   呼叫端只從中取出時間字串，其餘用完即棄，不寫入任何檔案。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} markers 用來認出目標列的字樣（任一命中即可）
+ * @param {{maxRows?: number, maxCellLength?: number}} [options]
+ * @returns {Promise<{headers:string[], rows:string[][], scanned:number}>}
+ */
+export async function findMarkedRows(frame, markers, options = {}) {
+  return frame.evaluate(queryPage, {
+    mode: 'markedRows',
+    markers,
+    maxRows: options.maxRows ?? 20,
+    maxCellLength: options.maxCellLength ?? 40,
+  });
+}
+
+/**
+ * 列出這一頁的下拉選單與各自的前幾個選項（找不到目標下拉時的排查用）。
+ * ⚠ 下拉選項屬系統代碼表（分隊、狀態…），非個人資料。
+ * @returns {Promise<{selector:string, nearbyText:string, optionCount:number, sampleOptions:string[]}[]>}
+ */
+export async function listSelects(frame, limit = 40) {
+  return frame.evaluate(queryPage, { mode: 'selectList', limit });
 }
 
 /**

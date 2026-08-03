@@ -11,7 +11,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWorkbook } from './report.mjs';
-import { REPORT_FORMAT } from './config.mjs';
+import { REPORT_FORMAT, REPORT_PROFILES } from './config.mjs';
+
+/** 預設報表＝到院前預警。樣式取自 REPORT_FORMAT，欄名與分頁名取自這一份。 */
+const PROFILE = REPORT_PROFILES.alert;
 
 const MONTH_RANGE = { label: '2026-06', start: '2026-06-01', end: '2026-06-30' };
 
@@ -43,20 +46,20 @@ test('報表有兩個分頁，標題跨欄合併', () => {
   const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE);
   assert.deepEqual(
     workbook.worksheets.map((sheet) => sheet.name),
-    [REPORT_FORMAT.sheets.grouped, REPORT_FORMAT.sheets.sorted],
+    [PROFILE.sheets.grouped, PROFILE.sheets.sorted],
   );
-  const sheet = workbook.getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = workbook.getWorksheet(PROFILE.sheets.grouped);
   assert.equal(sheet.getCell('A1').value, '本局6/1-6/30到院前預警案件執行率');
   assert.ok(sheet.getCell('A1').isMerged, '標題列需跨欄合併');
-  assert.deepEqual(sheet.getRow(2).values.slice(1), [...REPORT_FORMAT.columns]);
+  assert.deepEqual(sheet.getRow(2).values.slice(1), [...PROFILE.columns]);
 });
 
 test('大隊列有紅色底色，分隊列沒有', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.grouped);
   const expected = REPORT_FORMAT.brigadeRowStyle.fillArgb;
 
   // 第 3 列＝第一大隊、第 4~5 列＝轄下分隊
-  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+  for (let column = 1; column <= PROFILE.columns.length; column += 1) {
     assert.equal(fillArgbOf(sheet.getRow(3).getCell(column)), expected, `大隊列第 ${column} 欄要上色`);
   }
   assert.equal(sheet.getRow(3).getCell(1).font.bold, true, '大隊列要粗體');
@@ -67,14 +70,14 @@ test('大隊列有紅色底色，分隊列沒有', () => {
 });
 
 test('排序分頁沒有大隊，因此完全不上色', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.sorted);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.sorted);
   for (const rowNumber of [3, 4]) {
     assert.equal(fillArgbOf(sheet.getRow(rowNumber).getCell(1)), null);
   }
 });
 
 test('比率以數值寫入並套百分比格式', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.grouped);
   const cell = sheet.getRow(3).getCell(4);
   assert.equal(typeof cell.value, 'number', '比率須為數值，方便在 Excel 內再排序或製圖');
   assert.equal(cell.value, 0.9);
@@ -82,7 +85,7 @@ test('比率以數值寫入並套百分比格式', () => {
 });
 
 test('數字欄位原樣寫入，不做四捨五入或轉字串', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.grouped);
   assert.equal(sheet.getRow(4).getCell(1).value, '桃園分隊');
   assert.equal(sheet.getRow(4).getCell(2).value, 50);
   assert.equal(sheet.getRow(4).getCell(3).value, 55);
@@ -92,7 +95,7 @@ test('每一格都有四邊框線且文字置中', () => {
   const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE);
   for (const sheet of workbook.worksheets) {
     sheet.eachRow((row, rowNumber) => {
-      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+      for (let column = 1; column <= PROFILE.columns.length; column += 1) {
         const cell = row.getCell(column);
         const border = cell.border ?? {};
         for (const side of ['top', 'left', 'bottom', 'right']) {
@@ -111,7 +114,7 @@ test('內文字級為 12、標題列為 16', () => {
   for (const sheet of workbook.worksheets) {
     sheet.eachRow((row, rowNumber) => {
       const expected = rowNumber === 1 ? REPORT_FORMAT.titleFontSize : REPORT_FORMAT.fontSize;
-      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+      for (let column = 1; column <= PROFILE.columns.length; column += 1) {
         assert.equal(row.getCell(column).font?.size, expected,
           `${sheet.name} 第 ${rowNumber} 列第 ${column} 欄字級應為 ${expected}`);
       }
@@ -120,7 +123,7 @@ test('內文字級為 12、標題列為 16', () => {
 });
 
 test('大隊列上色後仍保有框線與字級（樣式不互相覆蓋）', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.grouped);
   const cell = sheet.getRow(3).getCell(1);
   assert.equal(fillArgbOf(cell), REPORT_FORMAT.brigadeRowStyle.fillArgb);
   assert.equal(cell.font.bold, true);
@@ -134,7 +137,7 @@ test('欄寬足以容納最長的內容，文字不會被截斷', () => {
   for (const sheet of workbook.worksheets) {
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return; // 標題列跨欄合併，不受單欄寬度限制
-      for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+      for (let column = 1; column <= PROFILE.columns.length; column += 1) {
         const value = row.getCell(column).value;
         const text = column === 4 && typeof value === 'number'
           ? `${(value * 100).toFixed(2)}%`
@@ -147,7 +150,36 @@ test('欄寬足以容納最長的內容，文字不會被截斷', () => {
 });
 
 test('標題列與資料列都有設定列高', () => {
-  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(REPORT_FORMAT.sheets.grouped);
+  const sheet = buildWorkbook(GROUPED, SORTED, MONTH_RANGE).getWorksheet(PROFILE.sheets.grouped);
   assert.equal(sheet.getRow(1).height, REPORT_FORMAT.titleRowHeight);
   assert.equal(sheet.getRow(3).height, REPORT_FORMAT.rowHeight);
+});
+
+test('換一份 profile 就換一份報表：分頁名、欄名、標題都跟著變，樣式不變', () => {
+  const ekg = REPORT_PROFILES.ekg;
+  const workbook = buildWorkbook(GROUPED, SORTED, MONTH_RANGE, ekg);
+
+  assert.deepEqual(
+    workbook.worksheets.map((sheet) => sheet.name),
+    [ekg.sheets.grouped, ekg.sheets.sorted],
+  );
+  const sheet = workbook.getWorksheet(ekg.sheets.grouped);
+  assert.equal(sheet.getCell('A1').value, '本局6/1-6/3012導程心電圖到院前傳輸率');
+  assert.deepEqual(sheet.getRow(2).values.slice(1), [...ekg.columns]);
+
+  // 兩份報表共用同一套樣式，換 profile 不該把大隊列的底色或框線弄丟。
+  assert.equal(fillArgbOf(sheet.getRow(3).getCell(1)), REPORT_FORMAT.brigadeRowStyle.fillArgb);
+  assert.equal(sheet.getRow(3).getCell(1).border.left.style, REPORT_FORMAT.borderStyle);
+  // 比率欄永遠是最後一欄，不可寫死成第 4 欄。
+  assert.equal(sheet.getRow(3).getCell(ekg.columns.length).numFmt, REPORT_FORMAT.ratioNumberFormat);
+});
+
+test('兩份 profile 的欄數一致，比率都落在最後一欄', () => {
+  // 欄數若哪天改成不一樣，buildSheet 內「比率＝最後一欄」的假設仍成立，
+  // 但終端機表格與欄寬計算都會跟著變，這裡先釘住現況以免無聲走鐘。
+  for (const profile of Object.values(REPORT_PROFILES)) {
+    assert.equal(profile.columns.length, profile.columnWidths.length,
+      `${profile.key} 的欄名與欄寬下限數量必須相同`);
+    assert.equal(profile.columns[0], '', `${profile.key} 第一欄須留白（比照既有人工報表）`);
+  }
 });

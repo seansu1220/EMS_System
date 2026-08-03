@@ -79,6 +79,32 @@ export function resolveSquadColumn(headers, rows, candidates) {
 }
 
 /**
+ * 依欄名候選找出匯出檔中的某一欄。
+ *
+ * 比對順序：完全相符 → 包含（取最短的欄名）。
+ * 取最短是為了避開「TEMSIS ID 修改人」這種把目標欄名包在裡面的複合欄
+ * ——第 1 章曾因為選到「分隊 自行受理」而把整份報表算成只有一個分隊。
+ *
+ * @param {string[]} headers 匯出檔的欄位標題
+ * @param {readonly string[]} candidates 欄名候選，由前往後比對
+ * @returns {{column: string, reason: string}|null} 找不到時回傳 null（**不猜欄位**）
+ */
+export function resolveColumnByNames(headers, candidates) {
+  const normalizedHeaders = headers.map(normalize);
+  for (const candidate of candidates) {
+    const index = normalizedHeaders.indexOf(normalize(candidate));
+    if (index >= 0) return { column: headers[index], reason: `欄名與「${candidate}」完全相符` };
+  }
+  const contains = headers
+    .filter((header) => candidates.some((candidate) => normalize(header).includes(normalize(candidate))))
+    .sort((left, right) => normalize(left).length - normalize(right).length);
+  if (contains.length > 0) {
+    return { column: contains[0], reason: `欄名包含「${candidates[0]}」字樣（推測）` };
+  }
+  return null;
+}
+
+/**
  * 依分隊計算案件數。
  * @param {Record<string, unknown>[]} rows 匯出檔的資料列
  * @param {string} squadColumn 分隊欄名

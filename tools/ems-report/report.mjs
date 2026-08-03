@@ -1,9 +1,11 @@
 /**
  * 報表輸出：終端機表格 + Excel 檔（兩個分頁）。
  *
- * 格式比照使用者既有的報表：
- *   分頁一「到院前預警比例」：各大隊合計 ＋ 其轄下分隊
- *   分頁二「排序」：各分隊依到院前預警率由高到低
+ * 兩份報表（到院前預警比率／心電圖到院前傳輸率）**版面完全相同**，
+ * 差別只在標題與欄名，因此樣式取自 `REPORT_FORMAT`、內容取自
+ * `REPORT_PROFILES` 的其中一份（見 config.mjs）：
+ *   分頁一：各大隊合計 ＋ 其轄下分隊
+ *   分頁二「排序」：各分隊依比率由高到低
  *
  * ⚠ 個資原則：這裡輸出的內容只有單位名稱與統計數字，不含任何個人資料，
  *   因此產出的報表可以安全地帶著走或轉寄。
@@ -11,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
-import { PATHS, REPORT_FORMAT } from './config.mjs';
+import { PATHS, REPORT_FORMAT, REPORT_PROFILES } from './config.mjs';
 import { formatRatio } from './aggregate.mjs';
 import { log } from './logger.mjs';
 
@@ -19,13 +21,16 @@ import { log } from './logger.mjs';
 // （樣式屬付費功能，寫進去讀回來會變成 patternType: none），無法標示大隊列。
 // 讀取匯出檔仍用 SheetJS，因為 ExcelJS 不支援舊的 .xls 格式。
 
-/** 報表標題，例如「本局6/1-6/30到院前預警案件執行率」。 */
-function buildTitle(monthRange) {
+/**
+ * 報表標題，例如「本局6/1-6/30到院前預警案件執行率」。
+ * @param {typeof REPORT_PROFILES.alert} profile
+ */
+function buildTitle(monthRange, profile) {
   const toMonthDay = (isoDate) => {
     const [, month, day] = isoDate.split('-');
     return `${Number(month)}/${Number(day)}`;
   };
-  return `本局${toMonthDay(monthRange.start)}-${toMonthDay(monthRange.end)}到院前預警案件執行率`;
+  return `本局${toMonthDay(monthRange.start)}-${toMonthDay(monthRange.end)}${profile.titleSuffix}`;
 }
 
 /** 計算字串在等寬終端機的顯示寬度（中日韓字元佔 2 格）。 */
@@ -45,8 +50,8 @@ function toRowTexts(stat) {
 }
 
 /** 印出一張對齊的表格。 */
-function printTable(heading, stats) {
-  const headers = ['單位', ...REPORT_FORMAT.columns.slice(1)];
+function printTable(heading, stats, profile) {
+  const headers = ['單位', ...profile.columns.slice(1)];
   const bodyRows = stats.map(toRowTexts);
   const widths = headers.map((header, index) =>
     Math.max(displayWidth(header), ...bodyRows.map((row) => displayWidth(row[index]))),
@@ -66,11 +71,12 @@ function printTable(heading, stats) {
  * @param {import('./aggregate.mjs').GroupedStat[]} groupedRows
  * @param {import('./aggregate.mjs').SquadStat[]} sortedStats
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {typeof REPORT_PROFILES.alert} [profile] 報表種類（預設為到院前預警）
  */
-export function printReport(groupedRows, sortedStats, monthRange) {
-  console.log(`\n${buildTitle(monthRange)}`);
-  printTable('各大隊', groupedRows.filter((row) => row.level === 'brigade'));
-  printTable('各分隊（依到院前預警率由高到低）', sortedStats);
+export function printReport(groupedRows, sortedStats, monthRange, profile = REPORT_PROFILES.alert) {
+  console.log(`\n${buildTitle(monthRange, profile)}`);
+  printTable('各大隊', groupedRows.filter((row) => row.level === 'brigade'), profile);
+  printTable(profile.sortedHeading, sortedStats, profile);
 }
 
 /** 四邊皆為一般粗細的框線。 */
@@ -80,8 +86,8 @@ function thinBorder() {
 }
 
 /** 逐格套用框線與置中（含合併的標題列，否則合併範圍右側會缺框線）。 */
-function applyGridStyle(row, fontSize) {
-  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+function applyGridStyle(row, fontSize, columnCount) {
+  for (let column = 1; column <= columnCount; column += 1) {
     const cell = row.getCell(column);
     cell.border = thinBorder();
     cell.alignment = { ...REPORT_FORMAT.alignment };
@@ -90,9 +96,9 @@ function applyGridStyle(row, fontSize) {
 }
 
 /** 把大隊列標成紅底，方便一眼與轄下分隊區分。 */
-function applyBrigadeStyle(row) {
+function applyBrigadeStyle(row, columnCount) {
   const { fillArgb, fontArgb, bold } = REPORT_FORMAT.brigadeRowStyle;
-  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+  for (let column = 1; column <= columnCount; column += 1) {
     const cell = row.getCell(column);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } };
     cell.font = { ...(cell.font ?? {}), bold, color: { argb: fontArgb } };
@@ -106,18 +112,19 @@ function applyBrigadeStyle(row) {
  * 且本報表字級為 12（大於預設的 11），故加上比例與邊距後再取整。
  *
  * @param {{squad: string, alertCount: number, totalCount: number, ratio: number|null}[]} stats
+ * @param {typeof REPORT_PROFILES.alert} profile
  * @returns {number[]}
  */
-function computeColumnWidths(stats) {
+function computeColumnWidths(stats, profile) {
   const textRows = [
-    [...REPORT_FORMAT.columns],
+    [...profile.columns],
     ...stats.map((stat) => toRowTexts(stat)),
   ];
   const scale = REPORT_FORMAT.fontSize / 11;
   const padding = 3;
-  return REPORT_FORMAT.columns.map((_, index) => {
+  return profile.columns.map((_, index) => {
     const widest = Math.max(...textRows.map((row) => displayWidth(String(row[index] ?? ''))));
-    const minimum = REPORT_FORMAT.columnWidths[index] ?? 10;
+    const minimum = profile.columnWidths[index] ?? 10;
     return Math.max(minimum, Math.ceil(widest * scale) + padding);
   });
 }
@@ -128,34 +135,36 @@ function computeColumnWidths(stats) {
  * @param {string} sheetName
  * @param {string} title
  * @param {(import('./aggregate.mjs').SquadStat & {level?: string})[]} stats
+ * @param {typeof REPORT_PROFILES.alert} profile
  */
-function buildSheet(workbook, sheetName, title, stats) {
+function buildSheet(workbook, sheetName, title, stats, profile) {
   const sheet = workbook.addWorksheet(sheetName);
+  const columnCount = profile.columns.length;
 
   const titleRow = sheet.addRow([title]);
-  sheet.mergeCells(1, 1, 1, REPORT_FORMAT.columns.length);
+  sheet.mergeCells(1, 1, 1, columnCount);
   titleRow.getCell(1).font = { bold: true };
   titleRow.height = REPORT_FORMAT.titleRowHeight;
-  applyGridStyle(titleRow, REPORT_FORMAT.titleFontSize);
+  applyGridStyle(titleRow, REPORT_FORMAT.titleFontSize, columnCount);
 
-  const headerRow = sheet.addRow(REPORT_FORMAT.columns);
-  for (let column = 1; column <= REPORT_FORMAT.columns.length; column += 1) {
+  const headerRow = sheet.addRow(profile.columns);
+  for (let column = 1; column <= columnCount; column += 1) {
     headerRow.getCell(column).font = { bold: REPORT_FORMAT.headerRowStyle.bold };
   }
   headerRow.height = REPORT_FORMAT.rowHeight;
-  applyGridStyle(headerRow, REPORT_FORMAT.fontSize);
+  applyGridStyle(headerRow, REPORT_FORMAT.fontSize, columnCount);
 
   for (const stat of stats) {
     const row = sheet.addRow([stat.squad, stat.alertCount, stat.totalCount, stat.ratio]);
     // 比率以數值寫入並套百分比格式，使用者可直接在 Excel 內再排序或製圖。
-    row.getCell(4).numFmt = REPORT_FORMAT.ratioNumberFormat;
+    row.getCell(columnCount).numFmt = REPORT_FORMAT.ratioNumberFormat;
     row.height = REPORT_FORMAT.rowHeight;
-    if (stat.level === 'brigade') applyBrigadeStyle(row);
+    if (stat.level === 'brigade') applyBrigadeStyle(row, columnCount);
     // 框線與字級最後套，才不會被大隊樣式覆蓋掉。
-    applyGridStyle(row, REPORT_FORMAT.fontSize);
+    applyGridStyle(row, REPORT_FORMAT.fontSize, columnCount);
   }
 
-  computeColumnWidths(stats).forEach((width, index) => {
+  computeColumnWidths(stats, profile).forEach((width, index) => {
     sheet.getColumn(index + 1).width = width;
   });
   return sheet;
@@ -166,29 +175,36 @@ function buildSheet(workbook, sheetName, title, stats) {
  * 而不會覆寫使用者目前的報表檔。
  *
  * @param {import('./aggregate.mjs').GroupedStat[]} groupedRows 大隊＋轄下分隊
- * @param {import('./aggregate.mjs').SquadStat[]} sortedStats 各分隊依預警率排序
+ * @param {import('./aggregate.mjs').SquadStat[]} sortedStats 各分隊依比率排序
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {typeof REPORT_PROFILES.alert} [profile] 報表種類（預設為到院前預警）
  * @returns {import('exceljs').Workbook}
  */
-export function buildWorkbook(groupedRows, sortedStats, monthRange) {
-  const title = buildTitle(monthRange);
+export function buildWorkbook(groupedRows, sortedStats, monthRange, profile = REPORT_PROFILES.alert) {
+  const title = buildTitle(monthRange, profile);
   const workbook = new ExcelJS.Workbook();
-  buildSheet(workbook, REPORT_FORMAT.sheets.grouped, title, groupedRows);
-  buildSheet(workbook, REPORT_FORMAT.sheets.sorted, title, sortedStats);
+  buildSheet(workbook, profile.sheets.grouped, title, groupedRows, profile);
+  buildSheet(workbook, profile.sheets.sorted, title, sortedStats, profile);
   return workbook;
 }
 
 /**
  * 寫出 Excel 報表（兩個分頁）。
  * @param {import('./aggregate.mjs').GroupedStat[]} groupedRows 大隊＋轄下分隊
- * @param {import('./aggregate.mjs').SquadStat[]} sortedStats 各分隊依預警率排序
+ * @param {import('./aggregate.mjs').SquadStat[]} sortedStats 各分隊依比率排序
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {typeof REPORT_PROFILES.alert} [profile] 報表種類（預設為到院前預警）
  * @returns {Promise<string>} 報表檔路徑
  */
-export async function writeReport(groupedRows, sortedStats, monthRange) {
+export async function writeReport(
+  groupedRows,
+  sortedStats,
+  monthRange,
+  profile = REPORT_PROFILES.alert,
+) {
   await fs.mkdir(PATHS.reportDir, { recursive: true });
-  const workbook = buildWorkbook(groupedRows, sortedStats, monthRange);
-  const filePath = path.join(PATHS.reportDir, `到院前預警比率-${monthRange.label}.xlsx`);
+  const workbook = buildWorkbook(groupedRows, sortedStats, monthRange, profile);
+  const filePath = path.join(PATHS.reportDir, `${profile.fileNamePrefix}-${monthRange.label}.xlsx`);
 
   try {
     await workbook.xlsx.writeFile(filePath);

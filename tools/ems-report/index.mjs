@@ -5,9 +5,13 @@
  * 一般使用請雙擊專案的「捷徑\救護預警統計.bat」，不需要記這些指令。
  *
  * 用法：
- *   npm run tool:ems -- run                  跑完整流程（預設查上個月）
- *   npm run tool:ems -- run --month=2026-06  指定月份
- *   npm run tool:ems -- run --keep-raw       保留系統匯出的原始檔（含個資）
+ *   npm run tool:ems -- monthly              月度報表：預警比率 ＋ 心電圖傳輸率一次做完
+ *   npm run tool:ems -- run                  只做到院前預警比率（預設查上個月）
+ *   npm run tool:ems -- ekg                  只做 12 導程心電圖到院前傳輸率
+ *   npm run tool:ems -- ekg --limit=5        只逐案查核前 5 件（先確認判斷正確再跑整月）
+ *   npm run tool:ems -- ekg --no-verify      跳過逐案查核，只看原始件數（很快）
+ *   npm run tool:ems -- <指令> --month=2026-06  指定月份
+ *   npm run tool:ems -- <指令> --keep-raw    保留系統匯出的原始檔（含個資）
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
  *   npm run tool:ems -- probe --manual       改為手動點選的探測模式
  *   npm run tool:ems -- check-sheet          檢查增減用的 Google 試算表能否讀取
@@ -27,6 +31,7 @@ import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
 import {
   resolveSquadColumn,
+  resolveColumnByNames,
   countBySquad,
   buildComparison,
   groupByBrigade,
@@ -34,7 +39,24 @@ import {
   applyAdjustments,
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
-import { SQUAD_COLUMN_CANDIDATES, PATHS, BRIGADES, REPORT_FORMAT, UNLOCK } from './config.mjs';
+import { exportEkgDatasets } from './ekgScrape.mjs';
+import {
+  resolveEkgColumns,
+  buildCaseList,
+  verifyEkgCases,
+  countVerifiedBySquad,
+  writePendingList,
+  progressFilePath,
+  VERDICT,
+} from './ekgVerify.mjs';
+import {
+  SQUAD_COLUMN_CANDIDATES,
+  PATHS,
+  BRIGADES,
+  REPORT_FORMAT,
+  REPORT_PROFILES,
+  UNLOCK,
+} from './config.mjs';
 import {
   resolveSheetSource,
   fetchSheetRows,
@@ -45,18 +67,31 @@ import {
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /** 可用的指令。 */
-const COMMANDS = ['run', 'probe', 'check-sheet', 'unlock'];
+const COMMANDS = ['run', 'ekg', 'monthly', 'probe', 'check-sheet', 'unlock'];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'check-sheet'|'unlock'} command
+ * @property {'probe'|'run'|'ekg'|'monthly'|'check-sheet'|'unlock'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
  * @property {string[]} temsis
  * @property {boolean} dryRun
  * @property {boolean} freshLogin
+ * @property {number|undefined} limit 心電圖逐案查核只跑前幾件
+ * @property {boolean} verify 心電圖是否逐案查核上傳時間
  */
+
+/** 解析 `--limit=N`；給了不是正整數的值就直接報錯，不默默忽略。 */
+function parseLimit(args) {
+  const raw = args.find((arg) => arg.startsWith('--limit='))?.split('=')[1];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`--limit 必須是 1 以上的整數，收到：${raw}`);
+  }
+  return value;
+}
 
 /** 解析命令列參數。 */
 function parseArgs(argv) {
@@ -70,6 +105,12 @@ function parseArgs(argv) {
     command,
     month: args.find((arg) => arg.startsWith('--month='))?.split('=')[1],
     keepRaw: args.includes('--keep-raw'),
+    limit: parseLimit(args),
+    /**
+     * 心電圖的逐案查核很花時間（每件要開好幾個畫面）。
+     * `--no-verify` 可以先看原始件數，確認查詢條件抓對了再跑完整流程。
+     */
+    verify: !args.includes('--no-verify'),
     /** probe 預設全自動；自動導航失敗時可用 --manual 改回手動點選。 */
     manual: args.includes('--manual'),
     temsis: temsisArg.split(/[\s,，;；]+/).filter(Boolean),
@@ -86,6 +127,9 @@ function parseArgs(argv) {
 /**
  * 讀取一份匯出檔並依分隊計數。
  * 欄名屬於檔案結構（非個人資料），完整記錄下來，日後欄位變動時可直接對照。
+ *
+ * @returns {{table: import('./workbook.mjs').TableData, column: string, counts: Map<string, number>}}
+ *   心電圖流程還要用同一份 `table` 取出 TEMSIS 與到院時間，故一併回傳，不重讀檔案。
  */
 function countFile(filePath, label) {
   const table = readTable(filePath, SQUAD_COLUMN_CANDIDATES);
@@ -107,7 +151,7 @@ function countFile(filePath, label) {
         `目前選中「${column}」。實際欄位有：${table.headers.join('、')}`,
     );
   }
-  return counts;
+  return { table, column, counts };
 }
 
 /** 刪除含個案明細的原始匯出檔。 */
@@ -145,8 +189,8 @@ async function runReportFlow(session, monthRange, keepRaw) {
   log.step('解析匯出檔並依分隊彙總');
   let stats;
   try {
-    const totalCounts = countFile(rawFiles.total, '總案件');
-    const alertCounts = countFile(rawFiles.alert, '到院前預警案件');
+    const totalCounts = countFile(rawFiles.total, '總案件').counts;
+    const alertCounts = countFile(rawFiles.alert, '到院前預警案件').counts;
     stats = buildComparison(totalCounts, alertCounts);
   } catch (error) {
     log.fail('解析匯出檔', error);
@@ -176,6 +220,112 @@ async function runReportFlow(session, monthRange, keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.total)}（含個資，請自行妥善處理）`);
   } else {
     await removeRawFiles(rawFiles);
+  }
+}
+
+/**
+ * 分子不可能比分母多。
+ *
+ * 這是唯一能自動抓出「兩次查詢條件不一致」的檢查點：
+ * 分母查 EKG檢查、分子查 12導程心電圖，12 導程本來就是 EKG 的一種，
+ * 因此任何一個分隊的分子超過分母，就代表兩個欄位的語意跟我們的假設不同
+ * （例如分母那個勾選框其實不是「有沒有做 EKG」）。
+ * 這種錯誤產出的報表看起來很正常，不主動檢查就會一路錯下去。
+ */
+function warnIfNumeratorExceedsDenominator(stats) {
+  const broken = stats.filter((item) => item.alertCount > item.totalCount);
+  if (broken.length === 0) return;
+  log.warn(
+    `有 ${broken.length} 個分隊的「到院前傳出12導程案件」比「EKG檢查案件」還多，這不可能：`
+      + broken.map((item) => `${item.squad}（${item.alertCount}>${item.totalCount}）`).join('、'),
+  );
+  log.warn(
+    '這代表兩次查詢的條件不是同一個口徑——最可能是「EKG檢查」勾選框抓錯了欄位。'
+      + '請看上方的欄位定位訊息，並依實際畫面調整 config.mjs 的 EKG.procedureLabels。',
+  );
+}
+
+/**
+ * 心電圖流程：兩次查詢與匯出 → 逐案查核 → 產出報表。
+ *
+ * 分母＝做過 EKG 檢查的案件；
+ * 分子＝做了 12 導程、**且查核確認在到院前就傳出去**的案件。
+ *
+ * @param {import('./session.mjs').EmsSession} session
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {CliOptions} options
+ */
+async function runEkgFlow(session, monthRange, options) {
+  const profile = REPORT_PROFILES.ekg;
+  const rawFiles = await exportEkgDatasets(session.context, session.page, monthRange);
+
+  log.step('解析匯出檔並依分隊彙總');
+  const denominator = countFile(rawFiles.denominator, '分母：EKG檢查案件');
+  const numerator = countFile(rawFiles.numerator, '分子：12導程心電圖案件（未查核）');
+
+  let verifiedCounts = numerator.counts;
+  let pendingPath = null;
+  if (options.verify) {
+    const columns = resolveEkgColumns(numerator.table, resolveColumnByNames);
+    for (const note of columns.notes) log.info(note);
+
+    const cases = buildCaseList(numerator.table.rows, {
+      temsis: columns.temsis,
+      squad: numerator.column,
+      arrival: columns.arrival,
+    });
+    log.info(`可逐案查核的案件：${cases.length} 件（匯出檔共 ${numerator.table.rows.length} 列）`);
+
+    const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
+    verifiedCounts = countVerifiedBySquad(result.outcomes);
+    printVerifySummary(result.outcomes, cases.length);
+    pendingPath = await writePendingList(result.outcomes, monthRange);
+    if (result.aborted) {
+      log.warn('查核中途已中止，這份報表的分子並不完整，請修正問題後重跑（會接續進度）。');
+    }
+  } else {
+    log.warn('依 --no-verify 跳過逐案查核：分子是「有做 12 導程」的原始件數，');
+    log.warn('  **沒有**排除掉到院後才上傳的案件，數字會偏高，不可當成正式報表。');
+  }
+
+  const stats = buildComparison(denominator.counts, verifiedCounts);
+  warnIfNumeratorExceedsDenominator(stats);
+  if (stats.length === 0) log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
+
+  const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
+  if (unmapped.length > 0) {
+    log.warn(
+      `有 ${unmapped.length} 個單位不在大隊對應表內，已歸入「${REPORT_FORMAT.unmappedGroupName}」：`
+        + `${unmapped.join('、')}。若是新設或改隸分隊，請更新 config.mjs 的 BRIGADES。`,
+    );
+  }
+
+  const sortedStats = sortByRatioDesc(stats);
+  printReport(groupedRows, sortedStats, monthRange, profile);
+  await writeReport(groupedRows, sortedStats, monthRange, profile);
+  if (pendingPath) log.info(`待人工確認清單：${path.relative(process.cwd(), pendingPath)}`);
+
+  if (options.keepRaw) {
+    log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.denominator)}（含個資，請自行妥善處理）`);
+  } else {
+    await removeRawFiles({
+      denominator: rawFiles.denominator,
+      numerator: rawFiles.numerator,
+      // 進度檔含完整 TEMSIS，屬個案明細，跟匯出檔同一批處理掉。
+      progress: progressFilePath(monthRange),
+    });
+  }
+}
+
+/** 逐案查核的結果摘要（只有件數，不列個案）。 */
+function printVerifySummary(outcomes, totalCases) {
+  const countOf = (verdict) => outcomes.filter((item) => item.verdict === verdict).length;
+  log.step('逐案查核結果');
+  log.info(`到院前傳出：${countOf(VERDICT.before)} 件（這些才計入分子）`);
+  log.info(`到院後才傳：${countOf(VERDICT.after)} 件（不計入）`);
+  log.info(`判定不出來：${countOf(VERDICT.unknown)} 件（不計入，另外列清單）`);
+  if (outcomes.length < totalCases) {
+    log.warn(`本次只查核了 ${outcomes.length} / ${totalCases} 件，其餘未查核的一律不計入分子。`);
   }
 }
 
@@ -311,8 +461,57 @@ async function main() {
         : runAutoProbe(session.context, session.page));
       return;
     }
+    if (options.command === 'ekg') {
+      await runEkgFlow(session, monthRange, options);
+      return;
+    }
+    if (options.command === 'monthly') {
+      await runMonthlyFlow(session, monthRange, options);
+      return;
+    }
     await runReportFlow(session, monthRange, options.keepRaw);
   }, { freshLogin: options.freshLogin });
+}
+
+/**
+ * 月度報表：一次登入把兩份報表都做完。
+ *
+ * 兩份報表各自獨立輸出成一個檔（使用者 2026-08-03 選擇），既有的預警報表檔名與格式完全不變。
+ *
+ * **前面那份失敗不會讓後面那份也做不成**：兩份報表沒有依賴關係，
+ * 心電圖流程要跑一兩個小時，不該因為預警報表的一個小問題就整晚白跑。
+ * 失敗的那份會在最後統一報告，結束碼也會反映出來。
+ */
+async function runMonthlyFlow(session, monthRange, options) {
+  /** @type {{name: string, error: unknown}[]} */
+  const failures = [];
+  const steps = [
+    { name: '到院前預警比率', run: () => runReportFlow(session, monthRange, options.keepRaw) },
+    { name: '12導程心電圖到院前傳輸率', run: () => runEkgFlow(session, monthRange, options) },
+  ];
+
+  for (const [position, step] of steps.entries()) {
+    log.step(`月度報表 ${position + 1} / ${steps.length}：${step.name}`);
+    try {
+      await step.run();
+      log.ok(`${step.name} 完成`);
+    } catch (error) {
+      failures.push({ name: step.name, error });
+      log.fail(step.name, error);
+      log.warn(`${step.name} 失敗，繼續做下一份報表（兩份互不相干）。`);
+    }
+  }
+
+  log.step('月度報表輸出結果');
+  for (const step of steps) {
+    const failed = failures.find((item) => item.name === step.name);
+    if (failed) log.warn(`${step.name}：失敗（${failed.error instanceof Error ? failed.error.message : failed.error}）`);
+    else log.ok(`${step.name}：完成`);
+  }
+  log.info(`報表位置：${path.relative(process.cwd(), PATHS.reportDir)}`);
+  if (failures.length > 0) {
+    throw new Error(`${failures.length} 份報表沒有做成功（詳見上方說明）`);
+  }
 }
 
 main()

@@ -112,8 +112,11 @@ function waitForAnyDownload(context, action) {
   });
 }
 
-/** 按下查詢並等待結果頁回來。 */
-async function runQuery(page) {
+/**
+ * 按下查詢並等待結果頁回來。
+ * 心電圖流程（ekgScrape.mjs）共用這個實作，兩邊的等待方式才不會各走各的。
+ */
+export async function runQuery(page) {
   const content = getFrame(page, SITE.frames.content);
   await content.locator(SITE.queryFields.queryButton).click();
   // 這個系統以 POST 重載內容框，網址不會變，因此以「載入完成 + 緩衝」判定。
@@ -183,7 +186,7 @@ async function exportExcel(context, page, targetPath) {
  * 由於失敗現在能在數秒內偵測到，重試的成本很低，
  * 但可以省下使用者為了重跑而重新登入一次的麻煩。
  */
-async function exportExcelWithRetry(context, page, targetPath) {
+export async function exportExcelWithRetry(context, page, targetPath) {
   try {
     return await exportExcel(context, page, targetPath);
   } catch (error) {

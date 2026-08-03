@@ -32,6 +32,33 @@ function extractStructure(rowLimit) {
     return Boolean(table) && table.rows.length > rowLimit;
   };
 
+  /**
+   * 元素「旁邊看得到的文字」。
+   *
+   * 為什麼一定要記：這一頁有 400 多個勾選框，id 全是 `_scarcbc040102` 這種代碼，
+   * 光看 id 完全無從得知哪一個是「EKG檢查」。沒有這一欄的話，
+   * 每次要對應一個新欄位都得請使用者重新登入探測一次（2026-08-03 實際踩到）。
+   *
+   * ⚠ 個資：標籤文字屬**表單結構**（欄位叫什麼名字），不是使用者填的值；
+   *   仍照 `clean` 遮蔽 5 碼以上數字並截斷。
+   */
+  const nearbyTextOf = (element) => {
+    if (element.id) {
+      const explicit = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+      if (explicit) return clean(explicit.textContent, 30);
+    }
+    const wrapping = element.closest('label');
+    if (wrapping) return clean(wrapping.textContent, 30);
+    const cell = element.closest('td, th');
+    if (!cell) return clean(element.nextElementSibling?.textContent, 30);
+    // 同一格內就有文字（`<td><input>EKG檢查</td>`）優先；沒有才看左右相鄰的格子。
+    return (
+      clean(cell.textContent, 30)
+      || clean(cell.nextElementSibling?.textContent, 30)
+      || clean(cell.previousElementSibling?.textContent, 30)
+    );
+  };
+
   const inputs = [...document.querySelectorAll('input, textarea')].map((element) => {
     const type = (element.getAttribute('type') || element.tagName.toLowerCase()).toLowerCase();
     return {
@@ -40,6 +67,8 @@ function extractStructure(rowLimit) {
       name: element.getAttribute('name') || '',
       className: clean(element.className, 60),
       label: BUTTON_TYPES.has(type) ? clean(element.getAttribute('value'), 40) : '',
+      // 按鈕的文字已經在 label 裡；其餘欄位靠旁邊的文字才認得出來是什麼。
+      nearbyText: BUTTON_TYPES.has(type) ? '' : nearbyTextOf(element),
       onclick: clean(element.getAttribute('onclick'), 160),
     };
   });
@@ -47,6 +76,7 @@ function extractStructure(rowLimit) {
   const selects = [...document.querySelectorAll('select')].map((element) => ({
     id: element.id || '',
     name: element.getAttribute('name') || '',
+    nearbyText: nearbyTextOf(element),
     options: [...element.options].map((option) => ({
       value: option.value,
       text: clean(option.textContent, 40),
