@@ -121,6 +121,49 @@ export function countBySquad(rows, squadColumn) {
 }
 
 /**
+ * 把多份匯出檔取**聯集**後依分隊計數，同一件案子只算一次。
+ *
+ * 用途：心電圖報表的分母是「有勾 EKG檢查**或**有 12 導程心電圖」的案件
+ * （使用者 2026-08-04 決定）。系統的查詢條件做不出 OR，
+ * 但兩份匯出檔都有 TEMSIS，在本機用它去重即可。
+ *
+ * 為什麼要取聯集：實測兩者互有出入（EKG檢查 243、12導程 285、交集只有 202），
+ * 用任何一邊當分母都會把另一邊獨有的案件排除在評比之外。
+ *
+ * 同一個 TEMSIS 在兩份檔案裡的分隊理應相同；真的不同時**以先出現的為準**
+ * 並回報，不默默挑一個。
+ *
+ * @param {{rows: Record<string, unknown>[], temsisColumn: string, squadColumn: string}[]} sources
+ * @returns {{counts: Map<string, number>, total: number, conflicts: string[]}}
+ *   `conflicts` 為同一件案子在不同檔案裡分隊不一致的 TEMSIS（**已遮蔽**由呼叫端處理）
+ */
+export function countUnionBySquad(sources) {
+  /** TEMSIS → 分隊。用 Map 去重，同一件案子只會留一筆。 */
+  const squadOf = new Map();
+  const conflicts = [];
+
+  for (const source of sources) {
+    for (const row of source.rows) {
+      const temsis = String(row[source.temsisColumn] ?? '').trim();
+      const squad = String(row[source.squadColumn] ?? '').trim();
+      if (!temsis || !squad) continue;
+      const existing = squadOf.get(temsis);
+      if (existing === undefined) {
+        squadOf.set(temsis, squad);
+      } else if (existing !== squad) {
+        conflicts.push(temsis);
+      }
+    }
+  }
+
+  const counts = new Map();
+  for (const squad of squadOf.values()) {
+    counts.set(squad, (counts.get(squad) ?? 0) + 1);
+  }
+  return { counts, total: squadOf.size, conflicts };
+}
+
+/**
  * 合併兩份計數，產生各分隊的比較結果。
  * 依總案件數由多到少排序，數量相同則依分隊名稱排序，確保每次輸出順序一致。
  *

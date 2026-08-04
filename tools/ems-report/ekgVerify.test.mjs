@@ -15,7 +15,7 @@ import {
   resolveEkgColumns,
   VERDICT,
 } from './ekgVerify.mjs';
-import { resolveColumnByNames } from './aggregate.mjs';
+import { resolveColumnByNames, countUnionBySquad } from './aggregate.mjs';
 
 const CONTEXT = { defaultYear: 2026, defaultDate: '2026-07-02' };
 
@@ -140,6 +140,76 @@ test('全部都判定不出來時分子為 0，而不是拿原始件數頂替', 
     { squad: '中壢分隊', verdict: VERDICT.unknown },
   ];
   assert.equal(countVerifiedBySquad(outcomes).size, 0);
+});
+
+test('分母取聯集：兩份都有的案件只算一次', () => {
+  // 使用者 2026-08-04 決定：分母＝有勾 EKG檢查「或」有 12 導程。
+  // 實測兩者互有出入（243／285／交集 202），取聯集才不會漏掉任一邊獨有的案件。
+  const ekgChecked = {
+    rows: [
+      { T: 'A1', S: '桃園分隊' },
+      { T: 'A2', S: '桃園分隊' },
+      { T: 'A3', S: '中壢分隊' },
+    ],
+    temsisColumn: 'T',
+    squadColumn: 'S',
+  };
+  const twelveLead = {
+    rows: [
+      { T: 'A2', S: '桃園分隊' }, // 兩份都有，只能算一次
+      { T: 'B1', S: '桃園分隊' }, // 只有 12 導程有
+      { T: 'B2', S: '大溪分隊' },
+    ],
+    temsisColumn: 'T',
+    squadColumn: 'S',
+  };
+  const { counts, total, conflicts } = countUnionBySquad([ekgChecked, twelveLead]);
+  assert.equal(total, 5, 'A1 A2 A3 B1 B2 共 5 件，A2 重複只算一次');
+  assert.equal(counts.get('桃園分隊'), 3);
+  assert.equal(counts.get('中壢分隊'), 1);
+  assert.equal(counts.get('大溪分隊'), 1);
+  assert.deepEqual(conflicts, []);
+});
+
+test('同一件案子在兩份檔案裡分隊不一致時要提出來，不默默挑一個', () => {
+  const left = { rows: [{ T: 'A1', S: '桃園分隊' }], temsisColumn: 'T', squadColumn: 'S' };
+  const right = { rows: [{ T: 'A1', S: '中壢分隊' }], temsisColumn: 'T', squadColumn: 'S' };
+  const { counts, total, conflicts } = countUnionBySquad([left, right]);
+  assert.equal(total, 1);
+  assert.equal(counts.get('桃園分隊'), 1, '以先出現的為準');
+  assert.deepEqual(conflicts, ['A1']);
+});
+
+test('聯集會跳過沒有 TEMSIS 或沒有分隊的列', () => {
+  const source = {
+    rows: [{ T: '', S: '桃園分隊' }, { T: 'A1', S: '' }, { T: 'A2', S: '桃園分隊' }],
+    temsisColumn: 'T',
+    squadColumn: 'S',
+  };
+  assert.equal(countUnionBySquad([source]).total, 1);
+});
+
+test('分子必定是聯集分母的子集合（比率不可能超過 100%）', () => {
+  // 分子取自 12 導程那份，而 12 導程整份都在聯集裡，所以逐隊都不可能超過。
+  const twelveLead = {
+    rows: [
+      { T: 'B1', S: '桃園分隊' },
+      { T: 'B2', S: '桃園分隊' },
+      { T: 'B3', S: '中壢分隊' },
+    ],
+    temsisColumn: 'T',
+    squadColumn: 'S',
+  };
+  const ekgChecked = { rows: [{ T: 'A1', S: '中壢分隊' }], temsisColumn: 'T', squadColumn: 'S' };
+  const { counts } = countUnionBySquad([ekgChecked, twelveLead]);
+
+  // 最極端的情況：12 導程那份**全部**查核通過。
+  const numerator = countVerifiedBySquad(
+    twelveLead.rows.map((row) => ({ squad: row.S, verdict: VERDICT.before })),
+  );
+  for (const [squad, count] of numerator) {
+    assert.ok(count <= counts.get(squad), `${squad} 的分子 ${count} 不該超過分母 ${counts.get(squad)}`);
+  }
 });
 
 test('resolveColumnByNames 完全相符優先，其次取最短的包含者', () => {

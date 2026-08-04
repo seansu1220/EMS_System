@@ -288,6 +288,48 @@ function queryPage(params) {
     return result;
   }
 
+  if (params.mode === 'rowsWithColumnValue') {
+    // 找出「某一欄有值」的列，例如傳輸紀錄裡 EKG 那一欄不是空的那幾列。
+    //
+    // 為什麼需要這個而不是用文字找列：傳輸紀錄的 EKG 是**欄位標題**，
+    // 資料列裡放的是量測數值，用「內容含 EKG」去找永遠找不到（實測踩過）。
+    //
+    // ⚠ 個資：**只回傳 `wantedHeaders` 命中的欄位值**，其餘儲存格一律不帶出去。
+    const wantedColumn = params.columnCandidates.map(normalize);
+    const results = [];
+    for (const table of document.querySelectorAll('table')) {
+      const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+      if (!headerRow) continue;
+      const headers = [...headerRow.cells].map((cell) =>
+        (cell.textContent || '').replace(/\s+/g, ' ').trim(),
+      );
+      // 欄名以**完全相等**比對：`EKG` 若用包含比對會連「EKG判讀狀態」一起命中。
+      const columnIndex = headers.findIndex((header) => wantedColumn.includes(normalize(header)));
+      if (columnIndex < 0) continue;
+
+      for (const row of table.rows) {
+        if (row === headerRow) continue;
+        const cells = [...row.cells];
+        const marker = (cells[columnIndex]?.textContent || '').replace(/\s+/g, ' ').trim();
+        // 空白、`-`、`無` 都當作「這一列沒有做」。
+        if (!marker || ['-', '－', '無', 'N/A'].includes(marker)) continue;
+
+        const values = {};
+        for (const wanted of params.wantedHeaders) {
+          const index = headers.findIndex((header) => normalize(header).includes(normalize(wanted)));
+          if (index >= 0 && cells[index]) {
+            values[wanted] = mask(cells[index].textContent || '')
+              .replace(/\s+/g, ' ').trim().slice(0, 40);
+          }
+        }
+        results.push({ marker: mask(marker).slice(0, 20), values });
+        if (results.length >= params.maxRows) return { headers, matched: results };
+      }
+      return { headers, matched: results };
+    }
+    return { headers: [], matched: [] };
+  }
+
   if (params.mode === 'tableHeaders') {
     // 找不到目標時，回報「這一頁有哪些表格、各自的欄位叫什麼」。
     // ⚠ 個資：**只取標題列**，資料列一個都不碰（與探測模式同一套規則）。
@@ -588,6 +630,30 @@ export async function listCheckboxLabels(frame, limit = 60) {
  */
 export async function findSelectByOption(frame, optionTextCandidates) {
   return frame.evaluate(queryPage, { mode: 'selectByOption', optionTexts: optionTextCandidates });
+}
+
+/**
+ * 找出「某一欄有值」的列，並取回指定欄位的值。
+ *
+ * 用途：傳輸紀錄那張生命徵象表裡，找出 **EKG 那一欄不是空的**那幾列，
+ * 取它們的量測時間。那張表的 EKG 是欄位標題、資料列裡是量測數值，
+ * 用「內容含 EKG」的方式找列永遠找不到（2026-08-04 實測踩過）。
+ *
+ * ⚠ 個資：只回傳 `wantedHeaders` 命中的欄位值，其餘儲存格不帶出去；長數字已遮蔽。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} columnCandidates 目標欄名（**完全相等**比對，避免 `EKG` 命中「EKG判讀狀態」）
+ * @param {string[]} wantedHeaders 要取回的欄位名稱（以「包含」比對）
+ * @param {{maxRows?: number}} [options]
+ * @returns {Promise<{headers: string[], matched: {marker: string, values: Record<string,string>}[]}>}
+ */
+export async function findRowsWithColumnValue(frame, columnCandidates, wantedHeaders, options = {}) {
+  return frame.evaluate(queryPage, {
+    mode: 'rowsWithColumnValue',
+    columnCandidates,
+    wantedHeaders,
+    maxRows: options.maxRows ?? 20,
+  });
 }
 
 /**

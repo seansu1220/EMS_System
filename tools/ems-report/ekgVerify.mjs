@@ -31,7 +31,6 @@ import {
   describeClickableOptions,
   submitQuery,
   pickFirstValue,
-  hasCaseDetail,
   openCaseByDispatchNo,
 } from './caseFlow.mjs';
 import { log } from './logger.mjs';
@@ -40,6 +39,7 @@ import {
   clickMatch,
   findClickables,
   findMarkedRows,
+  findRowsWithColumnValue,
   groupByRow,
   listTableHeaders,
   readRowFields,
@@ -346,12 +346,66 @@ async function readSheetInfo(context, page, index) {
 }
 
 /**
- * 找出「傳輸紀錄」按鈕在不在目前這個畫面上。
- * @returns {Promise<number>} 按鈕序號；沒有則回傳 -1
+ * 後備路線：從「傳輸紀錄」的生命徵象表取心電圖的量測時間。
+ *
+ * 只有在案件內部的「上傳」清單裡找不到 12 導程時才會走到這裡
+ * （使用者 2026-08-04 決定的順序）。
+ *
+ * 這張表與上傳清單的結構完全不同：EKG 是**欄位標題**、資料列裡是量測數值，
+ * 因此要找的是「EKG 這一欄有值的列」，而不是「內容含 12導程 的列」。
+ *
+ * ⚠ 取到的是**量測時間**（什麼時候量的），不是傳出去的時間，兩者語意不同，
+ *   因此回傳值的 `from` 會明說來源，讓使用者在待確認清單上看得出來。
+ *
+ * @param {string} temsis 要重新查回案件用（按傳輸紀錄會把畫面導走）
+ * @returns {Promise<{time: import('./timeParse.mjs').ParsedTime, from: string}|null>}
  */
-async function findTransmissionButton(page) {
+async function readTransmissionEkgTime(context, page, temsis, range, timeContext) {
+  // 現在人在案件內部，傳輸紀錄只存在於查詢結果那一列，得先回去。
+  const rowIndex = await queryByTemsis(page, temsis, range);
+  if (rowIndex < 0) {
+    log.info('回不到查詢結果，傳輸紀錄這條後備路線跳過');
+    return null;
+  }
   const buttons = await findClickables(content(page), EKG.verify.transmissionButtons).catch(() => []);
-  return buttons.length > 0 ? buttons[0].index : -1;
+  if (buttons.length === 0) {
+    log.info(`查詢結果這一列沒有「${EKG.verify.transmissionButtons[0]}」按鈕`);
+    return null;
+  }
+
+  const clicked = await clickMatch(content(page), EKG.verify.transmissionButtons, buttons[0].index);
+  if (!clicked) return null;
+  // 這個按鈕是就地換頁（不是彈出視窗），等頁面載完即可。
+  await page.waitForLoadState('load', { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(EKG.verify.settleMs);
+
+  const found = await findRowsWithColumnValue(
+    content(page),
+    EKG.verify.transmissionEkgColumns,
+    EKG.verify.transmissionTimeLabels,
+  ).catch(() => null);
+  if (!found?.matched.length) {
+    log.info(
+      `傳輸紀錄裡沒有「${EKG.verify.transmissionEkgColumns[0]}」欄有值的列`
+        + `（該表欄位：${found?.headers.join('｜') || '讀不到'}）`,
+    );
+    return null;
+  }
+
+  // 量過好幾次時取最早的一次，與上傳清單的規則一致。
+  const times = found.matched
+    .map((row) => findFirstDateTime(
+      EKG.verify.transmissionTimeLabels.map((label) => row.values[label]).filter(Boolean),
+      timeContext,
+    ))
+    .filter(Boolean);
+  if (times.length === 0) {
+    log.info(`傳輸紀錄有 ${found.matched.length} 列做了心電圖，但那幾列讀不出時間`);
+    return null;
+  }
+  const earliest = times.reduce((best, item) => (item.epochMs < best.epochMs ? item : best));
+  log.info(`傳輸紀錄：${found.matched.length} 列有心電圖，最早的量測時間 ${earliest.matched}`);
+  return { time: earliest, from: '傳輸紀錄的「量測時間」（不是上傳時間）' };
 }
 
 /**
@@ -421,101 +475,71 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     defaultDate: parsedCaseDate ? new Date(parsedCaseDate.epochMs).toISOString().slice(0, 10) : undefined,
   };
 
-  // ---- 上傳時間：先看查詢結果這一列有沒有「傳輸紀錄」 ----
-  let panel = null;
+  // ---- 上傳時間：先走案件內部的「上傳」（使用者 2026-08-04 決定的優先順序） ----
+  //
+  // 為什麼上傳優先：實測那是唯一直接寫著「上傳時間 ＋ 檔案類型＝12導程心電圖」的地方，
+  // 而且設備自動傳的檔案也會進到這份清單（備註寫著「ZOLL介接心電圖」）。
+  // 查詢結果那一列的「傳輸紀錄」其實是**生命徵象量測表**，時間欄叫「量測時間」
+  // （量的時間 ≠ 傳出去的時間），語意較弱，因此只當後備。
+  const sheetInfo = await readSheetInfo(context, page, rowIndex);
+  if (!parseDateTime(arrivalText, localContext) && sheetInfo.arrivalText) {
+    arrivalText = sheetInfo.arrivalText;
+  }
+  if (!sheetInfo.dispatchNo) {
+    return {
+      ...base,
+      verdict: VERDICT.unknown,
+      reason: '紀錄表上讀不到指派案號，進不了案件內部',
+      arrival: arrivalText,
+      upload: null,
+      source: '讀不到指派案號',
+      caseDate,
+    };
+  }
+  await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
+
+  let upload = null;
   let source = '';
-  const transmissionIndex = await findTransmissionButton(page);
-  log.info(
-    transmissionIndex >= 0
-      ? `查詢結果這一列有「${EKG.verify.transmissionButtons[0]}」，先從那裡找上傳時間`
-      : `查詢結果這一列沒有「${EKG.verify.transmissionButtons[0]}」，改走案件內部`,
-  );
-  if (transmissionIndex >= 0) {
-    panel = await openPanelRows(
+  const uploadButtons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
+  log.info(`案件內部的「上傳」：${uploadButtons.length === 0 ? '這一頁沒有這個按鈕' : '點進去看'}`);
+  if (uploadButtons.length > 0) {
+    const panel = await openPanelRows(
       context,
       page,
-      EKG.verify.transmissionButtons,
-      transmissionIndex,
+      EKG.verify.uploadButtons,
+      uploadButtons[0].index,
       EKG.verify.twelveLeadMarkers,
     );
-    if (panel) source = `查詢結果的「傳輸紀錄」（${panel.where}）`;
-  }
-
-  // ---- 找不到就走第二條路：進案件內部看「傳輸紀錄」，再不然看「上傳」 ----
-  let sheetInfo = null;
-  if (!panel) {
-    // 剛才按「傳輸紀錄」有可能把查詢結果整個換掉，那樣紀錄表按鈕就不在了。
-    // 不先確認的話，接下來每一步都會以「找不到按鈕」連環失敗，錯誤訊息還與真正的原因無關。
-    if (transmissionIndex >= 0) {
-      const stillThere = await findClickables(content(page), UNLOCK.buttonTexts.openRecordSheet)
-        .catch(() => []);
-      if (stillThere.length === 0) {
-        log.info('按過「傳輸紀錄」後查詢結果不見了，重新查一次再繼續');
-        rowIndex = await queryByTemsis(page, target.temsis, range);
-        if (rowIndex < 0) {
-          return {
-            ...base,
-            verdict: VERDICT.unknown,
-            reason: '按過「傳輸紀錄」後畫面被導走，重新查詢也找不回這筆案件',
-            arrival: arrivalText,
-            upload: null,
-            source: '畫面被導走',
-            caseDate,
-          };
-        }
-      }
-    }
-    sheetInfo = await readSheetInfo(context, page, rowIndex);
-    if (!parseDateTime(arrivalText, localContext) && sheetInfo.arrivalText) {
-      arrivalText = sheetInfo.arrivalText;
-    }
-    if (!sheetInfo.dispatchNo) {
-      return {
-        ...base,
-        verdict: VERDICT.unknown,
-        reason: '查詢結果沒有「傳輸紀錄」，且紀錄表上讀不到指派案號，進不了案件內部',
-        arrival: arrivalText,
-        upload: null,
-        source: '讀不到指派案號',
-        caseDate,
-      };
-    }
-    await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
-
-    for (const [buttonTexts, label] of [
-      [EKG.verify.transmissionButtons, '案件內部的「傳輸紀錄」'],
-      [EKG.verify.uploadButtons, '案件內部的「上傳」'],
-    ]) {
-      const found = await findClickables(content(page), buttonTexts).catch(() => []);
-      log.info(`${label}：${found.length === 0 ? '這一頁沒有這個按鈕' : `找到 ${found.length} 個，點進去看`}`);
-      if (found.length === 0) continue;
-      panel = await openPanelRows(context, page, buttonTexts, found[0].index, EKG.verify.twelveLeadMarkers);
-      if (panel) {
-        source = `${label}（${panel.where}）`;
-        break;
-      }
-      // 點過之後畫面可能被導走，後面那個按鈕就找不到了，先回到案件內部。
-      if (!(await hasCaseDetail(page))) {
-        await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
-      }
+    if (panel) {
+      upload = pickEarliestUploadTime(panel, localContext);
+      if (upload) source = `案件內部的「上傳」（${panel.where}）`;
     }
   }
 
-  if (!panel) {
+  // ---- 上傳清單裡沒有 12 導程，才回頭查傳輸紀錄的 EKG 欄 ----
+  if (!upload) {
+    log.info(`上傳清單裡沒有「${EKG.verify.twelveLeadMarkers[0]}」，回頭查傳輸紀錄`);
+    const transmission = await readTransmissionEkgTime(context, page, target.temsis, range, localContext);
+    if (transmission) {
+      upload = transmission;
+      source = '查詢結果的「傳輸紀錄」（EKG 欄的量測時間）';
+    }
+  }
+
+  if (!upload) {
     await captureSnapshot(context, '心電圖-找不到上傳時間');
     return {
       ...base,
       verdict: VERDICT.unknown,
-      reason: `傳輸紀錄與上傳兩個地方都找不到「${EKG.verify.twelveLeadMarkers[0]}」的紀錄。`
+      reason: '案件內部的「上傳」與查詢結果的「傳輸紀錄」都找不到 12 導程的時間。'
         + await describeClickableOptions(page),
       arrival: arrivalText,
       upload: null,
-      source: '找不到上傳紀錄',
+      source: '兩邊都找不到',
       caseDate,
     };
   }
 
-  const upload = pickEarliestUploadTime(panel, localContext);
   const arrival = parseDateTime(arrivalText, localContext);
   const { verdict, reason } = compareUploadToArrival(upload?.time ?? null, arrival);
   return {

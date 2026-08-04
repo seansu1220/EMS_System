@@ -33,6 +33,7 @@ import {
   resolveSquadColumn,
   resolveColumnByNames,
   countBySquad,
+  countUnionBySquad,
   buildComparison,
   groupByBrigade,
   sortByRatioDesc,
@@ -66,6 +67,7 @@ import {
   countAdjustmentsBySquad,
 } from './adjustSheet.mjs';
 import { log, closePrompt, writeLogFile } from './logger.mjs';
+import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
 const COMMANDS = ['run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet', 'unlock'];
@@ -225,37 +227,34 @@ async function runReportFlow(session, monthRange, keepRaw) {
 }
 
 /**
- * 「12 導程」照理是「有做 EKG 檢查」的子集合，所以分子不該比分母多。
+ * 分子必定是分母的子集合，超過就是**程式算錯了**。
  *
- * 這是唯一能自動抓出「兩次查詢不是同一個口徑」的檢查點——
+ * 分母是「有勾 EKG檢查 ∪ 有 12 導程」的聯集，分子是後者中查核通過的那些，
+ * 因此數學上不可能超過。真的超過只有一個解釋：**聯集去重失敗**
+ * （最可能是某份匯出檔的 TEMSIS 欄抓錯，導致同一件案子被算成兩件、或根本沒被納入分母）。
+ *
  * 這種錯誤產出的報表看起來完全正常，不主動檢查就會一路錯下去。
  *
- * ⚠ **必須拿還沒查核的原始件數來比**（2026-08-04 實跑後修正）：
- * 查核過的分子已經被篩掉一大半，只比查核後的數字，
- * 分母其實比分子小這種根本性的問題會被整個蓋掉——第一次實跑就是這樣漏掉的
- * （分母 243 筆、分子 285 筆，但因為查核全部失敗、分子變成 0，警告一句都沒出現）。
- *
- * @param {Map<string, number>} denominatorCounts EKG 檢查案件（分母）
- * @param {Map<string, number>} rawNumeratorCounts **未經查核**的 12 導程案件
+ * @param {Map<string, number>} denominatorCounts 聯集後的分母
+ * @param {Map<string, number>} numeratorCounts 查核通過的分子
  */
-function warnIfNumeratorExceedsDenominator(denominatorCounts, rawNumeratorCounts) {
+function warnIfNumeratorExceedsDenominator(denominatorCounts, numeratorCounts) {
   const sum = (counts) => [...counts.values()].reduce((total, count) => total + count, 0);
   const denominatorTotal = sum(denominatorCounts);
-  const numeratorTotal = sum(rawNumeratorCounts);
+  const numeratorTotal = sum(numeratorCounts);
 
-  const broken = [...rawNumeratorCounts]
+  const broken = [...numeratorCounts]
     .filter(([squad, count]) => count > (denominatorCounts.get(squad) ?? 0))
     .map(([squad, count]) => `${squad}（${count}>${denominatorCounts.get(squad) ?? 0}）`);
   if (numeratorTotal <= denominatorTotal && broken.length === 0) return;
 
-  log.warn('⚠⚠ 分子比分母還多，這在邏輯上不可能，報表數字不可採用 ⚠⚠');
-  log.warn(`　全局：12導程 ${numeratorTotal} 件 > EKG檢查 ${denominatorTotal} 件`);
+  log.warn('⚠⚠ 分子比分母還多，這在數學上不可能，報表數字不可採用 ⚠⚠');
+  log.warn(`　全局：分子 ${numeratorTotal} 件 > 分母 ${denominatorTotal} 件`);
   if (broken.length > 0) {
     log.warn(`　分隊：${broken.slice(0, 10).join('、')}${broken.length > 10 ? ` 等 ${broken.length} 隊` : ''}`);
   }
-  log.warn('　代表「EKG檢查」與「12導程心電圖」不是包含關係。兩種可能，需要人來判斷：');
-  log.warn('　(1) 分母那個勾選框抓錯了欄位 → 看上方的欄位定位訊息，調 config.mjs 的 EKG.procedureLabels');
-  log.warn('　(2) 欄位沒抓錯，是實務上就有人沒勾「EKG檢查」卻上傳了 12 導程 → 分母的定義要重新討論');
+  log.warn('　分子是分母的子集合，超過代表聯集去重失敗——最可能是某份匯出檔的 TEMSIS 欄抓錯。');
+  log.warn('　請看上方「TEMSIS 欄判定為…」那兩行，確認兩份檔案都抓到正確的欄位。');
 }
 
 /**
@@ -273,17 +272,37 @@ async function runEkgFlow(session, monthRange, options) {
   const rawFiles = await exportEkgDatasets(session.context, session.page, monthRange);
 
   log.step('解析匯出檔並依分隊彙總');
-  const denominator = countFile(rawFiles.denominator, '分母：EKG檢查案件');
-  const numerator = countFile(rawFiles.numerator, '分子：12導程心電圖案件（未查核）');
-  // 先用原始件數比一次：查核之後分子會被篩掉一大半，那時再比就看不出條件不一致了。
-  warnIfNumeratorExceedsDenominator(denominator.counts, numerator.counts);
+  const ekgChecked = countFile(rawFiles.denominator, '有勾EKG檢查的案件');
+  const numerator = countFile(rawFiles.numerator, '有12導程心電圖的案件（分子母體，未查核）');
+
+  // 分母＝兩者的**聯集**（使用者 2026-08-04 決定）：實測兩邊互有出入
+  // （EKG檢查 243、12導程 285、交集只有 202），用任一邊當分母都會把另一邊
+  // 獨有的案件排除在評比之外。分子是 12 導程的子集合，因此比率必定 ≤ 100%。
+  const denominatorColumns = {
+    ekg: resolveEkgColumns(ekgChecked.table, resolveColumnByNames),
+    twelveLead: resolveEkgColumns(numerator.table, resolveColumnByNames),
+  };
+  const union = countUnionBySquad([
+    { rows: ekgChecked.table.rows, temsisColumn: denominatorColumns.ekg.temsis, squadColumn: ekgChecked.column },
+    { rows: numerator.table.rows, temsisColumn: denominatorColumns.twelveLead.temsis, squadColumn: numerator.column },
+  ]);
+  log.ok(
+    `分母（聯集）：${union.total} 件`
+      + `＝有勾EKG檢查 ${ekgChecked.table.rows.length} 件 ∪ 有12導程 ${numerator.table.rows.length} 件`,
+  );
+  if (union.conflicts.length > 0) {
+    log.warn(
+      `有 ${union.conflicts.length} 件案子在兩份匯出檔裡的分隊不一致，已以先出現的為準：`
+        + union.conflicts.slice(0, 5).map(maskCode).join('、'),
+    );
+  }
 
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
   /** 分子不完整的原因；非空字串代表這份數字不能當正式報表。 */
   let incomplete = '';
   if (options.verify) {
-    const columns = resolveEkgColumns(numerator.table, resolveColumnByNames);
+    const columns = denominatorColumns.twelveLead;
     for (const note of columns.notes) log.info(note);
 
     const cases = buildCaseList(numerator.table.rows, {
@@ -309,7 +328,9 @@ async function runEkgFlow(session, monthRange, options) {
     log.warn('  **沒有**排除掉到院後才上傳的案件，數字會偏高，不可當成正式報表。');
   }
 
-  const stats = buildComparison(denominator.counts, verifiedCounts);
+  const stats = buildComparison(union.counts, verifiedCounts);
+  // 分子是分母的子集合，超過就代表聯集算錯了（例如 TEMSIS 欄抓錯而去重失敗）。
+  warnIfNumeratorExceedsDenominator(union.counts, verifiedCounts);
   if (stats.length === 0) log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
 
   const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);

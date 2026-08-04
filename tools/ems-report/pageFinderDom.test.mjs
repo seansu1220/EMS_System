@@ -20,7 +20,9 @@ import {
   findCheckbox,
   findSelectByOption,
   findMarkedRows,
+  findRowsWithColumnValue,
   listCheckboxLabels,
+  listTableHeaders,
 } from './pageFinder.mjs';
 import { setCheckbox, selectField } from './formFill.mjs';
 
@@ -61,6 +63,30 @@ const FIXTURE = `
   <tr><td>1</td><td>血氧紀錄.pdf</td><td>2026/07/02 11:00:00</td><td>2026/07/02 11:05:00</td></tr>
   <tr><td>2</td><td>12導程心電圖.pdf</td><td>2026/07/02 12:00:00</td><td>2026/07/02 12:30:00</td></tr>
   <tr><td>3</td><td>12導程心電圖-重傳.pdf</td><td>2026/07/02 13:00:00</td><td>2026/07/02 13:10:00</td></tr>
+</table>
+<!--
+  仿「傳輸紀錄」那張生命徵象量測表（2026-08-04 實測到的真實欄位）。
+  重點：EKG 是**欄位標題**，資料列裡放的是量測數值——
+  用「內容含 EKG／12導程」的方式找列永遠找不到，必須改成「找 EKG 那一欄有值的列」。
+  另外故意放一個「EKG判讀狀態」欄當誘餌，驗證欄名是完全相等比對。
+-->
+<table>
+  <tr>
+    <th>量測時間</th><th>儀器</th><th>呼吸</th><th>脈搏</th><th>血壓</th>
+    <th>SpO2</th><th>EKG</th><th>EKG判讀狀態</th>
+  </tr>
+  <tr>
+    <td>2026/07/01 09:40:00</td><td>ZOLL</td><td>18</td><td>96</td><td>130/80</td>
+    <td>97</td><td></td><td>未判讀</td>
+  </tr>
+  <tr>
+    <td>2026/07/01 09:33:16</td><td>ZOLL</td><td>20</td><td>102</td><td>128/76</td>
+    <td>96</td><td>V</td><td>已判讀</td>
+  </tr>
+  <tr>
+    <td>2026/07/01 09:55:00</td><td>ZOLL</td><td>19</td><td>98</td><td>126/78</td>
+    <td>98</td><td>-</td><td>未判讀</td>
+  </tr>
 </table>`;
 
 /** 依序試 Chrome、Edge；兩個都沒有就回傳 null，讓整組測試略過。 */
@@ -163,6 +189,37 @@ test('下拉選單選得到，選錯值會被回讀擋下', { skip }, async () =
   await selectField(frame, '#_selECG', '', '心電圖＝不限');
   assert.equal(await frame.locator('#_selECG').inputValue(), '');
   await assert.rejects(() => selectField(frame, '#_selECG', '99', '不存在的選項'), /回讀不符/);
+});
+
+test('傳輸紀錄：找得出 EKG 那一欄有值的列，空的與「-」都不算', { skip }, async () => {
+  const found = await findRowsWithColumnValue(frame, ['EKG'], ['量測時間']);
+  assert.equal(found.matched.length, 1, '只有 EKG 欄寫著 V 的那一列算數');
+  assert.equal(found.matched[0].values['量測時間'], '2026/07/01 09:33:16');
+  assert.equal(found.matched[0].marker, 'V');
+});
+
+test('欄名用完全相等比對，「EKG」不會誤中「EKG判讀狀態」', { skip }, async () => {
+  // 誘餌欄每一列都有值；若誤中它，三列全會被當成做過心電圖。
+  const found = await findRowsWithColumnValue(frame, ['EKG'], ['量測時間']);
+  assert.notEqual(found.matched.length, 3, '誤中 EKG判讀狀態 就會變成 3 列');
+});
+
+test('傳輸紀錄只帶回指定欄位，不把血壓脈搏等整列內容撈出來', { skip }, async () => {
+  const found = await findRowsWithColumnValue(frame, ['EKG'], ['量測時間']);
+  assert.deepEqual(Object.keys(found.matched[0].values), ['量測時間'],
+    '個資防護：沒點名的欄位一律不回傳');
+});
+
+test('找不到目標欄位時回傳空陣列，不亂猜一欄', { skip }, async () => {
+  const found = await findRowsWithColumnValue(frame, ['這一頁沒有的欄'], ['量測時間']);
+  assert.deepEqual(found.matched, []);
+});
+
+test('listTableHeaders 列得出每張表的欄位，供對不上時排查', { skip }, async () => {
+  const tables = await listTableHeaders(frame);
+  assert.ok(tables.some((text) => text.includes('量測時間') && text.includes('EKG')),
+    `實際列出：${tables.join(' / ')}`);
+  assert.ok(tables.some((text) => text.includes('上傳時間')));
 });
 
 test('只取出含「12導程」的那幾列，其他列不帶出來', { skip }, async () => {
