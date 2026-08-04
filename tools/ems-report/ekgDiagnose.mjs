@@ -70,9 +70,11 @@ async function runAllQueries(context, page, monthRange) {
   const tables = new Map();
 
   for (const query of QUERIES) {
+    // 診斷要量「不限」與「加條件」兩種，因此**兩邊都明確指定**，
+    // 不靠預設值——預設值哪天改了，這裡量出來的東西就會變成另一件事。
     await applyBaseCriteria(page, monthRange, query.strict
       ? { rescueStatus: QUERY_CRITERIA.rescueStatusValue, transport: QUERY_CRITERIA.transportValue }
-      : {});
+      : { rescueStatus: '', transport: '' });
     const filePath = await queryAndExport(
       context,
       page,
@@ -146,11 +148,14 @@ function reportStrictCriteria(tables) {
     if (loose !== strict) anyDifference = true;
     log.info(`${name}：不限 ${loose} 件 → 加條件 ${strict} 件（少了 ${loose - strict} 件）`);
   }
+  const inUse = EKG.baseCriteria.rescueStatus || EKG.baseCriteria.transport ? '加條件' : '不限';
+  log.info(`　目前正式報表用的是：**${inUse}**（設定在 config.mjs 的 EKG.baseCriteria）`);
   if (!anyDifference) {
     log.ok('完全一樣。這些案件本來就都是「已結案且有送醫」，加不加這兩個條件都不影響結果。');
     return;
   }
-  log.warn('加了條件會少掉一些案件（多半是未結案或未運送）。要不要加是業務判斷，需要你決定。');
+  log.info('差異的那幾件多半是未結案或未運送——未運送就沒有「送達醫院時間」可比對，');
+  log.info('留在母體裡只會變成「無法判定」，因此已改為預設加上條件。');
 }
 
 /**

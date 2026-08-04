@@ -113,10 +113,11 @@ export async function locateEkgFields(page) {
  * 靠「應該是空的」來假設條件正確，正是這個系統最容易出錯的地方。
  */
 export async function applyBaseCriteria(page, monthRange, criteria = {}) {
-  // 預設兩個都「不限」（使用者 2026-08-03 決定）。診斷指令會傳入「已結案＋送醫」
-  // 來量差別，因此做成參數而不是寫死。
-  const rescueStatus = criteria.rescueStatus ?? '';
-  const transport = criteria.transport ?? '';
+  // 預設取自 `EKG.baseCriteria`（目前是「已結案＋送醫」，使用者 2026-08-05 決定）。
+  // 診斷指令會明確傳入空字串來量「不限」的件數，因此這裡用 `??` 而非 `||`
+  // ——空字串是「刻意不限」，不可以被預設值蓋掉。
+  const rescueStatus = criteria.rescueStatus ?? EKG.baseCriteria.rescueStatus;
+  const transport = criteria.transport ?? EKG.baseCriteria.transport;
   const describe = (value, limited) => (value ? limited : '不限');
   log.step(
     `設定查詢期間（救護狀態＝${describe(rescueStatus, QUERY_CRITERIA.rescueStatusLabel)}、`

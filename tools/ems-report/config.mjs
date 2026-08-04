@@ -471,6 +471,22 @@ export const EKG = {
    */
   keepProcedureCheckedForNumerator: false,
 
+  /**
+   * 兩次查詢共通的基準條件。
+   *
+   * 使用者 2026-08-05 決定**限定「已結案＋送醫」**（原本兩個都不限）。
+   * 實測差異極小——勾EKG檢查 243→242、12導程 285→284，各只少 1 件——
+   * 但這一件正是待人工確認清單上唯一的**資料問題**：
+   * 它沒有送醫，所以沒有「送達醫院時間」可以拿來比對，只能判「無法判定」。
+   * 加了條件就直接把它排除在母體外，少一件要人工判的案子。
+   *
+   * 另一個好處是與第 1 章的到院前預警報表同口徑，兩份報表的母體可以互相對照。
+   */
+  baseCriteria: {
+    rescueStatus: QUERY_CRITERIA.rescueStatusValue,
+    transport: QUERY_CRITERIA.transportValue,
+  },
+
   /** 逐案查核（判斷 12 導程是不是在到院前就傳出去了）。 */
   verify: {
     /**

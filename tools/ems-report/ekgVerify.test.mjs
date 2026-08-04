@@ -16,6 +16,7 @@ import {
   VERDICT,
 } from './ekgVerify.mjs';
 import { resolveColumnByNames, countUnionBySquad } from './aggregate.mjs';
+import { EKG, QUERY_CRITERIA } from './config.mjs';
 
 const CONTEXT = { defaultYear: 2026, defaultDate: '2026-07-02' };
 
@@ -214,6 +215,22 @@ test('分子必定是聯集分母的子集合（比率不可能超過 100%）', 
   for (const [squad, count] of numerator) {
     assert.ok(count <= counts.get(squad), `${squad} 的分子 ${count} 不該超過分母 ${counts.get(squad)}`);
   }
+});
+
+test('兩次查詢的基準條件是「已結案＋送醫」，且與第 1 章同一組代碼', () => {
+  // 使用者 2026-08-05 決定加上這兩個條件：未運送的案件沒有「送達醫院時間」，
+  // 留在母體裡只會變成「無法判定」，白白多一件要人工判。
+  // 這裡釘住的是「別哪天被改回不限卻沒人發現」——那會讓母體悄悄變大。
+  assert.equal(EKG.baseCriteria.rescueStatus, QUERY_CRITERIA.rescueStatusValue);
+  assert.equal(EKG.baseCriteria.transport, QUERY_CRITERIA.transportValue);
+  assert.ok(EKG.baseCriteria.rescueStatus, '救護狀態不可以是空字串（空＝不限）');
+  assert.ok(EKG.baseCriteria.transport, '送醫情形不可以是空字串（空＝不限）');
+});
+
+test('上傳清單只認檔案類型欄，設定不可退回比對整列文字', () => {
+  // 2026-08-05 使用者指正：備註寫著「12導程操作說明書」的案件會被誤算。
+  assert.deepEqual(EKG.verify.fileTypeColumns, ['檔案類型']);
+  assert.ok(EKG.verify.maxAttemptsPerCase >= 2, '暫時性失敗要能重試，否則會變成人工案件');
 });
 
 test('resolveColumnByNames 完全相符優先，其次取最短的包含者', () => {
