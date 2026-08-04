@@ -40,6 +40,7 @@ import {
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
 import { exportEkgDatasets } from './ekgScrape.mjs';
+import { runEkgDiagnose } from './ekgDiagnose.mjs';
 import {
   resolveEkgColumns,
   buildCaseList,
@@ -67,11 +68,11 @@ import {
 import { log, closePrompt, writeLogFile } from './logger.mjs';
 
 /** 可用的指令。 */
-const COMMANDS = ['run', 'ekg', 'monthly', 'probe', 'check-sheet', 'unlock'];
+const COMMANDS = ['run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet', 'unlock'];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'monthly'|'check-sheet'|'unlock'} command
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -224,25 +225,37 @@ async function runReportFlow(session, monthRange, keepRaw) {
 }
 
 /**
- * 分子不可能比分母多。
+ * 「12 導程」照理是「有做 EKG 檢查」的子集合，所以分子不該比分母多。
  *
- * 這是唯一能自動抓出「兩次查詢條件不一致」的檢查點：
- * 分母查 EKG檢查、分子查 12導程心電圖，12 導程本來就是 EKG 的一種，
- * 因此任何一個分隊的分子超過分母，就代表兩個欄位的語意跟我們的假設不同
- * （例如分母那個勾選框其實不是「有沒有做 EKG」）。
- * 這種錯誤產出的報表看起來很正常，不主動檢查就會一路錯下去。
+ * 這是唯一能自動抓出「兩次查詢不是同一個口徑」的檢查點——
+ * 這種錯誤產出的報表看起來完全正常，不主動檢查就會一路錯下去。
+ *
+ * ⚠ **必須拿還沒查核的原始件數來比**（2026-08-04 實跑後修正）：
+ * 查核過的分子已經被篩掉一大半，只比查核後的數字，
+ * 分母其實比分子小這種根本性的問題會被整個蓋掉——第一次實跑就是這樣漏掉的
+ * （分母 243 筆、分子 285 筆，但因為查核全部失敗、分子變成 0，警告一句都沒出現）。
+ *
+ * @param {Map<string, number>} denominatorCounts EKG 檢查案件（分母）
+ * @param {Map<string, number>} rawNumeratorCounts **未經查核**的 12 導程案件
  */
-function warnIfNumeratorExceedsDenominator(stats) {
-  const broken = stats.filter((item) => item.alertCount > item.totalCount);
-  if (broken.length === 0) return;
-  log.warn(
-    `有 ${broken.length} 個分隊的「到院前傳出12導程案件」比「EKG檢查案件」還多，這不可能：`
-      + broken.map((item) => `${item.squad}（${item.alertCount}>${item.totalCount}）`).join('、'),
-  );
-  log.warn(
-    '這代表兩次查詢的條件不是同一個口徑——最可能是「EKG檢查」勾選框抓錯了欄位。'
-      + '請看上方的欄位定位訊息，並依實際畫面調整 config.mjs 的 EKG.procedureLabels。',
-  );
+function warnIfNumeratorExceedsDenominator(denominatorCounts, rawNumeratorCounts) {
+  const sum = (counts) => [...counts.values()].reduce((total, count) => total + count, 0);
+  const denominatorTotal = sum(denominatorCounts);
+  const numeratorTotal = sum(rawNumeratorCounts);
+
+  const broken = [...rawNumeratorCounts]
+    .filter(([squad, count]) => count > (denominatorCounts.get(squad) ?? 0))
+    .map(([squad, count]) => `${squad}（${count}>${denominatorCounts.get(squad) ?? 0}）`);
+  if (numeratorTotal <= denominatorTotal && broken.length === 0) return;
+
+  log.warn('⚠⚠ 分子比分母還多，這在邏輯上不可能，報表數字不可採用 ⚠⚠');
+  log.warn(`　全局：12導程 ${numeratorTotal} 件 > EKG檢查 ${denominatorTotal} 件`);
+  if (broken.length > 0) {
+    log.warn(`　分隊：${broken.slice(0, 10).join('、')}${broken.length > 10 ? ` 等 ${broken.length} 隊` : ''}`);
+  }
+  log.warn('　代表「EKG檢查」與「12導程心電圖」不是包含關係。兩種可能，需要人來判斷：');
+  log.warn('　(1) 分母那個勾選框抓錯了欄位 → 看上方的欄位定位訊息，調 config.mjs 的 EKG.procedureLabels');
+  log.warn('　(2) 欄位沒抓錯，是實務上就有人沒勾「EKG檢查」卻上傳了 12 導程 → 分母的定義要重新討論');
 }
 
 /**
@@ -262,9 +275,13 @@ async function runEkgFlow(session, monthRange, options) {
   log.step('解析匯出檔並依分隊彙總');
   const denominator = countFile(rawFiles.denominator, '分母：EKG檢查案件');
   const numerator = countFile(rawFiles.numerator, '分子：12導程心電圖案件（未查核）');
+  // 先用原始件數比一次：查核之後分子會被篩掉一大半，那時再比就看不出條件不一致了。
+  warnIfNumeratorExceedsDenominator(denominator.counts, numerator.counts);
 
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
+  /** 分子不完整的原因；非空字串代表這份數字不能當正式報表。 */
+  let incomplete = '';
   if (options.verify) {
     const columns = resolveEkgColumns(numerator.table, resolveColumnByNames);
     for (const note of columns.notes) log.info(note);
@@ -281,15 +298,18 @@ async function runEkgFlow(session, monthRange, options) {
     printVerifySummary(result.outcomes, cases.length);
     pendingPath = await writePendingList(result.outcomes, monthRange);
     if (result.aborted) {
+      incomplete = '查核中途被中止（連續多件判定不出來）';
       log.warn('查核中途已中止，這份報表的分子並不完整，請修正問題後重跑（會接續進度）。');
+    } else if (result.skipped > 0) {
+      incomplete = `依 --limit 只查核了 ${result.outcomes.length} / ${cases.length} 件`;
     }
   } else {
+    incomplete = '加了 --no-verify、沒有逐案查核';
     log.warn('依 --no-verify 跳過逐案查核：分子是「有做 12 導程」的原始件數，');
     log.warn('  **沒有**排除掉到院後才上傳的案件，數字會偏高，不可當成正式報表。');
   }
 
   const stats = buildComparison(denominator.counts, verifiedCounts);
-  warnIfNumeratorExceedsDenominator(stats);
   if (stats.length === 0) log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
 
   const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
@@ -302,7 +322,15 @@ async function runEkgFlow(session, monthRange, options) {
 
   const sortedStats = sortByRatioDesc(stats);
   printReport(groupedRows, sortedStats, monthRange, profile);
-  await writeReport(groupedRows, sortedStats, monthRange, profile);
+  // 分子不完整時**不寫檔**：一份每個分隊都是 0.0% 的 xlsx 看起來跟正式報表一模一樣，
+  // 擺在 out/report/ 裡遲早會被誤當成真的寄出去。終端機上的表格照印，
+  // 因為那正是拿來核對「欄位有沒有抓對」用的（2026-08-04 實跑後補上）。
+  if (incomplete) {
+    log.warn(`因為${incomplete}，這次**不會**寫出 ${profile.fileNamePrefix} 的 Excel 檔。`);
+    log.info('上面的表格只能拿來核對欄位判定是否正確，數字不可當成正式結果。');
+  } else {
+    await writeReport(groupedRows, sortedStats, monthRange, profile);
+  }
   if (pendingPath) log.info(`待人工確認清單：${path.relative(process.cwd(), pendingPath)}`);
 
   if (options.keepRaw) {
@@ -463,6 +491,10 @@ async function main() {
     }
     if (options.command === 'ekg') {
       await runEkgFlow(session, monthRange, options);
+      return;
+    }
+    if (options.command === 'ekg-diag') {
+      await runEkgDiagnose(session, monthRange);
       return;
     }
     if (options.command === 'monthly') {

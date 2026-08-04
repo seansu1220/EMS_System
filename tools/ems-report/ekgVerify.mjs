@@ -36,7 +36,14 @@ import {
 } from './caseFlow.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
-import { clickMatch, findClickables, findMarkedRows, groupByRow, readRowFields } from './pageFinder.mjs';
+import {
+  clickMatch,
+  findClickables,
+  findMarkedRows,
+  groupByRow,
+  listTableHeaders,
+  readRowFields,
+} from './pageFinder.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import { extractLabeledValue, maskCode } from './sheetFields.mjs';
@@ -63,6 +70,14 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
 
 /** 判定結果的三種值，集中定義避免各處字串打錯。 */
 export const VERDICT = { before: '到院前', after: '到院後', unknown: '無法判定' };
+
+/**
+ * 已經留過診斷的按鈕。
+ *
+ * 某個按鈕按下去沒反應時，第一次要把「跑到哪一頁、那頁有什麼」記下來；
+ * 但跑幾百件的話每一件的情形都一樣，全部存下來只會把 out/probe/ 塞爆。
+ */
+const diagnosedButtons = new Set();
 
 /** 進度檔路徑（與匯出明細同層，統計後一起刪除）。 */
 export function progressFilePath(monthRange) {
@@ -175,6 +190,27 @@ export function buildCaseList(rows, columns) {
  *   找不到目標列時回傳 null
  */
 async function openPanelRows(context, page, buttonTexts, index, markers) {
+  /**
+   * 按下去**之前**先看原畫面本來就有哪些「含 12 導程」的列。
+   *
+   * ⚠ 這是實跑（2026-08-04）踩到的坑，不加這一段整批案件都會判定失敗：
+   * 查詢條件區裡本來就有一個寫著「12導程心電圖」的勾選框，
+   * 它所在的那一列當然含有「12導程」四個字，於是點完傳輸紀錄後的「原畫面」檢查
+   * 立刻命中那一列，程式以為找到傳輸紀錄了——但查詢條件那一列根本沒有時間，
+   * 結果就是每一件都回報「讀不到 12 導程的上傳時間」，而且完全看不出原因。
+   *
+   * 因此原畫面的比對結果**必須與按下去之前不同**才算數。
+   */
+  const baseline = await findMarkedRows(content(page), markers).catch(() => null);
+  const signatureOf = (found) => JSON.stringify(found?.rows ?? []);
+  const baselineSignature = signatureOf(baseline);
+  if (baseline?.rows.length) {
+    log.info(
+      `（原畫面本來就有 ${baseline.rows.length} 列含「${markers[0]}」，多半是查詢條件區的勾選框，`
+        + '之後只認「按下去之後才變出來的」列）',
+    );
+  }
+
   /** @type {import('playwright-core').Page[]} */
   const opened = [];
   const onNewPage = (newPage) => opened.push(newPage);
@@ -191,7 +227,19 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
   page.on('dialog', onDialog);
   try {
     const clicked = await clickMatch(content(page), buttonTexts, index);
-    if (!clicked) return null;
+    if (!clicked) {
+      log.info(`點不到「${buttonTexts[0]}」（按鈕在點擊當下消失了）`);
+      return null;
+    }
+
+    /** 找到時把來源與欄位記下來：欄名屬畫面結構，是日後對不上欄位時唯一的線索。 */
+    const describe = (found, where) => {
+      log.info(
+        `找到 ${found.rows.length} 列含「${markers[0]}」（來源：${where}），`
+          + `欄位：${found.headers.join('｜') || '(這張表沒有標題列)'}`,
+      );
+      return { ...found, where };
+    };
 
     const deadline = Date.now() + EKG.verify.panelTimeoutMs;
     while (Date.now() < deadline) {
@@ -201,15 +249,31 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
         await candidate.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
         for (const frame of candidate.frames()) {
           const found = await findMarkedRows(frame, markers).catch(() => null);
-          if (found?.rows.length) return { ...found, where: '另開的視窗' };
+          if (found?.rows.length) return describe(found, '另開的視窗');
         }
       }
       const inPlace = await findMarkedRows(content(page), markers).catch(() => null);
-      if (inPlace?.rows.length) return { ...inPlace, where: '原本的畫面' };
+      // 與按下去之前一模一樣＝畫面根本沒變，命中的是查詢條件區那一列，不是傳輸紀錄。
+      if (inPlace?.rows.length && signatureOf(inPlace) !== baselineSignature) {
+        return describe(inPlace, '原本的畫面（按下去之後才出現）');
+      }
 
       // 系統已經明說開不了，再等下去也不會有內容。
       if (blockedMessage) return null;
       await page.waitForTimeout(500);
+    }
+    log.info(
+      `按了「${buttonTexts[0]}」但 ${EKG.verify.panelTimeoutMs / 1000} 秒內沒有出現含`
+        + `「${markers[0]}」的新內容（新視窗 ${opened.length} 個）`,
+    );
+    // 按了卻沒東西，最想知道的是「那到底跑到哪一頁、那一頁長什麼樣」。
+    // 只在**第一次**留診斷：跑幾百件時每件都存一份會把 out/probe/ 塞爆，而每一件的情形都一樣。
+    if (!diagnosedButtons.has(buttonTexts[0])) {
+      diagnosedButtons.add(buttonTexts[0]);
+      log.info(`　按下去之後的畫面：${await describeClickableOptions(page)}`);
+      const tables = await listTableHeaders(content(page)).catch(() => []);
+      log.info(`　那一頁的表格欄位：${tables.join(' ／ ') || '(沒有帶標題的表格)'}`);
+      await captureSnapshot(context, `心電圖-按了${buttonTexts[0]}沒反應`);
     }
     return null;
   } finally {
@@ -298,7 +362,7 @@ async function findTransmissionButton(page) {
  *
  * @returns {Promise<number>} 按鈕序號；查無案件時回傳 -1
  */
-async function queryByTemsis(page, temsis, range) {
+export async function queryByTemsis(page, temsis, range) {
   await gotoRecordQuery(page);
   await applyDateRange(page, range);
   await applyTextCondition(page, UNLOCK.fieldLabels.temsis, temsis, 'TEMSIS');
@@ -361,6 +425,11 @@ async function verifyOneCase(context, page, target, range, timeContext) {
   let panel = null;
   let source = '';
   const transmissionIndex = await findTransmissionButton(page);
+  log.info(
+    transmissionIndex >= 0
+      ? `查詢結果這一列有「${EKG.verify.transmissionButtons[0]}」，先從那裡找上傳時間`
+      : `查詢結果這一列沒有「${EKG.verify.transmissionButtons[0]}」，改走案件內部`,
+  );
   if (transmissionIndex >= 0) {
     panel = await openPanelRows(
       context,
@@ -418,6 +487,7 @@ async function verifyOneCase(context, page, target, range, timeContext) {
       [EKG.verify.uploadButtons, '案件內部的「上傳」'],
     ]) {
       const found = await findClickables(content(page), buttonTexts).catch(() => []);
+      log.info(`${label}：${found.length === 0 ? '這一頁沒有這個按鈕' : `找到 ${found.length} 個，點進去看`}`);
       if (found.length === 0) continue;
       panel = await openPanelRows(context, page, buttonTexts, found[0].index, EKG.verify.twelveLeadMarkers);
       if (panel) {

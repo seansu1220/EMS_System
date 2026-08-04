@@ -288,6 +288,24 @@ function queryPage(params) {
     return result;
   }
 
+  if (params.mode === 'tableHeaders') {
+    // 找不到目標時，回報「這一頁有哪些表格、各自的欄位叫什麼」。
+    // ⚠ 個資：**只取標題列**，資料列一個都不碰（與探測模式同一套規則）。
+    const described = [];
+    for (const table of document.querySelectorAll('table')) {
+      const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+      if (!headerRow) continue;
+      const headers = [...headerRow.cells]
+        .map((cell) => mask(cell.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 20))
+        .filter(Boolean);
+      // 只有一格的多半是版面用的表格，不是資料表。
+      if (headers.length < 2) continue;
+      described.push(`[${headers.join('｜')}]（${table.rows.length} 列）`);
+      if (described.length >= params.limit) break;
+    }
+    return described;
+  }
+
   if (params.mode === 'markedRows') {
     // 取出「含有指定字樣」的表格列，例如傳輸紀錄畫面中寫著「12導程」的那幾列。
     //
@@ -570,6 +588,19 @@ export async function listCheckboxLabels(frame, limit = 60) {
  */
 export async function findSelectByOption(frame, optionTextCandidates) {
   return frame.evaluate(queryPage, { mode: 'selectByOption', optionTexts: optionTextCandidates });
+}
+
+/**
+ * 列出這一頁每張表格的欄位標題（找不到目標時的排查用）。
+ *
+ * ⚠ 個資：只取標題列，資料列一個都不碰。欄名屬畫面結構，不是個人資料。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {number} [limit] 最多列幾張表
+ * @returns {Promise<string[]>} 例如 `[項次｜上傳時間｜檔案類型]（3 列）`
+ */
+export async function listTableHeaders(frame, limit = 8) {
+  return frame.evaluate(queryPage, { mode: 'tableHeaders', limit });
 }
 
 /**

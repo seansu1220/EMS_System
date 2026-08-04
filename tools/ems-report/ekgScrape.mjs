@@ -112,7 +112,7 @@ export async function locateEkgFields(page) {
  * 兩次查詢之間頁面不會重載，上一次選過的值會留著，
  * 靠「應該是空的」來假設條件正確，正是這個系統最容易出錯的地方。
  */
-async function applyBaseCriteria(page, monthRange) {
+export async function applyBaseCriteria(page, monthRange) {
   log.step('設定查詢期間（救護狀態與送醫情形都不限）');
   const dateFormat = await detectFrameDateFormat(
     content(page),
@@ -146,11 +146,14 @@ async function applyBaseCriteria(page, monthRange) {
 /**
  * 設定其中一次查詢的條件，然後查詢並匯出。
  *
+ * 診斷指令（`ekg-diag`）也用這一支去量各種條件組合的件數，
+ * 兩邊走完全同一條路，量出來的數字才和正式流程對得起來。
+ *
  * @param {EkgFields} fields
  * @param {{key: string, label: string, procedureChecked: boolean, ecgValue: string}} dataset
  * @returns {Promise<string>} 匯出檔路徑
  */
-async function queryAndExport(context, page, fields, dataset, monthRange) {
+export async function queryAndExport(context, page, fields, dataset, monthRange) {
   log.step(`查詢並匯出：${dataset.label}`);
 
   await tryReveal(page, fields.procedureSelector, 'EKG檢查');
