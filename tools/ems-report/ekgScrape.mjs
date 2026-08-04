@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { SITE, PATHS, EKG } from './config.mjs';
+import { SITE, PATHS, EKG, QUERY_CRITERIA } from './config.mjs';
 import { formatDateForSite } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import {
@@ -112,8 +112,16 @@ export async function locateEkgFields(page) {
  * 兩次查詢之間頁面不會重載，上一次選過的值會留著，
  * 靠「應該是空的」來假設條件正確，正是這個系統最容易出錯的地方。
  */
-export async function applyBaseCriteria(page, monthRange) {
-  log.step('設定查詢期間（救護狀態與送醫情形都不限）');
+export async function applyBaseCriteria(page, monthRange, criteria = {}) {
+  // 預設兩個都「不限」（使用者 2026-08-03 決定）。診斷指令會傳入「已結案＋送醫」
+  // 來量差別，因此做成參數而不是寫死。
+  const rescueStatus = criteria.rescueStatus ?? '';
+  const transport = criteria.transport ?? '';
+  const describe = (value, limited) => (value ? limited : '不限');
+  log.step(
+    `設定查詢期間（救護狀態＝${describe(rescueStatus, QUERY_CRITERIA.rescueStatusLabel)}、`
+      + `送醫情形＝${describe(transport, QUERY_CRITERIA.transportLabel)}）`,
+  );
   const dateFormat = await detectFrameDateFormat(
     content(page),
     SITE.queryFields.dateFrom,
@@ -133,13 +141,14 @@ export async function applyBaseCriteria(page, monthRange) {
     '迄日',
   );
 
-  for (const [selector, label] of [
-    [SITE.queryFields.rescueStatus, '救護狀態'],
-    [SITE.queryFields.transport, '送醫情形'],
-    [SITE.queryFields.prehospitalAlert, '院前預警'],
+  for (const [selector, label, value] of [
+    [SITE.queryFields.rescueStatus, '救護狀態', rescueStatus],
+    [SITE.queryFields.transport, '送醫情形', transport],
+    // 院前預警與心電圖無關，一律清空，免得上一次查詢的值留著。
+    [SITE.queryFields.prehospitalAlert, '院前預警', ''],
   ]) {
     await tryReveal(page, selector, label);
-    await selectFrameField(content(page), selector, '', `${label}＝不限`);
+    await selectFrameField(content(page), selector, value, `${label}＝${value || '不限'}`);
   }
 }
 

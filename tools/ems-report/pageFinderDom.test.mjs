@@ -58,11 +58,19 @@ const FIXTURE = `
     </td>
   </tr>
 </table>
+<!--
+  仿案件內部的「上傳」清單（2026-08-04 實測到的真實欄位）。
+  第 4 列是關鍵誘餌：檔案類型不是 12 導程，但**備註裡有「12導程」三個字**。
+  比對整列文字的話它會被誤算成有做（2026-08-05 使用者指正後改為只認檔案類型欄）。
+-->
 <table>
-  <tr><th>項次</th><th>檔案名稱</th><th>建立時間</th><th>上傳時間</th></tr>
-  <tr><td>1</td><td>血氧紀錄.pdf</td><td>2026/07/02 11:00:00</td><td>2026/07/02 11:05:00</td></tr>
-  <tr><td>2</td><td>12導程心電圖.pdf</td><td>2026/07/02 12:00:00</td><td>2026/07/02 12:30:00</td></tr>
-  <tr><td>3</td><td>12導程心電圖-重傳.pdf</td><td>2026/07/02 13:00:00</td><td>2026/07/02 13:10:00</td></tr>
+  <tr>
+    <th>項次</th><th>上傳時間</th><th>檔案類型</th><th>上傳者</th><th>檔案說明／備註</th>
+  </tr>
+  <tr><td>1</td><td>2026/07/02 11:05:00</td><td>血氧紀錄</td><td>王小明</td><td>血氧</td></tr>
+  <tr><td>2</td><td>2026/07/02 12:30:00</td><td>12導程心電圖</td><td>王小明</td><td>ZOLL介接心電圖</td></tr>
+  <tr><td>3</td><td>2026/07/02 13:10:00</td><td>12導程心電圖</td><td>王小明</td><td>ZOLL12導程附檔上傳(JSON檔)</td></tr>
+  <tr><td>4</td><td>2026/07/02 10:00:00</td><td>其他</td><td>王小明</td><td>12導程操作說明書</td></tr>
 </table>
 <!--
   仿「傳輸紀錄」那張生命徵象量測表（2026-08-04 實測到的真實欄位）。
@@ -222,10 +230,42 @@ test('listTableHeaders 列得出每張表的欄位，供對不上時排查', { s
   assert.ok(tables.some((text) => text.includes('上傳時間')));
 });
 
+test('上傳清單只認「檔案類型」欄，備註寫著 12導程 的不算', { skip }, async () => {
+  // 2026-08-05 使用者指正：原本比對整列文字，備註欄的「ZOLL12導程附檔上傳」
+  // 或「12導程操作說明書」都會矇混過關。
+  const found = await findRowsWithColumnValue(
+    frame,
+    ['檔案類型'],
+    ['上傳時間', '檔案類型'],
+    { valueMarkers: ['12導程'] },
+  );
+  assert.equal(found.matched.length, 2, '第 4 列檔案類型是「其他」，不該算進來');
+  assert.ok(found.matched.every((row) => row.values['檔案類型'].includes('12導程')));
+  assert.deepEqual(
+    found.matched.map((row) => row.values['上傳時間']),
+    ['2026/07/02 12:30:00', '2026/07/02 13:10:00'],
+    '取到的是那兩列的上傳時間，不含 10:00 那筆說明書',
+  );
+});
+
+test('上傳清單不把上傳者姓名帶出來', { skip }, async () => {
+  const found = await findRowsWithColumnValue(
+    frame,
+    ['檔案類型'],
+    ['上傳時間', '檔案類型'],
+    { valueMarkers: ['12導程'] },
+  );
+  assert.deepEqual(Object.keys(found.matched[0].values), ['上傳時間', '檔案類型'],
+    '個資防護：沒點名的欄位（上傳者、備註）一律不回傳');
+});
+
+test('沒給 valueMarkers 時維持「這一欄有值就算」（傳輸紀錄的用法）', { skip }, async () => {
+  const found = await findRowsWithColumnValue(frame, ['檔案類型'], ['上傳時間']);
+  assert.equal(found.matched.length, 4, '四列的檔案類型都有值');
+});
+
 test('只取出含「12導程」的那幾列，其他列不帶出來', { skip }, async () => {
   const found = await findMarkedRows(frame, ['12導程']);
-  assert.equal(found.rows.length, 2, '血氧紀錄那一列不該被帶出來');
-  assert.deepEqual(found.headers, ['項次', '檔案名稱', '建立時間', '上傳時間']);
   assert.ok(found.rows.every((row) => row.some((cell) => cell.includes('12導程'))));
   assert.ok(
     found.rows.every((row) => !row.some((cell) => cell.includes('血氧'))),

@@ -38,7 +38,6 @@ import { gotoRecordQuery } from './navigation.mjs';
 import {
   clickMatch,
   findClickables,
-  findMarkedRows,
   findRowsWithColumnValue,
   groupByRow,
   listTableHeaders,
@@ -185,11 +184,13 @@ export function buildCaseList(rows, columns) {
  *
  * @param {string[]} buttonTexts 要點的按鈕文字
  * @param {number} index 第幾個符合的按鈕
- * @param {string[]} markers 用來認出目標列的字樣（例如「12導程」）
- * @returns {Promise<{rows: string[][], headers: string[], where: string}|null>}
+ * @param {(frame: import('playwright-core').Frame) => Promise<{matched: object[], headers: string[]}|null>} probe
+ *   在某個 frame 上找目標列的方式。之所以做成可注入：上傳清單要比對「檔案類型欄的值」，
+ *   而其他畫面可能要用別的規則，把規則交給呼叫端決定，這裡只負責「點下去、等內容出現」。
+ * @returns {Promise<{matched: object[], headers: string[], where: string}|null>}
  *   找不到目標列時回傳 null
  */
-async function openPanelRows(context, page, buttonTexts, index, markers) {
+async function openPanelRows(context, page, buttonTexts, index, probe) {
   /**
    * 按下去**之前**先看原畫面本來就有哪些「含 12 導程」的列。
    *
@@ -201,12 +202,12 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
    *
    * 因此原畫面的比對結果**必須與按下去之前不同**才算數。
    */
-  const baseline = await findMarkedRows(content(page), markers).catch(() => null);
-  const signatureOf = (found) => JSON.stringify(found?.rows ?? []);
+  const baseline = await probe(content(page)).catch(() => null);
+  const signatureOf = (found) => JSON.stringify(found?.matched ?? []);
   const baselineSignature = signatureOf(baseline);
-  if (baseline?.rows.length) {
+  if (baseline?.matched.length) {
     log.info(
-      `（原畫面本來就有 ${baseline.rows.length} 列含「${markers[0]}」，多半是查詢條件區的勾選框，`
+      `（原畫面本來就有 ${baseline.matched.length} 列符合，多半是查詢條件區的元件，`
         + '之後只認「按下去之後才變出來的」列）',
     );
   }
@@ -235,7 +236,7 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
     /** 找到時把來源與欄位記下來：欄名屬畫面結構，是日後對不上欄位時唯一的線索。 */
     const describe = (found, where) => {
       log.info(
-        `找到 ${found.rows.length} 列含「${markers[0]}」（來源：${where}），`
+        `找到 ${found.matched.length} 列符合（來源：${where}），`
           + `欄位：${found.headers.join('｜') || '(這張表沒有標題列)'}`,
       );
       return { ...found, where };
@@ -248,13 +249,13 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
         if (candidate.isClosed()) continue;
         await candidate.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
         for (const frame of candidate.frames()) {
-          const found = await findMarkedRows(frame, markers).catch(() => null);
-          if (found?.rows.length) return describe(found, '另開的視窗');
+          const found = await probe(frame).catch(() => null);
+          if (found?.matched.length) return describe(found, '另開的視窗');
         }
       }
-      const inPlace = await findMarkedRows(content(page), markers).catch(() => null);
-      // 與按下去之前一模一樣＝畫面根本沒變，命中的是查詢條件區那一列，不是傳輸紀錄。
-      if (inPlace?.rows.length && signatureOf(inPlace) !== baselineSignature) {
+      const inPlace = await probe(content(page)).catch(() => null);
+      // 與按下去之前一模一樣＝畫面根本沒變，命中的是查詢條件區那一列，不是目標畫面。
+      if (inPlace?.matched.length && signatureOf(inPlace) !== baselineSignature) {
         return describe(inPlace, '原本的畫面（按下去之後才出現）');
       }
 
@@ -263,8 +264,8 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
       await page.waitForTimeout(500);
     }
     log.info(
-      `按了「${buttonTexts[0]}」但 ${EKG.verify.panelTimeoutMs / 1000} 秒內沒有出現含`
-        + `「${markers[0]}」的新內容（新視窗 ${opened.length} 個）`,
+      `按了「${buttonTexts[0]}」但 ${EKG.verify.panelTimeoutMs / 1000} 秒內沒有出現符合的新內容`
+        + `（新視窗 ${opened.length} 個）`,
     );
     // 按了卻沒東西，最想知道的是「那到底跑到哪一頁、那一頁長什麼樣」。
     // 只在**第一次**留診斷：跑幾百件時每件都存一份會把 out/probe/ 塞爆，而每一件的情形都一樣。
@@ -294,33 +295,29 @@ async function openPanelRows(context, page, buttonTexts, index, markers) {
  * @param {{defaultYear?: number, defaultDate?: string}} timeContext
  * @returns {{time: import('./timeParse.mjs').ParsedTime, from: string}|null}
  */
-export function pickEarliestUploadTime(panel, timeContext) {
-  const normalize = (text) => String(text ?? '').replace(/\s/g, '');
-  const headers = panel.headers ?? [];
-  // 先鎖定標題像「上傳時間」的那一欄；找不到才退回「整列逐格找第一個看得懂的時間」。
-  //
-  // ⚠ 迴圈要以**候選字樣**為外層，不是以欄位順序為外層：
-  //   設定檔把 `上傳時間` 排在 `建立時間`、`時間` 前面就是為了讓它優先，
-  //   若照欄位順序找，排在前面的「建立時間」欄會先命中而取到錯的時間
-  //   （建立與上傳可能差好幾十分鐘，剛好跨過到院時間就整件判反）。
-  let columnIndex = -1;
-  for (const label of EKG.verify.uploadTimeLabels) {
-    columnIndex = headers.findIndex((header) => normalize(header).includes(normalize(label)));
-    if (columnIndex >= 0) break;
-  }
-
+export function pickEarliestUploadTime(matched, timeContext, timeLabels = EKG.verify.uploadTimeLabels) {
   /** @type {{time: import('./timeParse.mjs').ParsedTime, from: string}[]} */
   const found = [];
-  for (const row of panel.rows ?? []) {
-    if (columnIndex >= 0) {
-      const parsed = parseDateTime(row[columnIndex], timeContext);
+  for (const row of matched ?? []) {
+    const values = row?.values ?? {};
+    // ⚠ 迴圈要以**候選字樣**為外層，不是以欄位順序為外層：
+    //   設定檔把 `上傳時間` 排在 `建立時間`、`時間` 前面就是為了讓它優先。
+    //   若照欄位順序找，排在前面的「建立時間」欄會先命中而取到錯的時間
+    //   （建立與上傳可能差好幾十分鐘，剛好跨過到院時間就整件判反）。
+    let picked = null;
+    for (const label of timeLabels) {
+      const parsed = parseDateTime(values[label], timeContext);
       if (parsed) {
-        found.push({ time: parsed, from: `「${headers[columnIndex]}」欄` });
-        continue;
+        picked = { time: parsed, from: `「${label}」欄` };
+        break;
       }
     }
-    const fallback = findFirstDateTime(row, timeContext);
-    if (fallback) found.push({ time: fallback, from: '該列第一個看得懂的時間' });
+    // 欄名對不上時，退回「這一列取回來的值裡第一個看得懂的時間」。
+    picked ??= (() => {
+      const fallback = findFirstDateTime(Object.values(values), timeContext);
+      return fallback ? { time: fallback, from: '該列第一個看得懂的時間' } : null;
+    })();
+    if (picked) found.push(picked);
   }
   if (found.length === 0) return null;
   return found.reduce((earliest, item) => (item.time.epochMs < earliest.time.epochMs ? item : earliest));
@@ -392,20 +389,14 @@ async function readTransmissionEkgTime(context, page, temsis, range, timeContext
     return null;
   }
 
-  // 量過好幾次時取最早的一次，與上傳清單的規則一致。
-  const times = found.matched
-    .map((row) => findFirstDateTime(
-      EKG.verify.transmissionTimeLabels.map((label) => row.values[label]).filter(Boolean),
-      timeContext,
-    ))
-    .filter(Boolean);
-  if (times.length === 0) {
+  // 量過好幾次時取最早的一次，與上傳清單的規則一致（共用同一支挑選函式）。
+  const earliest = pickEarliestUploadTime(found.matched, timeContext, EKG.verify.transmissionTimeLabels);
+  if (!earliest) {
     log.info(`傳輸紀錄有 ${found.matched.length} 列做了心電圖，但那幾列讀不出時間`);
     return null;
   }
-  const earliest = times.reduce((best, item) => (item.epochMs < best.epochMs ? item : best));
-  log.info(`傳輸紀錄：${found.matched.length} 列有心電圖，最早的量測時間 ${earliest.matched}`);
-  return { time: earliest, from: '傳輸紀錄的「量測時間」（不是上傳時間）' };
+  log.info(`傳輸紀錄：${found.matched.length} 列有心電圖，最早的量測時間 ${earliest.time.matched}`);
+  return { time: earliest.time, from: '傳輸紀錄的「量測時間」（不是上傳時間）' };
 }
 
 /**
@@ -508,10 +499,17 @@ async function verifyOneCase(context, page, target, range, timeContext) {
       page,
       EKG.verify.uploadButtons,
       uploadButtons[0].index,
-      EKG.verify.twelveLeadMarkers,
+      // 只認「檔案類型」欄寫著 12導程 的列（使用者 2026-08-05 指正）。
+      // 比對整列文字的話，備註欄的「ZOLL12導程附檔上傳(JSON檔)」也會命中。
+      (frame) => findRowsWithColumnValue(
+        frame,
+        EKG.verify.fileTypeColumns,
+        [...EKG.verify.uploadTimeLabels, ...EKG.verify.fileTypeColumns],
+        { valueMarkers: EKG.verify.twelveLeadMarkers },
+      ),
     );
     if (panel) {
-      upload = pickEarliestUploadTime(panel, localContext);
+      upload = pickEarliestUploadTime(panel.matched, localContext);
       if (upload) source = `案件內部的「上傳」（${panel.where}）`;
     }
   }
@@ -550,6 +548,48 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     upload: upload?.time.matched ?? null,
     source: source || '未知',
     caseDate,
+  };
+}
+
+/**
+ * 查核一件，失敗就重試。
+ *
+ * 為什麼需要：2026-08-04 跑完整月 285 件，8 件判定不出來，其中 **6 件是暫時性失敗**——
+ * 「找不到查詢按鈕」「連結在點擊當下消失」「紀錄表 60 秒沒開出來」。
+ * 這些是前一件收尾時畫面停在奇怪的位置、或頁面還在換就被點，重跑一次就會過。
+ * 讓它們變成要人工核對的案件既浪費使用者的時間，也會低估分子。
+ *
+ * **只重試「跑到一半出錯」的情況**；程式好好跑完並判定為「到院後」或
+ * 「查不到案件」的結果是結論，不是失敗，重跑幾次都一樣，不重試。
+ *
+ * @returns {Promise<VerifyOutcome>}
+ */
+async function verifyWithRetry(session, target, monthRange, timeContext) {
+  const base = { temsis: target.temsis, squad: target.squad };
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= EKG.verify.maxAttemptsPerCase; attempt += 1) {
+    try {
+      return await verifyOneCase(session.context, session.page, target, monthRange, timeContext);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < EKG.verify.maxAttemptsPerCase) {
+        log.warn(`第 ${attempt} 次查核出錯（${lastError}），重試`);
+        // 重試前先讓畫面沉澱一下：多數失敗是頁面還在換就被點。
+        await session.page.waitForTimeout(EKG.verify.settleMs);
+      }
+    }
+  }
+
+  log.warn(`重試 ${EKG.verify.maxAttemptsPerCase} 次都失敗，記為需人工確認`);
+  return {
+    ...base,
+    verdict: VERDICT.unknown,
+    reason: `查核過程出錯（已重試 ${EKG.verify.maxAttemptsPerCase} 次）：${lastError}`,
+    arrival: target.arrivalText || null,
+    upload: null,
+    source: '執行失敗',
+    caseDate: null,
   };
 }
 
@@ -596,33 +636,10 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
     if (done.has(target.temsis)) continue;
 
     log.step(`第 ${position + 1} / ${planned.length} 件：${target.squad}　${maskCode(target.temsis)}`);
-    try {
-      const outcome = await verifyOneCase(
-        session.context,
-        session.page,
-        target,
-        monthRange,
-        timeContext,
-      );
-      done.set(target.temsis, outcome);
-      consecutiveFailures = outcome.verdict === VERDICT.unknown ? consecutiveFailures + 1 : 0;
-      const level = outcome.verdict === VERDICT.before ? 'ok' : 'warn';
-      log[level](`${outcome.verdict}：${outcome.reason}`);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      log.fail(`查核 ${maskCode(target.temsis)}`, error);
-      done.set(target.temsis, {
-        temsis: target.temsis,
-        squad: target.squad,
-        verdict: VERDICT.unknown,
-        reason: `查核過程出錯：${reason}`,
-        arrival: target.arrivalText || null,
-        upload: null,
-        source: '執行失敗',
-        caseDate: null,
-      });
-      consecutiveFailures += 1;
-    }
+    const outcome = await verifyWithRetry(session, target, monthRange, timeContext);
+    done.set(target.temsis, outcome);
+    consecutiveFailures = outcome.verdict === VERDICT.unknown ? consecutiveFailures + 1 : 0;
+    log[outcome.verdict === VERDICT.before ? 'ok' : 'warn'](`${outcome.verdict}：${outcome.reason}`);
     // 每一件都存檔：跑幾百件的流程，任何一次中斷都不該讓前面的努力白費。
     await saveProgress(filePath, done).catch((error) => {
       log.warn(`進度存檔失敗（不影響本次結果）：${error instanceof Error ? error.message : String(error)}`);

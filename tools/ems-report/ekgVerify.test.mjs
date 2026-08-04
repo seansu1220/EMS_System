@@ -81,42 +81,46 @@ test('欄名像到院時間、內容卻不是時間時不採用，改為逐案�
   );
 });
 
-test('上傳時間優先取「上傳時間」欄，不是該列第一個數字', () => {
-  const panel = {
-    headers: ['項次', '檔案名稱', '建立時間', '上傳時間'],
-    rows: [['1', '12導程心電圖.pdf', '2026/07/02 11:00:00', '2026/07/02 12:30:00']],
-  };
-  const picked = pickEarliestUploadTime(panel, CONTEXT);
+test('上傳時間優先取「上傳時間」欄，不是排在前面的建立時間', () => {
+  // 設定檔把「上傳時間」排在「建立時間」前面就是要讓它優先；
+  // 若照欄位順序找，建立時間會先命中而取到錯的時間（兩者可能差幾十分鐘）。
+  const matched = [{
+    marker: '12導程心電圖',
+    values: { 建立時間: '2026/07/02 11:00:00', 上傳時間: '2026/07/02 12:30:00' },
+  }];
+  const picked = pickEarliestUploadTime(matched, CONTEXT);
   assert.equal(picked.time.epochMs, Date.UTC(2026, 6, 2, 12, 30, 0));
   assert.match(picked.from, /上傳時間/);
 });
 
 test('傳過好幾次時取最早的一次（只要曾在到院前傳出去就算數）', () => {
-  const panel = {
-    headers: ['項次', '檔案名稱', '上傳時間'],
-    rows: [
-      ['2', '12導程心電圖-重傳.pdf', '2026/07/02 13:10:00'],
-      ['1', '12導程心電圖.pdf', '2026/07/02 12:20:00'],
-    ],
-  };
-  const picked = pickEarliestUploadTime(panel, CONTEXT);
-  assert.equal(picked.time.epochMs, Date.UTC(2026, 6, 2, 12, 20, 0));
+  const matched = [
+    { marker: '12導程心電圖', values: { 上傳時間: '2026/07/02 13:10:00' } },
+    { marker: '12導程心電圖', values: { 上傳時間: '2026/07/02 12:20:00' } },
+  ];
+  assert.equal(pickEarliestUploadTime(matched, CONTEXT).time.epochMs, Date.UTC(2026, 6, 2, 12, 20, 0));
 });
 
-test('沒有可辨識的時間欄時，退回逐格找第一個看得懂的時間', () => {
-  const panel = {
-    headers: ['項次', '檔案', '備註'],
-    rows: [['1', '12導程心電圖.pdf', '2026/07/02 12:20:00 由平鎮92上傳']],
-  };
-  const picked = pickEarliestUploadTime(panel, CONTEXT);
+test('欄名對不上時，退回該列取回來的值裡第一個看得懂的時間', () => {
+  const matched = [{ marker: '12導程心電圖', values: { 備註: '2026/07/02 12:20:00 由平鎮92上傳' } }];
+  const picked = pickEarliestUploadTime(matched, CONTEXT);
   assert.equal(picked.time.epochMs, Date.UTC(2026, 6, 2, 12, 20, 0));
   assert.match(picked.from, /第一個看得懂/);
 });
 
-test('整張表都讀不出時間時回傳 null，不猜', () => {
-  const panel = { headers: ['項次', '檔案'], rows: [['1', '12導程心電圖.pdf']] };
-  assert.equal(pickEarliestUploadTime(panel, CONTEXT), null);
-  assert.equal(pickEarliestUploadTime({ headers: [], rows: [] }, CONTEXT), null);
+test('整批都讀不出時間時回傳 null，不猜', () => {
+  assert.equal(pickEarliestUploadTime([{ marker: 'x', values: { 檔案類型: '12導程心電圖' } }], CONTEXT), null);
+  assert.equal(pickEarliestUploadTime([], CONTEXT), null);
+  assert.equal(pickEarliestUploadTime(null, CONTEXT), null);
+});
+
+test('傳輸紀錄改用「量測時間」當時間欄，共用同一支挑選函式', () => {
+  const matched = [
+    { marker: 'V', values: { 量測時間: '2026/07/01 09:40:00' } },
+    { marker: 'V', values: { 量測時間: '2026/07/01 09:33:16' } },
+  ];
+  const picked = pickEarliestUploadTime(matched, CONTEXT, ['量測時間']);
+  assert.equal(picked.time.epochMs, Date.UTC(2026, 6, 1, 9, 33, 16));
 });
 
 test('只有判定為「到院前」的才計入分子', () => {

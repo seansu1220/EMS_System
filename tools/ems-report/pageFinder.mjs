@@ -307,12 +307,19 @@ function queryPage(params) {
       const columnIndex = headers.findIndex((header) => wantedColumn.includes(normalize(header)));
       if (columnIndex < 0) continue;
 
+      const wantedValues = (params.valueMarkers ?? []).map(normalize);
       for (const row of table.rows) {
         if (row === headerRow) continue;
         const cells = [...row.cells];
         const marker = (cells[columnIndex]?.textContent || '').replace(/\s+/g, ' ').trim();
         // 空白、`-`、`無` 都當作「這一列沒有做」。
         if (!marker || ['-', '－', '無', 'N/A'].includes(marker)) continue;
+        // 有指定 valueMarkers 時，這一欄的**值**還要對得上才算數。
+        // 上傳清單就是這樣用的：只認「檔案類型」欄寫著 12導程 的列，
+        // 不能讓備註欄的「ZOLL12導程附檔上傳」之類的字樣矇混過關。
+        if (wantedValues.length > 0 && !wantedValues.some((want) => normalize(marker).includes(want))) {
+          continue;
+        }
 
         const values = {};
         for (const wanted of params.wantedHeaders) {
@@ -644,7 +651,9 @@ export async function findSelectByOption(frame, optionTextCandidates) {
  * @param {import('playwright-core').Frame} frame
  * @param {string[]} columnCandidates 目標欄名（**完全相等**比對，避免 `EKG` 命中「EKG判讀狀態」）
  * @param {string[]} wantedHeaders 要取回的欄位名稱（以「包含」比對）
- * @param {{maxRows?: number}} [options]
+ * @param {{maxRows?: number, valueMarkers?: string[]}} [options]
+ *   `valueMarkers`：不給就是「這一欄只要有值就算」（傳輸紀錄的 EKG 欄用法）；
+ *   給了就要求該欄的**值**含有其中之一（上傳清單的「檔案類型＝12導程心電圖」用法）
  * @returns {Promise<{headers: string[], matched: {marker: string, values: Record<string,string>}[]}>}
  */
 export async function findRowsWithColumnValue(frame, columnCandidates, wantedHeaders, options = {}) {
@@ -652,6 +661,7 @@ export async function findRowsWithColumnValue(frame, columnCandidates, wantedHea
     mode: 'rowsWithColumnValue',
     columnCandidates,
     wantedHeaders,
+    valueMarkers: options.valueMarkers ?? [],
     maxRows: options.maxRows ?? 20,
   });
 }
