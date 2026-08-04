@@ -666,8 +666,16 @@ const PENDING_COLUMNS = ['分隊', '案件日期', 'TEMSIS末4碼', '到院時�
  * @returns {Promise<string|null>} 檔案路徑；沒有待確認案件時回傳 null（不產生空檔）
  */
 export async function writePendingList(outcomes, monthRange) {
+  const filePath = path.join(PATHS.reportDir, `心電圖待人工確認-${monthRange.label}.xlsx`);
   const pending = outcomes.filter((item) => item.verdict === VERDICT.unknown);
-  if (pending.length === 0) return null;
+  if (pending.length === 0) {
+    // 這次沒有待確認的案件時，要把**上一輪留下來的舊檔刪掉**。
+    // 不刪的話，一份寫著「5 件判定不出來」的舊清單會一直躺在 out/report/ 裡，
+    // 看起來像是這次的結果（2026-08-04 實際遇到）。
+    const removed = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
+    if (removed) log.info('這次沒有判定不出來的案件；先前留下的待人工確認清單已一併清掉。');
+    return null;
+  }
 
   const ExcelJS = (await import('exceljs')).default;
   await fs.mkdir(PATHS.reportDir, { recursive: true });
@@ -697,7 +705,6 @@ export async function writePendingList(outcomes, monthRange) {
     sheet.getColumn(index + 1).width = header === '說明' ? 60 : Math.max(14, header.length * 2 + 2);
   });
 
-  const filePath = path.join(PATHS.reportDir, `心電圖待人工確認-${monthRange.label}.xlsx`);
   try {
     await workbook.xlsx.writeFile(filePath);
   } catch (error) {
