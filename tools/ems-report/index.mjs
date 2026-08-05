@@ -574,5 +574,9 @@ main()
   })
   .finally(async () => {
     await writeLogFile(PATHS.logFile).catch(() => {});
+    // 一定要關 readline，否則它會讓事件迴圈一直有事做，程序印完訊息卻不結束。
+    // 正常路徑上 `withSession` 的 finally 已經關過，但**登入階段就失敗時它不會執行**
+    // ——那正是最常發生的情況（等驗證碼逾時）。這裡是最後一道保險。
+    closePrompt();
     console.log(`\n完整執行紀錄：${PATHS.logFile}`);
   });

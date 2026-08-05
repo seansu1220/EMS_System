@@ -231,34 +231,53 @@ export async function startSession(options = {}) {
     await clearSessionState().catch(() => {});
     log.info('依 --fresh-login 捨棄保存的登入狀態，這次重新登入');
   }
-  const savedState = options.freshLogin ? null : await loadSessionState();
-  const context = await browser.newContext({
-    viewport: BROWSER.viewport,
-    acceptDownloads: true,
-    ...(savedState ? { storageState: savedState } : {}),
-  });
-  const page = await context.newPage();
-
-  log.step('開啟緊急救護管理系統');
-  await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
-
-  if (savedState && (await tryReuseSession(page))) {
-    log.ok('沿用上次的登入狀態，這次不用再輸入驗證碼');
-  } else {
-    if (savedState) {
-      log.info('上次的登入狀態已失效（多半是伺服器端逾時），改為重新登入');
-      await clearSessionState().catch(() => {});
-      await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
-    }
-    await performLogin(page, credentials);
-    await saveSessionState(context).catch((error) => {
-      // 存不起來只是下次要重打驗證碼，不影響這一輪，不該讓流程掛掉。
-      log.warn(`登入狀態保存失敗（下次仍需重新登入）：${error instanceof Error ? error.message : String(error)}`);
+  // ⚠ 瀏覽器已經開起來了，**從這裡開始的任何失敗都必須自己收拾**。
+  //   不收的話：登入逾時（最常見）時錯誤往外拋，而呼叫端的 `withSession`
+  //   是在 try 之外呼叫 startSession 的，它的 finally 根本不會執行——
+  //   結果就是 Chrome 一直開著、node 程序也不會結束（2026-08-05 實際踩到，
+  //   使用者的機器上留了兩個殭屍程序）。
+  let context;
+  try {
+    const savedState = options.freshLogin ? null : await loadSessionState();
+    context = await browser.newContext({
+      viewport: BROWSER.viewport,
+      acceptDownloads: true,
+      ...(savedState ? { storageState: savedState } : {}),
     });
-    log.info('已保存登入狀態，短時間內再跑一次就不必重打驗證碼');
-  }
-  log.ok('主畫面已就緒');
+    const page = await context.newPage();
 
+    log.step('開啟緊急救護管理系統');
+    await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+
+    if (savedState && (await tryReuseSession(page))) {
+      log.ok('沿用上次的登入狀態，這次不用再輸入驗證碼');
+    } else {
+      if (savedState) {
+        log.info('上次的登入狀態已失效（多半是伺服器端逾時），改為重新登入');
+        await clearSessionState().catch(() => {});
+        await page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+      }
+      await performLogin(page, credentials);
+      await saveSessionState(context).catch((error) => {
+        // 存不起來只是下次要重打驗證碼，不影響這一輪，不該讓流程掛掉。
+        log.warn(`登入狀態保存失敗（下次仍需重新登入）：${error instanceof Error ? error.message : String(error)}`);
+      });
+      log.info('已保存登入狀態，短時間內再跑一次就不必重打驗證碼');
+    }
+    log.ok('主畫面已就緒');
+    return buildSession(browser, context, page);
+  } catch (error) {
+    log.info('登入未完成，關閉瀏覽器');
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * 組出工作階段物件。
+ * @returns {EmsSession}
+ */
+function buildSession(browser, context, page) {
   return {
     browser,
     context,

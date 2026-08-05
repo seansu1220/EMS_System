@@ -142,14 +142,16 @@ export async function applyBaseCriteria(page, monthRange, criteria = {}) {
     '迄日',
   );
 
-  for (const [selector, label, value] of [
-    [SITE.queryFields.rescueStatus, '救護狀態', rescueStatus],
-    [SITE.queryFields.transport, '送醫情形', transport],
+  // 訊息一律顯示**看得懂的名稱**而不是代碼：紀錄檔是給人核對「條件有沒有設對」的，
+  // 寫「救護狀態＝0」沒人看得出那是已結案還是未結案。
+  for (const [selector, label, value, shown] of [
+    [SITE.queryFields.rescueStatus, '救護狀態', rescueStatus, QUERY_CRITERIA.rescueStatusLabel],
+    [SITE.queryFields.transport, '送醫情形', transport, QUERY_CRITERIA.transportLabel],
     // 院前預警與心電圖無關，一律清空，免得上一次查詢的值留著。
-    [SITE.queryFields.prehospitalAlert, '院前預警', ''],
+    [SITE.queryFields.prehospitalAlert, '院前預警', '', ''],
   ]) {
     await tryReveal(page, selector, label);
-    await selectFrameField(content(page), selector, value, `${label}＝${value || '不限'}`);
+    await selectFrameField(content(page), selector, value, `${label}＝${value ? shown : '不限'}`);
   }
 }
 
