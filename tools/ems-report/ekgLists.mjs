@@ -7,10 +7,13 @@
  * 版面比照正式報表：標題與欄名兩列置中，欄寬**依實際內容**計算
  * （只看欄名的話，「案件日期」這種短欄名配上長日期就會被截掉）。
  *
- * ⚠ 個資原則（兩份不同，因為用途不同）：
- *   - `有處置未勾選清冊` 要拿去跟各分隊逐案核對，使用者 2026-08-05 指示
- *     **TEMSIS 完整顯示**即可——分隊自己的案件本來就看得到完整編號。
- *   - `待人工確認` 只是給使用者自己看數量與原因，仍只寫末 4 碼。
+ * ⚠ 個資原則：兩份清冊的 **TEMSIS 都完整顯示**（使用者 2026-08-06 決定）。
+ *   兩份的用途都是「拿著它回系統把案件叫出來」——一份給各分隊核對漏勾的處置，
+ *   一份給使用者自己判斷傳輸時間——遮成末 4 碼反而要先用日期與分隊查一輪再比對，
+ *   而看得到這些案件的人本來就看得到完整編號。
+ *
+ *   其餘防線不變：這兩個檔案落在 `out/report/`（已 gitignore、不上雲），
+ *   終端機畫面與 `last-run.log` 仍一律只印末 4 碼。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -19,7 +22,6 @@ import { PATHS, REPORT_FORMAT, UNLOCK } from './config.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { log } from './logger.mjs';
 import { computeColumnWidths, widenToFitTitle } from './sheetLayout.mjs';
-import { maskCode } from './sheetFields.mjs';
 
 /** 標題列的樣式（兩份清單共用）。 */
 const TITLE_FONT = { bold: true, size: 14 };
@@ -87,7 +89,7 @@ async function writeWorkbook(workbook, filePath, hint) {
 }
 
 /** 待人工確認清單的欄位（順序即輸出順序）。 */
-const PENDING_COLUMNS = ['分隊', '案件日期', 'TEMSIS末4碼', '到院時間', '讀到的上傳時間', '判定', '說明'];
+const PENDING_COLUMNS = ['分隊', '案件日期', 'TEMSIS', '到院時間', '讀到的上傳時間', '判定', '說明'];
 
 /**
  * 組出待人工確認清單的活頁簿（不寫檔）。與寫檔分開，讓測試能在記憶體中檢查版面，
@@ -101,7 +103,7 @@ export function buildPendingWorkbook(pending, monthRange) {
   const rows = pending.map((item) => [
     item.squad,
     item.caseDate ?? '(讀不到)',
-    maskCode(item.temsis),
+    item.temsis,
     item.arrival ?? '(讀不到)',
     item.upload ?? '(讀不到)',
     item.verdict,

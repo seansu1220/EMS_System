@@ -91,7 +91,7 @@ test('各分隊件數：合計在第一列，其餘依件數由多到少', () =>
   assert.deepEqual([summary.getCell(5, 1).value, summary.getCell(5, 2).value], ['山峰分隊', 1]);
 });
 
-test('待人工確認清冊：標題兩列置中，TEMSIS 仍只寫末 4 碼', () => {
+test('待人工確認清冊：標題兩列置中，TEMSIS 也完整顯示', () => {
   const workbook = buildPendingWorkbook(
     [{
       squad: '內壢分隊',
@@ -107,6 +107,7 @@ test('待人工確認清冊：標題兩列置中，TEMSIS 仍只寫末 4 碼', (
   const sheet = workbook.getWorksheet('待人工確認');
   assert.equal(sheet.getCell(1, 1).value, `${MONTH.label}　心電圖待人工確認清冊`);
   assert.deepEqual(sheet.getRow(2).getCell(1).alignment, { horizontal: 'center', vertical: 'middle' });
-  // 這份只是給使用者自己看件數與原因，維持遮蔽。
-  assert.match(String(sheet.getCell(3, 3).value), /^\*+0401$/);
+  // 這份也是拿著回系統把案件叫出來用的，遮起來反而不好對（使用者 2026-08-06 決定）。
+  assert.equal(sheet.getCell(2, 3).value, 'TEMSIS');
+  assert.equal(sheet.getCell(3, 3).value, '2026070910100310380401');
 });
