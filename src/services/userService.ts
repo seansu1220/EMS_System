@@ -85,3 +85,30 @@ export async function setUserStatus(
     throw new Error(`變更帳號狀態失敗（userService.setUserStatus）：${(error as Error).message}`);
   }
 }
+
+/**
+ * 變更帳號角色（一般使用者 ⇄ 解鎖專用）；僅管理員可執行。
+ *
+ * ⚠ 不能用來指派 `admin`：管理員身分以 email 白名單認定
+ * （見 `lib/permissions.ts` 與 `firestore.rules` 的 `isAdmin()`），
+ * 改文件的 role 欄位並不會讓人變成管理員，開放這個選項只會誤導。
+ *
+ * @param uid 目標帳號
+ * @param role 新角色
+ * @param reviewerUid 操作者 uid（記錄於文件供追溯）
+ */
+export async function setUserRole(
+  uid: string,
+  role: Exclude<UserRole, 'admin'>,
+  reviewerUid: string,
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, COLLECTIONS.users, uid), {
+      role,
+      reviewedAt: serverTimestamp(),
+      reviewedBy: reviewerUid,
+    });
+  } catch (error) {
+    throw new Error(`變更帳號角色失敗（userService.setUserRole）：${(error as Error).message}`);
+  }
+}

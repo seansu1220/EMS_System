@@ -676,11 +676,17 @@ export async function promptTemsisList() {
  *
  * @param {import('./session.mjs').EmsSession} session
  * @param {{temsisList: string[], range: import('./dateRange.mjs').MonthRange,
- *   dryRun?: boolean}} options dryRun＝true 時只定位、不解鎖
+ *   dryRun?: boolean,
+ *   onCaseStart?: (temsis: string, index: number) => Promise<void>|void,
+ *   onCaseDone?: (outcome: UnlockOutcome, index: number) => Promise<void>|void}} options
+ *   dryRun＝true 時只定位、不解鎖。
+ *   兩個回呼供**線上工單**逐筆回寫進度與結果用（見 `unlockQueue.mjs`）：
+ *   跑完整批才一次回寫的話，中途關掉視窗前面做完的幾筆在網頁上仍會停在「待處理」。
+ *   回呼丟出例外不會中斷解鎖流程——雲端寫不進去是它的事，案件已經解了。
  * @returns {Promise<UnlockOutcome[]>}
  */
 export async function runUnlockFlow(session, options) {
-  const { temsisList, range, dryRun = false } = options;
+  const { temsisList, range, dryRun = false, onCaseStart, onCaseDone } = options;
   if (dryRun) {
     log.step(`試跑模式：只找出「該解哪一張」，不會按下「${UNLOCK.buttonTexts.unlock[0]}」`);
   } else {
@@ -690,11 +696,24 @@ export async function runUnlockFlow(session, options) {
   log.info(`查詢期間：${range.start} ~ ${range.end}（${range.label}）`);
   log.info(`共 ${temsisList.length} 筆 TEMSIS 要處理`);
 
+  /** 回呼失敗不可以拖垮解鎖流程：案件已經處理了，雲端寫不寫得進去是另一回事。 */
+  const notify = async (callback, ...args) => {
+    if (!callback) return;
+    try {
+      await callback(...args);
+    } catch (error) {
+      log.warn(`回報進度失敗（不影響解鎖）：${error instanceof Error ? error.message : error}`);
+    }
+  };
+
   /** @type {UnlockOutcome[]} */
   const outcomes = [];
   for (const [position, temsis] of temsisList.entries()) {
     log.step(`第 ${position + 1} / ${temsisList.length} 筆：${maskCode(temsis)}`);
-    outcomes.push(await processTemsis(session.context, session.page, temsis, range, { dryRun }));
+    await notify(onCaseStart, temsis, position);
+    const outcome = await processTemsis(session.context, session.page, temsis, range, { dryRun });
+    outcomes.push(outcome);
+    await notify(onCaseDone, outcome, position);
   }
   return outcomes;
 }

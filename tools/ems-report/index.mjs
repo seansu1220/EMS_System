@@ -18,6 +18,8 @@
  *   npm run tool:ems -- unlock               試跑：只找出該解哪一張，不會動到系統
  *   npm run tool:ems -- unlock --execute     真的按下「調整為未結案」
  *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
+ *   npm run tool:ems -- unlock-online        試跑：看網頁上有哪些待處理的解鎖工單
+ *   npm run tool:ems -- unlock-online --execute  真的解鎖，並把結果回寫網頁
  *
  * 任何指令都可加 --fresh-login：捨棄上次保存的登入狀態，強制重新登入。
  */
@@ -27,6 +29,7 @@ import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange, getRecentRange } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
+import { connectQueue, fetchPendingRequests, markRunning, saveResult } from './unlockQueue.mjs';
 import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
 import {
@@ -71,11 +74,11 @@ import { log, closePrompt, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
-const COMMANDS = ['run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet', 'unlock'];
+const COMMANDS = ['run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet', 'unlock', 'unlock-online'];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'} command
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'|'unlock-online'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -506,12 +509,64 @@ async function runUnlockCommand(options) {
   }, { freshLogin: options.freshLogin });
 }
 
+/**
+ * 線上解鎖工單：把網頁上待處理的申請跑完，結果回寫網頁。
+ *
+ * 與 `unlock` 的差別只在「TEMSIS 從哪來、結果往哪去」——
+ * 中間實際解鎖的那一段是同一支 `runUnlockFlow`，沒有另一套邏輯。
+ *
+ * ⚠ **預設是試跑**：只列出有哪些待處理工單，不解鎖也不回寫，
+ *   要真的做必須明確加 `--execute`（與 `unlock` 同一套安全預設）。
+ *
+ * 順序刻意是「先拿工單、再開瀏覽器」：沒有待處理工單時就不必白登入一次救護系統。
+ */
+async function runUnlockOnlineCommand(options) {
+  const queue = await connectQueue();
+  const requests = await fetchPendingRequests(queue);
+  if (requests.length === 0) {
+    log.ok('目前沒有待處理的解鎖工單，不需要登入救護系統。');
+    return;
+  }
+
+  log.step(`待處理的解鎖工單：${requests.length} 筆`);
+  for (const [position, request] of requests.entries()) {
+    log.info(
+      `  ${position + 1}. ${maskCode(request.temsis)}　${request.requestedByName || '（未記錄申請人）'}`
+        + `　${request.reason || '（沒填事由）'}`,
+    );
+  }
+
+  if (options.dryRun) {
+    log.warn('本次為試跑：沒有解鎖，也沒有回寫任何工單。');
+    log.info('要真的處理請執行「捷徑\\線上解鎖工單.bat」（或加上 --execute）。');
+    return;
+  }
+
+  const range = getRecentRange(UNLOCK.lookbackMonths);
+  await withSession(async (session) => {
+    const outcomes = await runUnlockFlow(session, {
+      temsisList: requests.map((request) => request.temsis),
+      range,
+      dryRun: false,
+      // 逐筆回寫，不等整批跑完：中途關掉視窗時，前面做完的幾筆在網頁上才不會停在「待處理」。
+      onCaseStart: (_temsis, index) => markRunning(queue, requests[index].id),
+      onCaseDone: (outcome, index) => saveResult(queue, requests[index].id, outcome),
+    });
+    printUnlockSummary(outcomes, { dryRun: false });
+    log.info('以上結果已回寫網頁，申請人自己看得到，不需要另外通知。');
+  }, { freshLogin: options.freshLogin });
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
 
   if (options.command === 'unlock') {
     await runUnlockCommand(options);
+    return;
+  }
+  if (options.command === 'unlock-online') {
+    await runUnlockOnlineCommand(options);
     return;
   }
 

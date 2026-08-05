@@ -54,3 +54,39 @@ export function canDeleteTemplate(user: AppUser | null): boolean {
 export function canManageUsers(user: AppUser | null): boolean {
   return isAdmin(user);
 }
+
+/**
+ * 是否可使用**業務管理系統**（首頁、業務、屬性、公版、小工具說明）。
+ *
+ * 「解鎖專用」帳號一律不行——那是給各分隊申請解鎖用的最低權限帳號，
+ * 不需要也不應該看到科內業務（使用者 2026-08-06 指定）。
+ */
+export function canUseTaskSystem(user: AppUser | null): boolean {
+  // 管理員一律放行：管理員身分來自 email 白名單，萬一文件的 role 欄位被改壞
+  // （或誤設成 unlocker），也不能把唯一能改回來的人鎖在外面。
+  return isAdmin(user) || (isApproved(user) && user?.role !== 'unlocker');
+}
+
+/** 是否可使用解鎖工單（三種角色只要已核准都可以）。 */
+export function canUseUnlockRequests(user: AppUser | null): boolean {
+  return isApproved(user);
+}
+
+/**
+ * 是否為「只能解鎖」的帳號。
+ *
+ * 用來決定登入後要落在哪一頁：這種帳號進任何業務頁都會被導回解鎖工單頁。
+ */
+export function isUnlockOnly(user: AppUser | null): boolean {
+  return canUseUnlockRequests(user) && !canUseTaskSystem(user);
+}
+
+/**
+ * 是否看得到**所有人**的解鎖工單。
+ *
+ * 管理員與一般使用者要看得到全部（他們才是實際去跑解鎖的人）；
+ * 解鎖專用帳號只看得到自己送出的那幾筆。
+ */
+export function canSeeAllUnlockRequests(user: AppUser | null): boolean {
+  return canUseTaskSystem(user);
+}

@@ -10,6 +10,7 @@ import { TaskDetailPage } from './pages/TaskDetailPage';
 import { CategoriesPage } from './pages/CategoriesPage';
 import { ChecklistTemplatesPage } from './pages/ChecklistTemplatesPage';
 import { ToolsPage } from './pages/ToolsPage';
+import { UnlockPage } from './pages/UnlockPage';
 import { UsersPage } from './pages/UsersPage';
 
 export default function App() {
@@ -17,6 +18,20 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+
+      {/*
+        解鎖工單頁自成一區：**「解鎖專用」帳號唯一進得去的地方**。
+        其餘所有頁面都屬於業務管理系統，那種帳號一律被導回這裡。
+      */}
+      <Route
+        element={
+          <ProtectedRoute requireTaskSystem={false}>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
+        <Route path="unlock" element={<UnlockPage />} />
+      </Route>
 
       <Route
         element={

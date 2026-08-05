@@ -9,7 +9,7 @@ import { APP_BUILD_TIME, APP_NAME, APP_VERSION } from '../config/constants';
 import { Button } from './ui';
 
 export function Layout() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canUseTasks } = useAuth();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -33,18 +33,30 @@ export function Layout() {
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
           <span className="text-lg font-bold text-slate-800">{APP_NAME}</span>
-          <nav className="flex flex-1 items-center gap-1">
-            <NavLink to="/" end className={navItemClass}>
-              首頁
-            </NavLink>
-            <NavLink to="/categories" className={navItemClass}>
-              屬性管理
-            </NavLink>
-            <NavLink to="/templates" className={navItemClass}>
-              待辦公版
-            </NavLink>
-            <NavLink to="/tools" className={navItemClass}>
-              小工具
+          <nav className="flex flex-1 flex-wrap items-center gap-1">
+            {/*
+              業務管理的入口對「解鎖專用」帳號一律不顯示——那種帳號連資料都讀不到，
+              放著只會讓人點進去看到一頁空的（權限最終防線仍在 Firestore 規則）。
+            */}
+            {canUseTasks && (
+              <>
+                <NavLink to="/" end className={navItemClass}>
+                  首頁
+                </NavLink>
+                <NavLink to="/categories" className={navItemClass}>
+                  屬性管理
+                </NavLink>
+                <NavLink to="/templates" className={navItemClass}>
+                  待辦公版
+                </NavLink>
+                <NavLink to="/tools" className={navItemClass}>
+                  小工具
+                </NavLink>
+              </>
+            )}
+            {/* 解鎖工單：三種角色都用得到，因此永遠顯示。 */}
+            <NavLink to="/unlock" className={navItemClass}>
+              解鎖工單
             </NavLink>
             {/* 使用者管理僅管理員可見（權限最終防線仍在 Firestore 規則）。 */}
             {isAdmin && (

@@ -30,6 +30,8 @@ export const COLLECTIONS = {
   tasks: 'tasks',
   checklistTemplates: 'checklistTemplates',
   holidays: 'holidays',
+  /** 解鎖工單（網頁申請 → 本機工具執行 → 結果回寫）。 */
+  unlockRequests: 'unlockRequests',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */
@@ -79,4 +81,31 @@ export const USER_STATUS_LABELS: Record<string, { label: string; tone: Tone }> =
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: '管理員',
   member: '一般使用者',
+  unlocker: '解鎖專用',
 };
+
+/**
+ * 管理員可以在使用者管理頁指派的角色。
+ *
+ * 不含 `admin`：管理員身分以 email 白名單認定（見 `ADMIN_EMAILS`），
+ * 不是靠改文件得來的，列在這裡只會讓人以為改得動。
+ */
+export const ASSIGNABLE_ROLES: readonly { value: string; label: string; hint: string }[] = [
+  { value: 'member', label: '一般使用者', hint: '可用業務管理與解鎖工單' },
+  { value: 'unlocker', label: '解鎖專用', hint: '只能提出解鎖工單，看不到業務資料' },
+];
+
+/** 解鎖工單狀態的中文標籤與色調。 */
+export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: '待處理', tone: 'amber' },
+  running: { label: '處理中', tone: 'blue' },
+  unlocked: { label: '已解鎖', tone: 'green' },
+  noAction: { label: '本來就沒鎖', tone: 'slate' },
+  failed: { label: '需人工處理', tone: 'red' },
+};
+
+/**
+ * 一次最多能送出幾筆解鎖工單。
+ * 純粹是防手殘（例如整欄幾百個編號誤貼進來），不是系統限制。
+ */
+export const UNLOCK_REQUEST_MAX_BATCH = 50;

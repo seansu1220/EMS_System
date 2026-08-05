@@ -14,6 +14,8 @@
  * 2. 已核准的一般使用者可讀、可新增、可編輯，但**不可刪除業務、屬性、待辦公版**。
  * 3. 待審核 / 未通過的帳號完全不能存取業務資料。
  * 4. 一般使用者不可自行把自己改成 approved 或 admin（不可自我提權）。
+ * 5. **解鎖專用帳號**（role == 'unlocker'）讀不到任何業務資料，
+ *    解鎖工單只讀得到自己送的、不可回寫結果、不可冒用他人名義申請。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -21,7 +23,18 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { deleteDoc, doc, getDoc, getDocs, setDoc, updateDoc, collection } from 'firebase/firestore';
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
 
 const ADMIN_EMAIL = 'seansu1220@gmail.com';
 const PROJECT_ID = 'ems-rules-test';
@@ -101,6 +114,31 @@ await seed(async (db) => {
     items: [{ id: 'i1', content: '簽陳核准', sortOrder: 0 }],
     ownerUid: 'admin-uid',
   });
+  await setDoc(doc(db, 'users/unlocker-uid'), {
+    uid: 'unlocker-uid',
+    email: 'squad@example.com',
+    displayName: '某分隊',
+    role: 'unlocker',
+    status: 'approved',
+  });
+  await setDoc(doc(db, 'unlockRequests/req-mine'), {
+    temsis: '2026071210100310384101',
+    reason: '處置漏填',
+    requestedBy: 'unlocker-uid',
+    requestedByName: '某分隊',
+    requestedAt: '2026-08-06T01:00:00.000Z',
+    status: 'pending',
+    result: null,
+  });
+  await setDoc(doc(db, 'unlockRequests/req-others'), {
+    temsis: '2026071210100310384102',
+    reason: '別隊送的',
+    requestedBy: 'member-uid',
+    requestedByName: '同事',
+    requestedAt: '2026-08-06T02:00:00.000Z',
+    status: 'pending',
+    result: null,
+  });
   await setDoc(doc(db, 'holidays/2027'), {
     year: 2027,
     holidays: [{ date: '2027-01-01', name: '開國紀念日' }],
@@ -113,6 +151,7 @@ await seed(async (db) => {
 const admin = dbFor('admin-uid', ADMIN_EMAIL);
 const member = dbFor('member-uid', 'member@example.com');
 const pending = dbFor('pending-uid', 'pending@example.com');
+const unlocker = dbFor('unlocker-uid', 'squad@example.com');
 
 // ── 1. 管理員 ──
 await check('管理員可讀業務', assertSucceeds(getDoc(doc(admin, 'tasks/task-1'))));
@@ -259,9 +298,128 @@ await check(
   ),
 );
 
-// ── 5. 未登入者 ──
+// ── 5. 解鎖專用帳號（權限最低，只碰得到解鎖工單）──
+await check('解鎖專用帳號讀不到業務', assertFails(getDoc(doc(unlocker, 'tasks/task-1'))));
+await check('解鎖專用帳號讀不到屬性', assertFails(getDocs(collection(unlocker, 'categories'))));
+await check('解鎖專用帳號讀不到待辦公版', assertFails(getDocs(collection(unlocker, 'checklistTemplates'))));
+await check('解鎖專用帳號讀不到假日清單', assertFails(getDoc(doc(unlocker, 'holidays/2027'))));
+await check(
+  '解鎖專用帳號不可新增業務',
+  assertFails(
+    addDoc(collection(unlocker, 'tasks'), { title: '偷加的', ownerUid: 'unlocker-uid' }),
+  ),
+);
+await check(
+  '解鎖專用帳號可送出自己的解鎖工單',
+  assertSucceeds(
+    addDoc(collection(unlocker, 'unlockRequests'), {
+      temsis: '2026080110100310380001',
+      reason: '補登處置',
+      requestedBy: 'unlocker-uid',
+      requestedByName: '某分隊',
+      requestedAt: '2026-08-06T03:00:00.000Z',
+      status: 'pending',
+      result: null,
+    }),
+  ),
+);
+await check(
+  '不可冒用他人名義送工單',
+  assertFails(
+    addDoc(collection(unlocker, 'unlockRequests'), {
+      temsis: '2026080110100310380002',
+      reason: '冒名',
+      requestedBy: 'member-uid',
+      requestedByName: '同事',
+      requestedAt: '2026-08-06T03:00:00.000Z',
+      status: 'pending',
+      result: null,
+    }),
+  ),
+);
+await check(
+  '不可直接送一張「已解鎖」的假工單',
+  assertFails(
+    addDoc(collection(unlocker, 'unlockRequests'), {
+      temsis: '2026080110100310380003',
+      reason: '假的',
+      requestedBy: 'unlocker-uid',
+      requestedByName: '某分隊',
+      requestedAt: '2026-08-06T03:00:00.000Z',
+      status: 'unlocked',
+      result: null,
+    }),
+  ),
+);
+await check(
+  '解鎖專用帳號讀得到自己送的工單',
+  assertSucceeds(
+    getDocs(query(collection(unlocker, 'unlockRequests'), where('requestedBy', '==', 'unlocker-uid'))),
+  ),
+);
+await check(
+  '解鎖專用帳號不可整包撈別人的工單',
+  assertFails(getDocs(collection(unlocker, 'unlockRequests'))),
+);
+await check(
+  '解鎖專用帳號讀不到別人送的那一筆',
+  assertFails(getDoc(doc(unlocker, 'unlockRequests/req-others'))),
+);
+await check(
+  '解鎖專用帳號不可自己回寫「已解鎖」',
+  assertFails(updateDoc(doc(unlocker, 'unlockRequests/req-mine'), { status: 'unlocked' })),
+);
+await check(
+  '一般使用者看得到所有工單（他才是去跑的人）',
+  assertSucceeds(getDocs(collection(member, 'unlockRequests'))),
+);
+await check(
+  '一般使用者可回寫解鎖結果',
+  assertSucceeds(
+    updateDoc(doc(member, 'unlockRequests/req-mine'), {
+      status: 'unlocked',
+      result: {
+        caseDate: '2026/07/12 10:38:41',
+        vehicle: '大湳93',
+        squad: '大湳分隊',
+        detail: '已解鎖',
+        processedAt: '2026-08-06T04:00:00.000Z',
+        processedBy: '股長',
+      },
+    }),
+  ),
+);
+await check(
+  '回寫結果時不可竄改申請內容',
+  assertFails(
+    updateDoc(doc(member, 'unlockRequests/req-others'), {
+      temsis: '改掉的編號',
+      status: 'unlocked',
+    }),
+  ),
+);
+await check(
+  '待審核帳號不可送出解鎖工單',
+  assertFails(
+    addDoc(collection(pending, 'unlockRequests'), {
+      temsis: '2026080110100310380004',
+      reason: '還沒核准',
+      requestedBy: 'pending-uid',
+      requestedByName: '待審核者',
+      requestedAt: '2026-08-06T03:00:00.000Z',
+      status: 'pending',
+      result: null,
+    }),
+  ),
+);
+
+// ── 6. 未登入者 ──
 const anon = testEnv.unauthenticatedContext().firestore();
 await check('未登入者不可讀業務', assertFails(getDoc(doc(anon, 'tasks/task-1'))));
+await check(
+  '未登入者不可讀解鎖工單',
+  assertFails(getDoc(doc(anon, 'unlockRequests/req-mine'))),
+);
 
 await testEnv.cleanup();
 

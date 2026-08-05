@@ -7,6 +7,9 @@ rules_version = '2';
 // - 管理員（email 白名單）：可做所有事，包含核准帳號與所有「刪除」動作。
 // - 一般使用者（已核准）：可讀取、新增、編輯業務/屬性/待辦公版，
 //   但**不可刪除**業務、屬性、待辦公版（v1.8.1 起三者皆鎖）。
+// - **解鎖專用（role == 'unlocker'，v1.17 起）**：權限最低。只能建立解鎖工單、
+//   讀取**自己送出的**工單；業務/屬性/公版/假日一律讀不到也寫不了。
+//   給各分隊申請解鎖用，不需要也不應該看到科內業務。
 // - 待審核 / 未通過的帳號：完全不能存取業務資料，只能讀寫自己的 users 文件。
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -22,19 +25,27 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'seansu1220@gmail.com';
     }
 
-    // 讀取自己的 users 文件狀態（管理員不需查文件，見 isApproved）。
-    function myStatus() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status;
+    // 讀取自己的 users 文件（管理員不需查文件，見 isApproved）。
+    function myUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
     // 已核准的正式帳號（管理員一律視為已核准，避免文件缺欄位時把自己鎖在外面）。
     function isApproved() {
-      return isAdmin() || (isSignedIn() && myStatus() == 'approved');
+      return isAdmin() || (isSignedIn() && myUser().status == 'approved');
+    }
+
+    // 可使用**業務管理系統**的人＝已核准，且不是「解鎖專用」帳號。
+    // 管理員一律放行：管理員身分來自 email 白名單，即使文件的 role 被改壞
+    // 也不能把唯一改得回來的人鎖在外面。
+    // ⚠️ 須與 src/lib/permissions.ts 的 canUseTaskSystem() 一致。
+    function isStaff() {
+      return isAdmin() || (isApproved() && myUser().role != 'unlocker');
     }
 
     // 建立資料時記錄建立者，強制等於自己。
     function isCreatingOwn() {
-      return isApproved() && request.resource.data.ownerUid == request.auth.uid;
+      return isStaff() && request.resource.data.ownerUid == request.auth.uid;
     }
 
     // ── 使用者帳號 ──
@@ -63,35 +74,69 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ── 屬性（分類）：已核准者共用；只有管理員可刪除 ──
+    // ── 屬性（分類）：業務人員共用；只有管理員可刪除 ──
     match /categories/{categoryId} {
-      allow read: if isApproved();
+      allow read: if isStaff();
       allow create: if isCreatingOwn();
-      allow update: if isApproved();
+      allow update: if isStaff();
       allow delete: if isAdmin();
     }
 
-    // ── 業務：已核准者共用；只有管理員可刪除 ──
+    // ── 業務：業務人員共用；只有管理員可刪除 ──
     match /tasks/{taskId} {
-      allow read: if isApproved();
+      allow read: if isStaff();
       allow create: if isCreatingOwn();
-      allow update: if isApproved();
+      allow update: if isStaff();
       allow delete: if isAdmin();
     }
 
-    // ── 待辦公版（範本）：已核准者共用；只有管理員可刪除 ──
+    // ── 待辦公版（範本）：業務人員共用；只有管理員可刪除 ──
     match /checklistTemplates/{templateId} {
-      allow read: if isApproved();
+      allow read: if isStaff();
       allow create: if isCreatingOwn();
-      allow update: if isApproved();
+      allow update: if isStaff();
       allow delete: if isAdmin();
     }
 
-    // ── 國定假日（辦公日曆表）：全體已核准者可讀（首頁天數計算要用），
+    // ── 國定假日（辦公日曆表）：業務人員可讀（首頁天數計算要用），
     //    但只有管理員能匯入/刪除——這份資料會改變所有人看到的剩餘天數。
     match /holidays/{year} {
-      allow read: if isApproved();
+      allow read: if isStaff();
       allow write: if isAdmin();
+    }
+
+    // ── 解鎖工單（v1.17 起）──
+    //
+    // 這條流程是：網頁提出申請 → 救護科電腦上的本機工具實際解鎖 → 結果回寫。
+    // 因此「誰能建立」與「誰能回寫結果」是兩種人：
+    //   - 建立：已核准的任何帳號（含解鎖專用），但只能掛自己的名字
+    //   - 回寫結果：只有業務人員（實際去跑解鎖的是他們的電腦）
+    //
+    // 讀取分兩種：業務人員看得到全部（要去跑）；解鎖專用帳號只看得到自己送的。
+    //
+    // ⚠️ 這一條同時管住 list：Firestore 會要求查詢本身「證明得出結果都符合規則」，
+    // 因此解鎖專用帳號**必須**帶上 where('requestedBy','==',uid) 才查得動，
+    // 沒帶條件的整包查詢會被直接拒絕（見 unlockRequestService.subscribeUnlockRequests）。
+    match /unlockRequests/{requestId} {
+      allow read: if isStaff()
+        || (isApproved() && resource.data.requestedBy == request.auth.uid);
+
+      // 新工單一律從 pending 開始，且申請人必須是自己——
+      // 不能替別人送，也不能直接送一張「已解鎖」的假工單。
+      allow create: if isApproved()
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.temsis is string
+        && request.resource.data.temsis.size() > 0;
+
+      // 只有業務人員能回寫結果，且不可竄改申請內容（TEMSIS、事由、申請人、申請時間）。
+      allow update: if isStaff()
+        && request.resource.data.temsis == resource.data.temsis
+        && request.resource.data.reason == resource.data.reason
+        && request.resource.data.requestedBy == resource.data.requestedBy
+        && request.resource.data.requestedAt == resource.data.requestedAt;
+
+      allow delete: if isAdmin();
     }
   }
 }

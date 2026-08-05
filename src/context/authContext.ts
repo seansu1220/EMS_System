@@ -16,6 +16,13 @@ export interface AuthContextValue {
   isAdmin: boolean;
   /** 目前帳號是否已核准可使用系統。 */
   isApproved: boolean;
+  /**
+   * 是否可使用業務管理系統（首頁、業務、屬性、公版、小工具）。
+   * 「解鎖專用」角色為 false——那種帳號只進得去解鎖工單頁。
+   */
+  canUseTasks: boolean;
+  /** 是否為「只能解鎖」的帳號（登入後直接落在解鎖工單頁）。 */
+  isUnlockOnly: boolean;
 }
 
 export const AuthContext = createContext<AuthContextValue | undefined>(undefined);

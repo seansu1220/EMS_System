@@ -8,7 +8,14 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { ensureUserDoc, fetchUserProfile, subscribeUserProfile } from '../services/authService';
 import { ensureDefaultCategories } from '../services/categoryService';
-import { isAdmin, isApproved, resolveInitialStatus, resolveRole } from '../lib/permissions';
+import {
+  canUseTaskSystem,
+  isAdmin,
+  isApproved,
+  isUnlockOnly,
+  resolveInitialStatus,
+  resolveRole,
+} from '../lib/permissions';
 import type { AppUser } from '../types/user';
 import { AuthContext, type AuthContextValue } from './authContext';
 
@@ -63,8 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const nextUser = profile ? { ...profile, email: email || profile.email } : fallbackProfile;
           setUser(nextUser);
           setLoading(false);
-          // 已核准者才碰 categories：待審核帳號會被安全規則擋下。
-          if (!defaultsEnsuredRef.current && isApproved(nextUser)) {
+          // 用得到業務管理的人才碰 categories：待審核與「解鎖專用」帳號都會被安全規則擋下。
+          if (!defaultsEnsuredRef.current && canUseTaskSystem(nextUser)) {
             defaultsEnsuredRef.current = true;
             // 失敗只記錄，不影響登入狀態（屬性頁仍可手動建立）。
             ensureDefaultCategories(uid).catch((error) =>
@@ -100,6 +107,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshUser,
       isAdmin: isAdmin(user),
       isApproved: isApproved(user),
+      canUseTasks: canUseTaskSystem(user),
+      isUnlockOnly: isUnlockOnly(user),
     }),
     [user, loading, refreshUser],
   );

@@ -1,15 +1,16 @@
 /**
  * 使用者管理頁（僅管理員可進入）。
- * 列出所有註冊帳號（待審核排最前），可核准、拒絕、停用；管理員本身的帳號不可調整。
+ * 列出所有註冊帳號（待審核排最前），可核准、拒絕、停用、指派角色；
+ * 管理員本身的帳號不可調整（管理員身分來自 email 白名單）。
  */
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { setUserStatus, subscribeUsers } from '../services/userService';
+import { setUserRole, setUserStatus, subscribeUsers } from '../services/userService';
 import { isAdminEmail } from '../lib/permissions';
-import { USER_ROLE_LABELS, USER_STATUS_LABELS } from '../config/constants';
-import type { AppUser, UserStatus } from '../types/user';
-import { Badge, Button, CenteredSpinner, ErrorBanner } from '../components/ui';
+import { ASSIGNABLE_ROLES, USER_ROLE_LABELS, USER_STATUS_LABELS } from '../config/constants';
+import type { AppUser, UserRole, UserStatus } from '../types/user';
+import { Badge, Button, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
 export function UsersPage() {
   const { user, isAdmin } = useAuth();
@@ -55,6 +56,20 @@ export function UsersPage() {
     }
   }
 
+  /** 變更帳號角色（解鎖專用 ⇄ 一般使用者）。 */
+  async function handleSetRole(target: AppUser, role: Exclude<UserRole, 'admin'>) {
+    if (!user) return;
+    setBusyUid(target.uid);
+    setError(null);
+    try {
+      await setUserRole(target.uid, role, user.uid);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyUid(null);
+    }
+  }
+
   const pendingCount = users.filter((item) => item.status === 'pending').length;
 
   return (
@@ -63,7 +78,8 @@ export function UsersPage() {
         <h1 className="text-xl font-bold text-slate-800">使用者管理</h1>
         <p className="mt-1 text-sm text-slate-500">
           新註冊的帳號預設為「待審核」，須在此核准後才能登入使用系統。
-          一般使用者可新增與編輯業務，但不能刪除業務。
+          一般使用者可新增與編輯業務，但不能刪除業務；
+          <strong>解鎖專用</strong>帳號只進得去解鎖工單頁，看不到任何業務資料（給各分隊申請解鎖用）。
         </p>
       </div>
 
@@ -97,6 +113,7 @@ export function UsersPage() {
                   `確定停用「${item.displayName || item.email}」？停用後他將無法進入系統（資料不會刪除）。`,
                 )
               }
+              onChangeRole={(role) => handleSetRole(item, role)}
             />
           ))}
         </div>
@@ -112,12 +129,14 @@ function UserRow({
   isSelf,
   onApprove,
   onReject,
+  onChangeRole,
 }: {
   item: AppUser;
   busy: boolean;
   isSelf: boolean;
   onApprove: () => void;
   onReject: () => void;
+  onChangeRole: (role: Exclude<UserRole, 'admin'>) => void;
 }) {
   const statusLabel = USER_STATUS_LABELS[item.status] ?? USER_STATUS_LABELS.pending;
   // 管理員（白名單 email）的權限來自 email，不可在此調整。
@@ -132,7 +151,23 @@ function UserRow({
         </p>
         <p className="truncate text-xs text-slate-500">{item.email}</p>
       </div>
-      <span className="text-xs text-slate-500">{USER_ROLE_LABELS[item.role] ?? item.role}</span>
+      {locked ? (
+        <span className="text-xs text-slate-500">{USER_ROLE_LABELS[item.role] ?? item.role}</span>
+      ) : (
+        <select
+          className={`${INPUT_CLASS} w-auto py-1 text-xs`}
+          value={item.role}
+          disabled={busy}
+          onChange={(event) => onChangeRole(event.target.value as Exclude<UserRole, 'admin'>)}
+          title={ASSIGNABLE_ROLES.find((role) => role.value === item.role)?.hint}
+        >
+          {ASSIGNABLE_ROLES.map((role) => (
+            <option key={role.value} value={role.value}>
+              {role.label}
+            </option>
+          ))}
+        </select>
+      )}
       <Badge tone={statusLabel.tone}>{statusLabel.label}</Badge>
       {locked ? (
         <span className="text-xs text-slate-400">管理員帳號</span>
