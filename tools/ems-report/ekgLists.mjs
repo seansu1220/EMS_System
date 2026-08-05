@@ -1,44 +1,72 @@
 /**
  * 心電圖流程的兩份**附帶清單**（正式報表之外，給人拿去追蹤用的）。
  *
- *   1. `待人工確認`　　　程式判定不出來的案件，等使用者自己看
- *   2. `有12導程沒勾EKG`　有上傳心電圖、但急救處置漏勾的案件，**用來提醒同仁記得點處置**
+ *   1. `心電圖待人工確認`　程式判定不出來的案件，等使用者自己看
+ *   2. `有處置未勾選清冊`　有上傳心電圖、但急救處置漏勾的案件，**用來提醒同仁記得點處置**
  *
- * 兩份都放在 `out/report/`，與正式報表同一層。該層的既定規範是
- * 「內容可以安全帶著走」，因此：
+ * 版面比照正式報表：標題與欄名兩列置中，欄寬**依實際內容**計算
+ * （只看欄名的話，「案件日期」這種短欄名配上長日期就會被截掉）。
  *
- * ⚠ **TEMSIS 一律只寫末 4 碼**。分隊＋案件日期＋末 4 碼三者合起來，
- *   已足以在系統裡把案件找回來（先用日期與分隊查，再核對末 4 碼），
- *   沒有必要把完整編號寫進一份會被轉寄的檔案。
+ * ⚠ 個資原則（兩份不同，因為用途不同）：
+ *   - `有處置未勾選清冊` 要拿去跟各分隊逐案核對，使用者 2026-08-05 指示
+ *     **TEMSIS 完整顯示**即可——分隊自己的案件本來就看得到完整編號。
+ *   - `待人工確認` 只是給使用者自己看數量與原因，仍只寫末 4 碼。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { PATHS, UNLOCK } from './config.mjs';
+import ExcelJS from 'exceljs';
+import { PATHS, REPORT_FORMAT, UNLOCK } from './config.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { log } from './logger.mjs';
+import { computeColumnWidths, widenToFitTitle } from './sheetLayout.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 標題列的樣式（兩份清單共用）。 */
 const TITLE_FONT = { bold: true, size: 14 };
 
-/** 建立活頁簿並套上標題列；回傳 ExcelJS 的 workbook 與第一個分頁。 */
-async function newListSheet(sheetName, title, columnCount) {
-  const ExcelJS = (await import('exceljs')).default;
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(sheetName);
-  sheet.addRow([title]);
-  sheet.mergeCells(1, 1, 1, Math.max(1, columnCount));
-  sheet.getRow(1).font = TITLE_FONT;
-  return { workbook, sheet };
+/** 把一整列的文字置中（使用者 2026-08-05 要求標題那兩列都要置中）。 */
+function centerRow(row, columnCount) {
+  for (let column = 1; column <= columnCount; column += 1) {
+    row.getCell(column).alignment = { ...REPORT_FORMAT.alignment };
+  }
 }
 
-/** 依標題文字給每一欄一個夠用的寬度；`說明`這種長欄位另外放寬。 */
-function applyColumnWidths(sheet, header, wide = []) {
-  header.forEach((name, index) => {
-    sheet.getColumn(index + 1).width = wide.includes(name)
-      ? 60
-      : Math.max(14, name.length * 2 + 4);
+/**
+ * 建立一個清單分頁：標題列（跨欄合併、置中）＋ 欄名列（置中）＋ 資料列。
+ *
+ * @param {ExcelJS.Workbook} workbook
+ * @param {string} sheetName 分頁名稱
+ * @param {string} title 第一列的大標
+ * @param {string[]} header 欄名
+ * @param {unknown[][]} rows 資料列（與欄名同順序）
+ * @param {{wideColumns?: string[]}} [options] 指定要放寬的欄（說明類長文字）
+ * @returns {ExcelJS.Worksheet}
+ */
+function buildListSheet(workbook, sheetName, title, header, rows, options = {}) {
+  const sheet = workbook.addWorksheet(sheetName);
+  const columnCount = header.length;
+
+  const titleRow = sheet.addRow([title]);
+  sheet.mergeCells(1, 1, 1, Math.max(1, columnCount));
+  titleRow.getCell(1).font = TITLE_FONT;
+  centerRow(titleRow, columnCount);
+
+  const headerRow = sheet.addRow(header);
+  headerRow.font = { bold: true };
+  centerRow(headerRow, columnCount);
+
+  for (const row of rows) sheet.addRow(row);
+
+  // 欄寬依欄名與所有內容計算；標題是合併的，放不下會被切掉，故另外補足總寬。
+  const widths = widenToFitTitle(
+    computeColumnWidths(header, rows, { wideColumns: options.wideColumns }),
+    title,
+    TITLE_FONT.size,
+  );
+  widths.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
   });
+  return sheet;
 }
 
 /**
@@ -62,6 +90,36 @@ async function writeWorkbook(workbook, filePath, hint) {
 const PENDING_COLUMNS = ['分隊', '案件日期', 'TEMSIS末4碼', '到院時間', '讀到的上傳時間', '判定', '說明'];
 
 /**
+ * 組出待人工確認清單的活頁簿（不寫檔）。與寫檔分開，讓測試能在記憶體中檢查版面，
+ * 而不會動到使用者 out/report/ 底下的檔案。
+ *
+ * @param {import('./ekgVerify.mjs').VerifyOutcome[]} pending 已篩出「判定不出來」的案件
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {ExcelJS.Workbook}
+ */
+export function buildPendingWorkbook(pending, monthRange) {
+  const rows = pending.map((item) => [
+    item.squad,
+    item.caseDate ?? '(讀不到)',
+    maskCode(item.temsis),
+    item.arrival ?? '(讀不到)',
+    item.upload ?? '(讀不到)',
+    item.verdict,
+    item.reason,
+  ]);
+  const workbook = new ExcelJS.Workbook();
+  buildListSheet(
+    workbook,
+    '待人工確認',
+    `${monthRange.label}　心電圖待人工確認清冊`,
+    PENDING_COLUMNS,
+    rows,
+    { wideColumns: ['說明'] },
+  );
+  return workbook;
+}
+
+/**
  * 把「判定不出來」的案件另外列成一份清單。
  *
  * 使用者 2026-08-03 決定：這些案件先不計入分子，改由他自己人工判定。
@@ -82,33 +140,81 @@ export async function writePendingList(outcomes, monthRange, unknownVerdict) {
     return null;
   }
 
-  const { workbook, sheet } = await newListSheet(
-    '待人工確認',
-    `${monthRange.label} 12導程心電圖：程式判定不出來、需要你自己看的案件`,
-    PENDING_COLUMNS.length,
-  );
-  sheet.addRow(PENDING_COLUMNS).font = { bold: true };
-  for (const item of pending) {
-    sheet.addRow([
-      item.squad,
-      item.caseDate ?? '(讀不到)',
-      maskCode(item.temsis),
-      item.arrival ?? '(讀不到)',
-      item.upload ?? '(讀不到)',
-      item.verdict,
-      item.reason,
-    ]);
-  }
-  applyColumnWidths(sheet, PENDING_COLUMNS, ['說明']);
-
+  const workbook = buildPendingWorkbook(pending, monthRange);
   await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行；查核結果已存進度檔，不需要重跑。');
   log.warn(`有 ${pending.length} 件判定不出來，已另外列出：${path.relative(process.cwd(), filePath)}`);
   log.info('這些案件不計入分子。請自行到系統核對後，決定要不要把它們算進去。');
   return filePath;
 }
 
+/** 有處置未勾選清冊的檔名前綴。 */
+const MISSING_PROCEDURE_PREFIX = '心電圖-有處置未勾選清冊';
+
 /**
- * 寫出「有上傳 12 導程心電圖、但急救處置沒勾 EKG檢查」的清單。
+ * 這份清冊 2026-08-05 之前叫這個名字。改名後留著舊檔會讓人搞不清哪份才是新的，
+ * 但那是使用者的檔案（可能已手動編輯過），因此只提醒、不代為刪除。
+ */
+const LEGACY_MISSING_PROCEDURE_PREFIX = '心電圖-有12導程沒勾EKG';
+
+/** 提醒使用者：同一個月還留著舊檔名的那一份，可以自己刪掉。 */
+async function noteLegacyFile(monthRange) {
+  const legacyPath = path.join(
+    PATHS.reportDir,
+    `${LEGACY_MISSING_PROCEDURE_PREFIX}-${monthRange.label}.xlsx`,
+  );
+  const exists = await fs.access(legacyPath).then(() => true).catch(() => false);
+  if (!exists) return;
+  log.info(
+    `這份清冊已改名為「${MISSING_PROCEDURE_PREFIX}」；`
+      + `舊檔 ${path.basename(legacyPath)} 不會再更新，確認過內容後可自行刪除。`,
+  );
+}
+
+/**
+ * 組出「有處置未勾選清冊」的活頁簿（不寫檔）。
+ *
+ * 兩個分頁：先給一張各分隊件數（要提醒誰、提醒幾件，一眼就看得到），
+ * 再附逐案清單供回系統核對。
+ *
+ * @param {Record<string, unknown>[]} rows 漏勾的資料列（取自 12 導程那份匯出檔）
+ * @param {{headers: string[], squadColumn: string, temsisColumn: string}} columns
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {{workbook: ExcelJS.Workbook, squadCount: number}}
+ */
+export function buildMissingProcedureWorkbook(rows, columns, monthRange) {
+  const caseDateColumn = resolveColumnByNames(columns.headers, UNLOCK.listColumns.caseDate);
+  // 大標刻意只寫用途，不寫成一長串條件說明（使用者 2026-08-05 指定）。
+  const title = `${monthRange.label}　有處置未勾選清冊`;
+  const workbook = new ExcelJS.Workbook();
+
+  // ---- 分頁一：各分隊件數（要提醒誰、幾件，一眼看得到）----
+  const tally = new Map();
+  for (const row of rows) {
+    const squad = String(row[columns.squadColumn] ?? '').trim() || '(讀不到分隊)';
+    tally.set(squad, (tally.get(squad) ?? 0) + 1);
+  }
+  const summaryRows = [
+    ['合計', rows.length],
+    ...[...tally].sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'),
+    ),
+  ];
+  const summary = buildListSheet(workbook, '各分隊件數', title, ['分隊', '漏勾件數'], summaryRows);
+  summary.getRow(3).font = { bold: true }; // 合計列
+
+  // ---- 分頁二：逐案清單（拿去系統核對用）----
+  // TEMSIS 完整顯示：這份要拿去跟分隊逐案核對，遮成末 4 碼反而不好對（使用者 2026-08-05 指示）。
+  const detailRows = rows.map((row) => [
+    String(row[columns.squadColumn] ?? '').trim(),
+    caseDateColumn ? String(row[caseDateColumn.column] ?? '').trim() : '(讀不到)',
+    String(row[columns.temsisColumn] ?? '').trim(),
+  ]);
+  buildListSheet(workbook, '逐案清單', title, ['分隊', '案件日期', 'TEMSIS'], detailRows);
+  return { workbook, squadCount: tally.size };
+}
+
+/**
+ * 寫出「有上傳 12 導程心電圖、但急救處置沒勾 EKG檢查」的清冊。
  *
  * 使用者 2026-08-05 要求把它併進正式流程，**用途是提醒同仁記得點處置**。
  * 成因已查明（見 TOOLS_SPEC 3.13）：ZOLL 監視器會自動把心電圖上傳，
@@ -123,55 +229,24 @@ export async function writePendingList(outcomes, monthRange, unknownVerdict) {
  * @returns {Promise<string|null>} 檔案路徑；沒有漏勾案件時回傳 null（並清掉舊檔）
  */
 export async function writeMissingProcedureList(rows, columns, monthRange) {
-  const filePath = path.join(PATHS.reportDir, `心電圖-有12導程沒勾EKG-${monthRange.label}.xlsx`);
+  const filePath = path.join(
+    PATHS.reportDir,
+    `${MISSING_PROCEDURE_PREFIX}-${monthRange.label}.xlsx`,
+  );
   if (rows.length === 0) {
     const removed = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
-    if (removed) log.info('這次沒有漏勾 EKG檢查的案件；先前留下的清單已一併清掉。');
+    if (removed) log.info('這次沒有漏勾 EKG檢查的案件；先前留下的清冊已一併清掉。');
     log.ok('所有有 12 導程的案件都有勾「EKG檢查」，不需要提醒。');
     return null;
   }
 
-  const caseDateColumn = resolveColumnByNames(columns.headers, UNLOCK.listColumns.caseDate);
-  const title = `${monthRange.label}　有上傳 12 導程心電圖、但急救處置沒有勾「EKG檢查」的案件`;
-
-  // ---- 分頁一：各分隊件數（要提醒誰、幾件，一眼看得到）----
-  const tally = new Map();
-  for (const row of rows) {
-    const squad = String(row[columns.squadColumn] ?? '').trim() || '(讀不到分隊)';
-    tally.set(squad, (tally.get(squad) ?? 0) + 1);
-  }
-  const summaryHeader = ['分隊', '漏勾件數'];
-  const { workbook, sheet: summary } = await newListSheet('各分隊件數', title, summaryHeader.length);
-  summary.addRow(summaryHeader).font = { bold: true };
-  summary.addRow(['合計', rows.length]).font = { bold: true };
-  for (const [squad, count] of [...tally].sort(
-    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'),
-  )) {
-    summary.addRow([squad, count]);
-  }
-  applyColumnWidths(summary, summaryHeader);
-
-  // ---- 分頁二：逐案清單（拿去系統核對用）----
-  const detailHeader = ['分隊', '案件日期', 'TEMSIS末4碼'];
-  const detail = workbook.addWorksheet('逐案清單');
-  detail.addRow([title]);
-  detail.mergeCells(1, 1, 1, detailHeader.length);
-  detail.getRow(1).font = TITLE_FONT;
-  detail.addRow(detailHeader).font = { bold: true };
-  for (const row of rows) {
-    detail.addRow([
-      String(row[columns.squadColumn] ?? '').trim(),
-      caseDateColumn ? String(row[caseDateColumn.column] ?? '').trim() : '(讀不到)',
-      maskCode(String(row[columns.temsisColumn] ?? '').trim()),
-    ]);
-  }
-  applyColumnWidths(detail, detailHeader);
-
+  const { workbook, squadCount } = buildMissingProcedureWorkbook(rows, columns, monthRange);
   await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行。');
+  await noteLegacyFile(monthRange);
   log.warn(
-    `有 ${rows.length} 件上傳了 12 導程、卻沒勾「EKG檢查」，涉及 ${tally.size} 個分隊`
+    `有 ${rows.length} 件上傳了 12 導程、卻沒勾「EKG檢查」，涉及 ${squadCount} 個分隊`
       + `：${path.relative(process.cwd(), filePath)}`,
   );
-  log.info('這是要拿去提醒同仁「記得點選急救處置」的清單，第一個分頁就是各分隊件數。');
+  log.info('這是要拿去提醒同仁「記得點選急救處置」的清冊，第一個分頁就是各分隊件數。');
   return filePath;
 }

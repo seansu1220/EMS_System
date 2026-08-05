@@ -31,6 +31,7 @@ import { log, prompt, startLineBuffering, stopLineBuffering } from './logger.mjs
 import { gotoRecordQuery } from './navigation.mjs';
 import {
   findClickables,
+  findPageMarker,
   clickMatch,
   findPairedRows,
   readRowFields,
@@ -139,18 +140,60 @@ async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
 }
 
 /**
+ * 讀出畫面現在的「鎖住狀態」：鎖著的紀錄表幾張、解鎖按鈕幾個。
+ *
+ * 解鎖成功時那一列的「救護紀錄(鎖)」會變成「救護紀錄」（使用者 2026-08-05 描述），
+ * 因此鎖頭張數是比按鈕數更貼近實際的指標。
+ *
+ * @returns {Promise<{lockedRecords: number, unlockButtons: number}>}
+ */
+async function readLockState(page) {
+  const records = await findClickables(content(page), UNLOCK.buttonTexts.openRecordInCase);
+  const unlockButtons = await findClickables(content(page), UNLOCK.buttonTexts.unlock);
+  return {
+    lockedRecords: records.filter((item) => isLockedRecord(item.text)).length,
+    unlockButtons: unlockButtons.length,
+  };
+}
+
+/**
+ * 在整個頁面找「解鎖成功」的系統訊息。
+ *
+ * 使用者說它出現在**左上角的紅字**。這套系統是 frameset 版面，左上角可能落在
+ * 上方的 header frame，也可能是內容框的最上方，因此逐個 frame 找，不預設在哪一個。
+ *
+ * @returns {Promise<{marker: string, text: string}|null>}
+ */
+async function findSuccessMessage(page) {
+  for (const frame of page.frames()) {
+    const found = await findPageMarker(frame, UNLOCK.successMarkers).catch(() => null);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * 真的按下「調整為未結案」。
  *
  * ⚠ 這是整個工具唯一會**改動系統資料**的地方，而且無法復原。
  * 呼叫前必須已經確定目標（`locateUnlockTarget` 回報「已定位」）。
  *
+ * 成功與否**看三個訊號，任一成立就算解開了**（使用者 2026-08-05 回報：
+ * 實際解鎖成功，程式卻只看按鈕數量而說「無法確認是否生效」）：
+ *   1. 畫面新出現「已修改為未結案並解鎖」這類訊息 ← 最直接
+ *   2. 鎖著的紀錄表變少（那一列的鎖頭不見了）
+ *   3. 解鎖按鈕變少（舊版唯一的依據，保留當第三道）
+ *
+ * 訊息必須是**按下之後才出現的**才算數：先記一次基準，本來就在畫面上的不列入。
+ *
  * @param {number} unlockIndex 第幾個解鎖按鈕（0 起算）
- * @returns {Promise<{before: number, after: number, confirmed: boolean}>}
+ * @returns {Promise<{before: {lockedRecords: number, unlockButtons: number},
+ *   after: {lockedRecords: number, unlockButtons: number},
+ *   message: {marker: string, text: string}|null, signals: string[], confirmed: boolean}>}
  */
 export async function performUnlock(page, unlockIndex) {
-  const countUnlockButtons = async () =>
-    (await findClickables(content(page), UNLOCK.buttonTexts.unlock)).length;
-  const before = await countUnlockButtons();
+  const before = await readLockState(page);
+  const messageBefore = await findSuccessMessage(page);
 
   // 系統很可能跳確認視窗。**Playwright 預設會自動按取消**，
   // 不自己接手的話會靜靜地什麼都沒解到，卻看起來像成功了。
@@ -171,9 +214,20 @@ export async function performUnlock(page, unlockIndex) {
     page.off('dialog', onDialog);
   }
 
-  // 回讀驗證：解鎖成功的話，那一列的解鎖按鈕就不該再出現。
-  const after = await countUnlockButtons();
-  return { before, after, confirmed: after < before };
+  // 回讀驗證：三個訊號各自檢查，並把成立的那幾個寫成人看得懂的說明。
+  const messageAfter = await findSuccessMessage(page);
+  const after = await readLockState(page);
+  const signals = [];
+  if (messageAfter && messageAfter.marker !== messageBefore?.marker) {
+    signals.push(`畫面出現「${messageAfter.text || messageAfter.marker}」`);
+  }
+  if (after.lockedRecords < before.lockedRecords) {
+    signals.push(`鎖著的紀錄表由 ${before.lockedRecords} 張減為 ${after.lockedRecords} 張`);
+  }
+  if (after.unlockButtons < before.unlockButtons) {
+    signals.push(`解鎖按鈕由 ${before.unlockButtons} 個減為 ${after.unlockButtons} 個`);
+  }
+  return { before, after, message: messageAfter, signals, confirmed: signals.length > 0 };
 }
 
 /**
@@ -475,14 +529,18 @@ async function unlockLocatedTarget(page, outcome) {
 
   if (result.confirmed) {
     outcome.status = '已解鎖';
-    outcome.detail = `${outcome.detail}；已解鎖（解鎖按鈕由 ${result.before} 個減為 ${result.after} 個）`;
+    outcome.detail = `${outcome.detail}；已解鎖（${result.signals.join('；')}）`;
     log.ok(`已解鎖：${caseInfo}　TEMSIS ${maskCode(outcome.temsis)}`);
+    log.info(`　依據：${result.signals.join('；')}`);
     return;
   }
-  // 按了但畫面沒變化：可能沒生效，也可能系統本來就不會移除按鈕。不臆測，如實回報。
+  // 三個訊號一個都沒成立：可能真的沒生效，也可能系統換了訊息或版面。不臆測，如實回報，
+  // 並把「各項訊號分別是什麼狀況」寫出來，使用者一看就知道要調哪個設定。
   outcome.status = '需人工處理';
-  outcome.detail = `${outcome.detail}；已按下按鈕，但解鎖按鈕數量沒有變少`
-    + `（前後都是 ${result.before} 個），無法確認是否生效，請自行到系統確認`;
+  outcome.detail = `${outcome.detail}；已按下按鈕，但三項成功訊號都沒出現`
+    + `（沒看到「${UNLOCK.successMarkers[0]}」的訊息、`
+    + `鎖著的紀錄表仍為 ${result.after.lockedRecords} 張、`
+    + `解鎖按鈕仍為 ${result.after.unlockButtons} 個），無法確認是否生效，請自行到系統確認`;
   log.warn(`${maskCode(outcome.temsis)}：${outcome.detail}`);
 }
 

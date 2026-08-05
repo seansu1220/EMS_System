@@ -16,6 +16,7 @@ import ExcelJS from 'exceljs';
 import { PATHS, REPORT_FORMAT, REPORT_PROFILES } from './config.mjs';
 import { formatRatio } from './aggregate.mjs';
 import { log } from './logger.mjs';
+import { displayWidth, excelWidthFor, widenToFitTitle } from './sheetLayout.mjs';
 
 // 輸出改用 ExcelJS 而非 SheetJS：SheetJS 的免費版**不會寫入儲存格底色**
 // （樣式屬付費功能，寫進去讀回來會變成 patternType: none），無法標示大隊列。
@@ -31,11 +32,6 @@ function buildTitle(monthRange, profile) {
     return `${Number(month)}/${Number(day)}`;
   };
   return `本局${toMonthDay(monthRange.start)}-${toMonthDay(monthRange.end)}${profile.titleSuffix}`;
-}
-
-/** 計算字串在等寬終端機的顯示寬度（中日韓字元佔 2 格）。 */
-function displayWidth(text) {
-  return [...text].reduce((width, char) => width + (/[ᄀ-ￜ]/.test(char) ? 2 : 1), 0);
 }
 
 /** 將字串補齊到指定顯示寬度。 */
@@ -120,12 +116,12 @@ function computeColumnWidths(stats, profile) {
     [...profile.columns],
     ...stats.map((stat) => toRowTexts(stat)),
   ];
-  const scale = REPORT_FORMAT.fontSize / 11;
-  const padding = 3;
   return profile.columns.map((_, index) => {
-    const widest = Math.max(...textRows.map((row) => displayWidth(String(row[index] ?? ''))));
+    const widest = Math.max(
+      ...textRows.map((row) => excelWidthFor(row[index], REPORT_FORMAT.fontSize)),
+    );
     const minimum = profile.columnWidths[index] ?? 10;
-    return Math.max(minimum, Math.ceil(widest * scale) + padding);
+    return Math.max(minimum, widest);
   });
 }
 
@@ -164,7 +160,13 @@ function buildSheet(workbook, sheetName, title, stats, profile) {
     applyGridStyle(row, REPORT_FORMAT.fontSize, columnCount);
   }
 
-  computeColumnWidths(stats, profile).forEach((width, index) => {
+  // 標題是跨欄合併的，放不下時不會溢出到隔壁而是直接被切掉，因此欄寬要保證裝得下。
+  const widths = widenToFitTitle(
+    computeColumnWidths(stats, profile),
+    title,
+    REPORT_FORMAT.titleFontSize,
+  );
+  widths.forEach((width, index) => {
     sheet.getColumn(index + 1).width = width;
   });
   return sheet;

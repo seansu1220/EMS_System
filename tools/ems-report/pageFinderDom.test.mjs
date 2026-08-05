@@ -18,6 +18,7 @@ import { chromium } from 'playwright-core';
 import { BROWSER } from './config.mjs';
 import {
   findCheckbox,
+  findPageMarker,
   findSelectByOption,
   findMarkedRows,
   findRowsWithColumnValue,
@@ -31,6 +32,11 @@ import { setCheckbox, selectField } from './formFill.mjs';
  * 標籤文字就寫在同一格或隔壁格，另外故意放了幾個容易誤中的誘餌。
  */
 const FIXTURE = `
+<!--
+  仿解鎖成功後左上角出現的那行紅字（使用者 2026-08-05 描述的成功畫面）。
+  外面刻意包一層容器，驗證抓到的是**那一行字**而不是整頁的文字。
+-->
+<div id="banner"><span style="color:red">已修改為未結案並解鎖</span></div>
 <table>
   <tr>
     <td><input type="checkbox" id="_scarcbc040101">氣管內管</td>
@@ -148,6 +154,26 @@ test('完全相符勝過只是包含', { skip }, async () => {
 test('標籤在隔壁儲存格時也找得到', { skip }, async () => {
   const found = await findCheckbox(frame, ['血糖檢查']);
   assert.equal(found.selector, '#_chkGLU');
+});
+
+test('找得到解鎖成功的那行系統訊息，並只帶回那一行字', { skip }, async () => {
+  const found = await findPageMarker(frame, ['已修改為未結案並解鎖']);
+  assert.equal(found.marker, '已修改為未結案並解鎖');
+  assert.equal(found.text, '已修改為未結案並解鎖');
+});
+
+test('系統訊息的比對忽略空白與標點差異', { skip }, async () => {
+  // 舊系統常把訊息寫成「已修改為未結案 並解鎖！」這種形式，不正規化就比對不到。
+  assert.ok(await findPageMarker(frame, ['已修改為未結案 並解鎖']));
+});
+
+test('候選字樣的順序決定回報哪一個', { skip }, async () => {
+  const found = await findPageMarker(frame, ['已修改為未結案', '已修改為未結案並解鎖']);
+  assert.equal(found.marker, '已修改為未結案');
+});
+
+test('畫面上沒有這段訊息時回傳 null，不可以硬說有', { skip }, async () => {
+  assert.equal(await findPageMarker(frame, ['解鎖失敗']), null);
 });
 
 test('找不到就回傳 null，不隨便挑一個勾選框', { skip }, async () => {

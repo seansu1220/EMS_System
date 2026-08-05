@@ -337,6 +337,27 @@ function queryPage(params) {
     return { headers: [], matched: [] };
   }
 
+  if (params.mode === 'pageMarkers') {
+    // 判斷「畫面上有沒有出現某一段系統訊息」，例如解鎖成功後左上角的紅字。
+    //
+    // ⚠ 個資：命中的字樣本來就寫在設定檔裡，不是資料；另外回傳的那一小段文字
+    //   取自**放著這段訊息的最小元素**（就是那行紅字本身），已遮蔽長數字並截斷。
+    const wanted = params.markers.map(normalize);
+    const pageText = normalize(document.body ? document.body.textContent : '');
+    const hit = wanted.findIndex((marker) => marker && pageText.includes(marker));
+    if (hit < 0) return null;
+
+    // 找出真正含有這段字的最小元素，把原文帶回去供紀錄核對（確認抓到的是同一句話）。
+    let text = '';
+    for (const element of document.querySelectorAll('body *')) {
+      if (element.children.length > 0) continue;
+      if (!normalize(element.textContent).includes(wanted[hit])) continue;
+      text = mask(element.textContent).replace(/\s+/g, ' ').trim().slice(0, 60);
+      break;
+    }
+    return { marker: params.markers[hit], text };
+  }
+
   if (params.mode === 'tableHeaders') {
     // 找不到目標時，回報「這一頁有哪些表格、各自的欄位叫什麼」。
     // ⚠ 個資：**只取標題列**，資料列一個都不碰（與探測模式同一套規則）。
@@ -664,6 +685,22 @@ export async function findRowsWithColumnValue(frame, columnCandidates, wantedHea
     valueMarkers: options.valueMarkers ?? [],
     maxRows: options.maxRows ?? 20,
   });
+}
+
+/**
+ * 找出畫面上有沒有出現指定的系統訊息（例如解鎖成功後的那行紅字）。
+ *
+ * 用途是**判斷動作有沒有生效**：這套系統做完事會在畫面上留一句話，
+ * 那句話比「按鈕有沒有消失」可靠得多（按鈕可能本來就不會消失）。
+ *
+ * ⚠ 個資：只回傳命中的字樣（來自設定檔）與該行文字，長數字已遮蔽並截斷。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {string[]} markers 要找的字樣（任一命中即可，比對忽略空白與全半形差異）
+ * @returns {Promise<{marker: string, text: string}|null>} 沒出現時回傳 null
+ */
+export async function findPageMarker(frame, markers) {
+  return frame.evaluate(queryPage, { mode: 'pageMarkers', markers });
 }
 
 /**
