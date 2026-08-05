@@ -542,8 +542,101 @@ test('整件案子都沒有鎖頭時，明說沒有需要解鎖的對象', async
   const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
     readCodes: async () => assert.fail('沒鎖頭的都不該去點'),
   });
-  assert.equal(outcome.status, '需人工處理');
+  // 本來就沒鎖不是「卡住了」，是「不需要動作」——兩者混在一起的話，
+  // 一次順利的執行會看起來像是出了狀況（使用者 2026-08-06 指正）。
+  assert.equal(outcome.status, '無需處理');
   assert.match(outcome.detail, /都沒有鎖頭/);
+});
+
+test('有鎖頭的都比對過都不相符、其餘本來就沒鎖時，是「無需處理」不是「卡住了」', async () => {
+  // 使用者 2026-08-05 實跑遇到的第 4 筆：第 1 張有鎖但 TEMSIS 不符、第 2 張沒鎖被略過。
+  // 案號是用這個 TEMSIS 查出來的，案件不會錯，所以要找的那張只可能是沒鎖的第 2 張。
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
+    ],
+    recordCount: 2,
+    // 實測：**沒有鎖頭的那一列一樣有「調整為未結案」按鈕**，所以按鈕數是 2 不是 1。
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => ({ temsis: 'T115070100999', dispatchNo: null, kind: 'pdf' }),
+  });
+  assert.equal(outcome.status, '無需處理');
+  assert.match(outcome.detail, /本來就沒有鎖頭/);
+});
+
+test('沒有解鎖按鈕、但紀錄表都沒鎖時，也是「無需處理」', async () => {
+  const page = createFakePage({
+    pairs: [{ recordIndex: 0, unlockIndex: -1, recordText: '救護紀錄' }],
+    recordCount: 1,
+    unlockCount: 0,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001');
+  assert.equal(outcome.status, '無需處理');
+});
+
+test('有鎖頭卻打不開、又沒有相符的，仍然是需人工處理（不可以說成不需動作）', async () => {
+  const page = createFakePage({
+    pairs: [
+      { recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' },
+      { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄' },
+    ],
+    recordCount: 2,
+    // 實測：**沒有鎖頭的那一列一樣有「調整為未結案」按鈕**，所以按鈕數是 2 不是 1。
+    unlockCount: 2,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => { throw new Error('紀錄表沒有開出來'); },
+  });
+  assert.equal(outcome.status, '需人工處理');
+});
+
+/** 收集 printUnlockSummary 印出來的每一行。 */
+function capturePrinted(run) {
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (text) => printed.push(String(text));
+  console.error = (text) => printed.push(String(text));
+  try {
+    run();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  return printed.join('\n');
+}
+
+test('「本來就沒鎖」要與「需要你接手」分開算，不可以混成同一個數字', () => {
+  // 使用者 2026-08-05 實跑：4 筆裡 3 筆解開、1 筆本來就沒鎖。
+  // 舊版寫成「已解鎖 3 筆、未處理 1 筆」，看起來像是有一筆出了問題。
+  const outcomes = [
+    { temsis: 'T1', status: '已解鎖', detail: '已解鎖', recordIndex: 0, caseDate: '2026/07/31 17:50:20' },
+    { temsis: 'T2', status: '已解鎖', detail: '已解鎖', recordIndex: 0, caseDate: '2026/07/12 10:38:41' },
+    { temsis: 'T3', status: '已解鎖', detail: '已解鎖', recordIndex: 4, caseDate: '2026/07/02 18:32:30' },
+    { temsis: 'T4', status: '無需處理', detail: '本來就沒有鎖頭', caseDate: '2026/07/12 10:58:01' },
+  ];
+  const text = capturePrinted(() => printUnlockSummary(outcomes, { dryRun: false }));
+  assert.match(text, /已解鎖 3 筆/);
+  assert.match(text, /本來就沒鎖 1 筆/);
+  assert.match(text, /需要你接手 0 筆/);
+  // 全部都正常時，不可以再叫使用者去人工處理。
+  assert.doesNotMatch(text, /請自行到系統處理/);
+});
+
+test('真的有卡住的那幾筆，才提醒使用者要自己接手', () => {
+  const text = capturePrinted(() => printUnlockSummary([
+    { temsis: 'T1', status: '已解鎖', detail: '已解鎖', recordIndex: 0 },
+    { temsis: 'T2', status: '無需處理', detail: '本來就沒有鎖頭' },
+    { temsis: 'T3', status: '需人工處理', detail: '定位不明確' },
+  ], { dryRun: false }));
+  assert.match(text, /需要你接手 1 筆/);
+  assert.match(text, /有 1 筆程式無法判斷/);
 });
 
 test('正式解鎖後要單獨列出「這次到底動了哪幾件」', () => {

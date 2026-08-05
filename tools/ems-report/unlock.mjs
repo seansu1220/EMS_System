@@ -49,7 +49,10 @@ import {
 /**
  * @typedef {Object} UnlockOutcome
  * @property {string} temsis 使用者輸入的 TEMSIS（顯示時會遮蔽）
- * @property {'已解鎖'|'已定位'|'查無案件'|'需人工處理'|'失敗'} status
+ * @property {'已解鎖'|'已定位'|'無需處理'|'查無案件'|'需人工處理'|'失敗'} status
+ *   `無需處理`＝那張紀錄表**本來就沒有鎖頭**（已是未結案），不是失敗也不必人工介入；
+ *   `需人工處理`＝**真的卡住了**，程式無法判斷該解哪一張，要人接手。兩者必須分開，
+ *   否則「跑得好好的」與「出問題了」會混在同一個數字裡（使用者 2026-08-06 指正）。
  * @property {string} detail 給人看的說明
  * @property {number} [unlockIndex] 目標是第幾個解鎖按鈕（0 起算）
  * @property {number} [recordIndex] 目標是第幾張紀錄表（0 起算）
@@ -357,10 +360,20 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   }
 
   if (paired.unlockCount === 0) {
+    // 找得到紀錄表、而且每一張都沒有鎖頭 → 這件本來就是未結案，不是出問題。
+    // 反之（連紀錄表都找不到）才是真的不知道發生什麼事，要人來看。
+    if (paired.recordCount > 0 && paired.pairs.every((pair) => !isLockedRecord(pair.recordText))) {
+      return {
+        temsis,
+        status: '無需處理',
+        detail: `案件內 ${paired.recordCount} 張紀錄表都沒有鎖頭（已是未結案），本來就不需要解鎖`,
+      };
+    }
     return {
       temsis,
       status: '需人工處理',
-      detail: `案件內部找不到「${UNLOCK.buttonTexts.unlock[0]}」按鈕（可能已是未結案，或按鈕文字不同）`,
+      detail: `案件內部找不到「${UNLOCK.buttonTexts.unlock[0]}」按鈕，也看不到沒上鎖的紀錄表`
+        + `（可能是按鈕文字改了）。${await describeClickableOptions(page)}`,
     };
   }
   if (paired.unlockCount === 1) {
@@ -470,13 +483,26 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
   const comparedCount = paired.pairs.length - unopened.length - unlockedAlready.length;
 
   if (matches.length === 0) {
-    if (comparedCount === 0) {
+    if (comparedCount === 0 && unopened.length > 0) {
       return {
         temsis,
         status: '需人工處理',
-        detail: unopened.length > 0
-          ? `有鎖頭的紀錄表全部打不開，無法比對（${unopened[0].reason}）${unlockedNote}`
-          : `這件案子的紀錄表都沒有鎖頭（已是未結案），沒有需要解鎖的對象`,
+        detail: `有鎖頭的紀錄表全部打不開，無法比對（${unopened[0].reason}）${unlockedNote}`,
+      };
+    }
+    // 有鎖頭的都比對過了、沒有一張相符，而且沒有漏掉任何一張沒掃到的——
+    // 那麼你要的那張只可能落在「本來就沒鎖」的那幾張裡面（案號是用這個 TEMSIS 查出來的，
+    // 案件不會錯）。這是**不需要處理**，不是卡住了（使用者 2026-08-06 指正）。
+    if (unopened.length === 0 && unlockedAlready.length > 0) {
+      const shownIndexes = unlockedAlready.map((index) => index + 1).join('、');
+      return {
+        temsis,
+        status: '無需處理',
+        detail: comparedCount === 0
+          ? '這件案子的紀錄表都沒有鎖頭（已是未結案），本來就不需要解鎖'
+          : `有鎖頭的 ${comparedCount} 張都比對過、沒有一張相符，`
+            + `其餘第 ${shownIndexes} 張本來就沒有鎖頭（已是未結案）`
+            + '——你要的那張就在其中，不需要解鎖',
       };
     }
     // 比對過的都不是，又剛好只剩一張沒掃到——那張幾乎就是要找的目標。
@@ -576,7 +602,10 @@ async function processTemsis(context, page, temsis, range, options) {
       reenterCase: () => openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range),
     });
     outcome.caseDate = caseInfo.caseDate;
-    log[outcome.status === '已定位' ? 'ok' : 'warn'](`${maskCode(temsis)}：${outcome.detail}`);
+    // 「無需處理」是正常結果，不該用警告的樣子出現在紀錄裡。
+    if (outcome.status === '已定位') log.ok(`${maskCode(temsis)}：${outcome.detail}`);
+    else if (outcome.status === '無需處理') log.info(`${maskCode(temsis)}：${outcome.detail}`);
+    else log.warn(`${maskCode(temsis)}：${outcome.detail}`);
 
     // 確定是哪一張之後，才讀得到「那一張」所屬的車輛（一件案子可能出動兩台車）。
     // 只要知道是哪一列就讀，「需人工處理」也一樣——那正是使用者要拿去人工核對的線索。
@@ -693,21 +722,35 @@ export function printUnlockSummary(outcomes, options = {}) {
     const line = `${pad(outcome.caseDate ?? '日期讀不到', 22)}${pad(vehicle, 20)}`
       + `${maskCode(outcome.temsis)}　${outcome.status}　${outcome.detail}`;
     if (outcome.status === '已解鎖' || outcome.status === '已定位') log.ok(line);
+    // 「無需處理」是正常結果（那張本來就沒鎖），用一般訊息呈現，不擺成警告。
+    else if (outcome.status === '無需處理') log.info(line);
     else log.warn(line);
   }
 
-  const unlocked = outcomes.filter((item) => item.status === '已解鎖').length;
-  const located = outcomes.filter((item) => item.status === '已定位').length;
-  const rest = outcomes.length - unlocked - located;
+  const countOf = (status) => outcomes.filter((item) => item.status === status).length;
+  const unlocked = countOf('已解鎖');
+  const located = countOf('已定位');
+  const noAction = countOf('無需處理');
+  // 「需要人接手的」＝扣掉成功的、也扣掉本來就沒鎖的。這個數字才代表「有問題」，
+  // 混進「本來就沒鎖」會讓一次順利的執行看起來像是出了狀況（使用者 2026-08-06 指正）。
+  const needsAttention = outcomes.length - unlocked - located - noAction;
+  const noActionNote = noAction > 0 ? `、本來就沒鎖 ${noAction} 筆（不需動作）` : '';
+
   if (options.dryRun) {
-    log.info(`共 ${outcomes.length} 筆：定位成功 ${located} 筆、其餘 ${rest} 筆需確認`);
+    log.info(
+      `共 ${outcomes.length} 筆：定位成功 ${located} 筆${noActionNote}`
+        + `、需要你接手 ${needsAttention} 筆`,
+    );
     log.warn('本次為試跑，沒有任何案件被實際解鎖。');
     return;
   }
-  log.info(`共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆、未處理 ${outcomes.length - unlocked} 筆`);
+  log.info(
+    `共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆${noActionNote}`
+      + `、需要你接手 ${needsAttention} 筆`,
+  );
   printUnlockedList(outcomes);
-  if (unlocked < outcomes.length) {
-    log.warn('未解鎖的案件請自行到系統處理（原因見上方每一列的說明）。');
+  if (needsAttention > 0) {
+    log.warn(`有 ${needsAttention} 筆程式無法判斷，請自行到系統處理（原因見上方每一列的說明）。`);
   }
 }
 
