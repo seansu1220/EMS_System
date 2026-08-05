@@ -30,7 +30,6 @@ import { UNLOCK } from './config.mjs';
 import { log, prompt, startLineBuffering, stopLineBuffering } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import {
-  findClickables,
   findPageMarker,
   clickMatch,
   findPairedRows,
@@ -140,19 +139,33 @@ async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
 }
 
 /**
- * 讀出畫面現在的「鎖住狀態」：鎖著的紀錄表幾張、解鎖按鈕幾個。
+ * 讀出「這個解鎖按鈕所在的那一列」現在是什麼狀態。
  *
- * 解鎖成功時那一列的「救護紀錄(鎖)」會變成「救護紀錄」（使用者 2026-08-05 描述），
- * 因此鎖頭張數是比按鈕數更貼近實際的指標。
+ * 解鎖成功時，**按下去的那一列**的「救護紀錄(鎖)」會變成「救護紀錄」
+ * （使用者 2026-08-05 描述的成功畫面）。刻意用「同一列」而不是「全頁鎖頭總數」：
+ * 總數變少只能說明「有某張被解開」，不能說明**解開的是不是你按的那張**。
+ * 雖然按 A 卻解開 B 幾乎不可能，但驗證本來就該驗你真正要的那件事。
  *
- * @returns {Promise<{lockedRecords: number, unlockButtons: number}>}
+ * 以**解鎖按鈕的序號**當錨點：這套系統解完之後按鈕不會消失（使用者確認），
+ * 因此前後兩次讀到的配對是一致的，可以直接比對同一列的文字有沒有變。
+ *
+ * @param {number} unlockIndex 第幾個解鎖按鈕（0 起算）
+ * @returns {Promise<{recordIndex: number, recordText: string, locked: boolean}|null>}
+ *   找不到對應的那一列時回傳 null（不猜）
  */
-async function readLockState(page) {
-  const records = await findClickables(content(page), UNLOCK.buttonTexts.openRecordInCase);
-  const unlockButtons = await findClickables(content(page), UNLOCK.buttonTexts.unlock);
+async function readTargetRecord(page, unlockIndex) {
+  const paired = await findPairedRows(
+    content(page),
+    UNLOCK.buttonTexts.openRecordInCase,
+    UNLOCK.buttonTexts.unlock,
+    { recordExact: false },
+  );
+  const pair = paired.pairs.find((item) => item.unlockIndex === unlockIndex);
+  if (!pair) return null;
   return {
-    lockedRecords: records.filter((item) => isLockedRecord(item.text)).length,
-    unlockButtons: unlockButtons.length,
+    recordIndex: pair.recordIndex,
+    recordText: pair.recordText,
+    locked: isLockedRecord(pair.recordText),
   };
 }
 
@@ -178,21 +191,25 @@ async function findSuccessMessage(page) {
  * ⚠ 這是整個工具唯一會**改動系統資料**的地方，而且無法復原。
  * 呼叫前必須已經確定目標（`locateUnlockTarget` 回報「已定位」）。
  *
- * 成功與否**看三個訊號，任一成立就算解開了**（使用者 2026-08-05 回報：
+ * 成功與否**看兩個訊號，任一成立就算解開了**（使用者 2026-08-05 回報：
  * 實際解鎖成功，程式卻只看按鈕數量而說「無法確認是否生效」）：
  *   1. 畫面新出現「已修改為未結案並解鎖」這類訊息 ← 最直接
- *   2. 鎖著的紀錄表變少（那一列的鎖頭不見了）
- *   3. 解鎖按鈕變少（舊版唯一的依據，保留當第三道）
+ *   2. **按下去的那一列**由「救護紀錄(鎖)」變成「救護紀錄」
  *
  * 訊息必須是**按下之後才出現的**才算數：先記一次基準，本來就在畫面上的不列入。
  *
+ * ⚠ 這裡**刻意不看「解鎖按鈕有沒有變少」**。使用者 2026-08-05 確認那個按鈕
+ * 解完之後永遠不會消失，所以它不但驗不到東西，還會反過來製造誤判：
+ * 萬一按下去之後畫面被導走（連線逾時、系統跳錯誤頁），按鈕數會從 N 掉到 0，
+ * 「變少了」於是成立，一件根本沒解到的案子會被報成已解鎖。
+ *
  * @param {number} unlockIndex 第幾個解鎖按鈕（0 起算）
- * @returns {Promise<{before: {lockedRecords: number, unlockButtons: number},
- *   after: {lockedRecords: number, unlockButtons: number},
+ * @returns {Promise<{before: {recordIndex: number, recordText: string, locked: boolean}|null,
+ *   after: {recordIndex: number, recordText: string, locked: boolean}|null,
  *   message: {marker: string, text: string}|null, signals: string[], confirmed: boolean}>}
  */
 export async function performUnlock(page, unlockIndex) {
-  const before = await readLockState(page);
+  const before = await readTargetRecord(page, unlockIndex);
   const messageBefore = await findSuccessMessage(page);
 
   // 系統很可能跳確認視窗。**Playwright 預設會自動按取消**，
@@ -214,18 +231,17 @@ export async function performUnlock(page, unlockIndex) {
     page.off('dialog', onDialog);
   }
 
-  // 回讀驗證：三個訊號各自檢查，並把成立的那幾個寫成人看得懂的說明。
+  // 回讀驗證：兩個訊號各自檢查，並把成立的那幾個寫成人看得懂的說明。
   const messageAfter = await findSuccessMessage(page);
-  const after = await readLockState(page);
+  const after = await readTargetRecord(page, unlockIndex);
   const signals = [];
   if (messageAfter && messageAfter.marker !== messageBefore?.marker) {
     signals.push(`畫面出現「${messageAfter.text || messageAfter.marker}」`);
   }
-  if (after.lockedRecords < before.lockedRecords) {
-    signals.push(`鎖著的紀錄表由 ${before.lockedRecords} 張減為 ${after.lockedRecords} 張`);
-  }
-  if (after.unlockButtons < before.unlockButtons) {
-    signals.push(`解鎖按鈕由 ${before.unlockButtons} 個減為 ${after.unlockButtons} 個`);
+  // 只認「本來鎖著、現在沒鎖」。讀不到那一列（畫面被導走）時 after 為 null，
+  // 這時不能當成解開了——不知道等於沒驗到。
+  if (before?.locked && after && !after.locked) {
+    signals.push(`那一列的「${before.recordText}」已變成「${after.recordText}」`);
   }
   return { before, after, message: messageAfter, signals, confirmed: signals.length > 0 };
 }
@@ -534,13 +550,15 @@ async function unlockLocatedTarget(page, outcome) {
     log.info(`　依據：${result.signals.join('；')}`);
     return;
   }
-  // 三個訊號一個都沒成立：可能真的沒生效，也可能系統換了訊息或版面。不臆測，如實回報，
+  // 兩個訊號都沒成立：可能真的沒生效，也可能系統換了訊息或版面。不臆測，如實回報，
   // 並把「各項訊號分別是什麼狀況」寫出來，使用者一看就知道要調哪個設定。
+  const rowState = result.after
+    ? `那一列仍寫著「${result.after.recordText}」`
+    : '按完之後找不到那一列（畫面可能被導走了）';
   outcome.status = '需人工處理';
-  outcome.detail = `${outcome.detail}；已按下按鈕，但三項成功訊號都沒出現`
-    + `（沒看到「${UNLOCK.successMarkers[0]}」的訊息、`
-    + `鎖著的紀錄表仍為 ${result.after.lockedRecords} 張、`
-    + `解鎖按鈕仍為 ${result.after.unlockButtons} 個），無法確認是否生效，請自行到系統確認`;
+  outcome.detail = `${outcome.detail}；已按下按鈕，但兩項成功訊號都沒出現`
+    + `（沒看到「${UNLOCK.successMarkers[0]}」的訊息、${rowState}），`
+    + '無法確認是否生效，請自行到系統確認';
   log.warn(`${maskCode(outcome.temsis)}：${outcome.detail}`);
 }
 

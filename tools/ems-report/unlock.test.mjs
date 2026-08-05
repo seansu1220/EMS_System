@@ -141,19 +141,24 @@ test('TEMSIS 相符但同一列找不到解鎖按鈕時，寧可人工處理也�
 });
 
 /**
- * 造一個假 page 給 performUnlock 用。
+ * 造一個假的「案件內部」畫面給 performUnlock 用。
  *
- * 三個成功訊號各自可以獨立控制，因為實際系統上它們**不一定同時發生**
- * （使用者 2026-08-05 遇到的正是「解鎖成功但按鈕數量沒變」）：
- *   @param {[number, number]} buttonCounts 解鎖按鈕：按之前 / 按之後
- *   @param {[number, number]} [lockedCounts] 鎖著的紀錄表張數：按之前 / 按之後
- *   @param {[boolean, boolean]} [messages] 成功訊息有沒有出現：按之前 / 按之後
+ * 這裡有兩張紀錄表，第 1 張（第 0 個解鎖按鈕）是要解的那一張。
+ * 兩個成功訊號各自可以獨立控制，因為實際系統上它們**不會同時發生**
+ * （使用者 2026-08-05 確認：解鎖按鈕永遠不會消失，能變的只有那一列的鎖頭與訊息）：
+ *
+ * @param {Object} [options]
+ * @param {[string, string]} [options.targetTexts] 目標那一列的連結文字：按之前 / 按之後
+ * @param {[boolean, boolean]} [options.messages] 成功訊息有沒有出現：按之前 / 按之後
+ * @param {boolean} [options.clickSucceeds] 按不按得到
+ * @param {boolean} [options.loseRow] 按完之後那一列消失（模擬畫面被導走）
  */
-function createUnlockPage(buttonCounts, options = {}) {
+function createUnlockPage(options = {}) {
   const {
-    clickSucceeds = true,
-    lockedCounts = buttonCounts,
+    targetTexts = ['救護紀錄(鎖)', '救護紀錄(鎖)'],
     messages = [false, false],
+    clickSucceeds = true,
+    loseRow = false,
   } = options;
   let clicked = false;
   const at = (pair) => (clicked ? pair[1] : pair[0]);
@@ -167,16 +172,13 @@ function createUnlockPage(buttonCounts, options = {}) {
       if (params.mode === 'pageMarkers') {
         return at(messages) ? { marker: params.markers[0], text: params.markers[0] } : null;
       }
-      // 解鎖按鈕與紀錄表連結是分開查的，依查詢的文字回不同的假資料。
-      const isRecords = params.texts.some((text) => text.includes('救護紀錄'));
-      const count = isRecords ? at(lockedCounts) : at(buttonCounts);
-      return Array.from({ length: count }, (_value, index) => ({
-        index,
-        tag: 'a',
-        text: isRecords ? '救護紀錄(鎖)' : '調整為未結案',
-        visible: true,
-        rowIndex: index,
-      }));
+      // mode === 'pairs'：紀錄表連結與解鎖按鈕以所在的列配對。
+      if (clicked && loseRow) return { pairs: [], recordCount: 0, unlockCount: 0, unlockTexts: [] };
+      const pairs = [
+        { recordIndex: 0, unlockIndex: 0, recordText: at(targetTexts) },
+        { recordIndex: 1, unlockIndex: 1, recordText: '救護紀錄(鎖)' },
+      ];
+      return { pairs, recordCount: 2, unlockCount: 2, unlockTexts: [] };
     },
   };
   return {
@@ -188,49 +190,51 @@ function createUnlockPage(buttonCounts, options = {}) {
   };
 }
 
-test('解鎖後按鈕變少算成功', async () => {
-  const result = await performUnlock(createUnlockPage([2, 1]), 0);
-  assert.equal(result.confirmed, true);
-  assert.match(result.signals.join(), /解鎖按鈕由 2 個減為 1 個/);
-});
-
-test('按鈕數量沒變，但畫面出現「已修改為未結案並解鎖」時就算成功', async () => {
-  // 使用者 2026-08-05 實際遇到的情況：真的解開了，舊版卻只看按鈕而說無法確認。
+test('按下去的那一列由「救護紀錄(鎖)」變成「救護紀錄」就算解開了', async () => {
   const result = await performUnlock(
-    createUnlockPage([2, 2], { messages: [false, true] }),
+    createUnlockPage({ targetTexts: ['救護紀錄(鎖)', '救護紀錄'] }),
     0,
   );
+  assert.equal(result.confirmed, true);
+  assert.match(result.signals.join(), /「救護紀錄\(鎖\)」已變成「救護紀錄」/);
+});
+
+test('畫面出現「已修改為未結案並解鎖」也算解開了', async () => {
+  // 使用者 2026-08-05 實際遇到的情況：真的解開了，舊版卻只看按鈕而說無法確認。
+  const result = await performUnlock(createUnlockPage({ messages: [false, true] }), 0);
   assert.equal(result.confirmed, true);
   assert.match(result.signals.join(), /已修改為未結案並解鎖/);
 });
 
-test('按鈕數量沒變，但那一列的鎖頭不見了，也算成功', async () => {
-  const result = await performUnlock(
-    createUnlockPage([2, 2], { lockedCounts: [2, 1] }),
-    0,
-  );
-  assert.equal(result.confirmed, true);
-  assert.match(result.signals.join(), /鎖著的紀錄表由 2 張減為 1 張/);
-});
-
-test('本來就在畫面上的成功訊息不算數，避免把沒生效當成功', async () => {
-  const result = await performUnlock(
-    createUnlockPage([2, 2], { messages: [true, true] }),
-    0,
-  );
+test('鎖頭不見的必須是**你按的那一列**，別張解開不算數', async () => {
+  // 第 1 個解鎖按鈕（序號 0）沒動，卻去解了第 2 張——這種情況要照實回報沒驗到。
+  const page = createUnlockPage();
+  const result = await performUnlock(page, 0);
   assert.equal(result.confirmed, false);
 });
 
-test('三個訊號都沒動時，不可以當成解鎖成功', async () => {
+test('本來就在畫面上的成功訊息不算數，避免把沒生效當成功', async () => {
+  const result = await performUnlock(createUnlockPage({ messages: [true, true] }), 0);
+  assert.equal(result.confirmed, false);
+});
+
+test('按完之後找不到那一列時，不可以當成解開了', async () => {
+  // 畫面被導走（逾時、跳錯誤頁）時什麼都讀不到——不知道不等於成功。
+  const result = await performUnlock(createUnlockPage({ loseRow: true }), 0);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.after, null);
+});
+
+test('兩個訊號都沒動時，不可以當成解鎖成功', async () => {
   // 這種情況可能是根本沒生效（例如確認視窗被取消），必須讓使用者知道要自己確認。
-  const result = await performUnlock(createUnlockPage([2, 2]), 0);
+  const result = await performUnlock(createUnlockPage(), 0);
   assert.equal(result.confirmed, false);
   assert.deepEqual(result.signals, []);
 });
 
 test('按不到解鎖按鈕時要拋錯，不可以安靜地當作做完了', async () => {
   await assert.rejects(
-    () => performUnlock(createUnlockPage([2, 2], { clickSucceeds: false }), 1),
+    () => performUnlock(createUnlockPage({ clickSucceeds: false }), 1),
     (error) => {
       assert.match(error.message, /按不到第 2 個/);
       return true;
