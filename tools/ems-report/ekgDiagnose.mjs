@@ -27,6 +27,7 @@ import {
 } from './caseFlow.mjs';
 import { applyBaseCriteria, locateEkgFields, queryAndExport } from './ekgScrape.mjs';
 import { queryByTemsis } from './ekgVerify.mjs';
+import { writeMissingProcedureList } from './ekgLists.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import { clickMatch, findClickables, findMarkedRows, listTableHeaders } from './pageFinder.mjs';
@@ -34,7 +35,7 @@ import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import { extractLabeledValue, maskCode } from './sheetFields.mjs';
 import { readTable } from './workbook.mjs';
-import { resolveSquadColumn, resolveColumnByNames } from './aggregate.mjs';
+import { resolveSquadColumn, resolveColumnByNames, rowsNotIn } from './aggregate.mjs';
 
 /**
  * 要跑的查詢組合。**每一種只跑一次**，後面四段分析共用同一批結果。
@@ -167,12 +168,13 @@ async function reportTwelveLeadOnly(tables, monthRange) {
   log.step('四、有 12 導程、卻沒勾 EKG檢查的案件是什麼情形');
   const ekgTable = tables.get('A');
   const twelveTable = tables.get('B');
-  const checked = new Set(
-    ekgTable.rows.map((row) => String(row[temsisColumnOf(ekgTable)] ?? '').trim()).filter(Boolean),
-  );
   const temsisColumn = temsisColumnOf(twelveTable);
-  const onlyTwelveLead = twelveTable.rows.filter(
-    (row) => !checked.has(String(row[temsisColumn] ?? '').trim()),
+  // 與正式流程用同一支差集函式，兩邊算出來的件數才保證一致。
+  const onlyTwelveLead = rowsNotIn(
+    twelveTable.rows,
+    temsisColumn,
+    ekgTable.rows,
+    temsisColumnOf(ekgTable),
   );
   log.ok(`有 12 導程但沒勾 EKG檢查：${onlyTwelveLead.length} 件`);
   if (onlyTwelveLead.length === 0) return;
@@ -182,7 +184,7 @@ async function reportTwelveLeadOnly(tables, monthRange) {
     twelveTable.rows,
     SQUAD_COLUMN_CANDIDATES,
   );
-  /** 交叉分析的面向。分隊只用來出清單，不必再列一次分布。 */
+  /** 交叉分析的面向，只用於畫面上的說明。 */
   const facets = [];
   for (const [name, candidates, hints] of [
     ['救護狀態', ['救護狀態', '狀態'], ['狀態', '結案', '填寫']],
@@ -213,46 +215,12 @@ async function reportTwelveLeadOnly(tables, monthRange) {
     log.info(`　依${name}：${shown}`);
   }
 
-  await writeTwelveLeadOnlyList(onlyTwelveLead, {
+  // 清單與正式流程用同一支實作，格式才不會兩邊各長各的。
+  await writeMissingProcedureList(onlyTwelveLead, {
     headers: twelveTable.headers,
     squadColumn,
     temsisColumn,
-    facets,
   }, monthRange);
-}
-
-/**
- * 把「有 12 導程沒勾 EKG檢查」的清單寫成 Excel，供回系統核對。
- * ⚠ TEMSIS 只寫末 4 碼（與待人工確認清單同一個標準）。
- */
-async function writeTwelveLeadOnlyList(rows, columns, monthRange) {
-  const ExcelJS = (await import('exceljs')).default;
-  const caseDateColumn = resolveColumnByNames(columns.headers, UNLOCK.listColumns.caseDate);
-  const header = ['分隊', '案件日期', 'TEMSIS末4碼', ...columns.facets.map((facet) => facet.name)];
-
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('有12導程沒勾EKG');
-  sheet.addRow([`${monthRange.label}　有 12 導程心電圖、但急救處置沒勾「EKG檢查」的案件`]);
-  sheet.mergeCells(1, 1, 1, header.length);
-  sheet.getRow(1).font = { bold: true, size: 14 };
-  sheet.addRow(header).font = { bold: true };
-
-  for (const row of rows) {
-    sheet.addRow([
-      String(row[columns.squadColumn] ?? '').trim(),
-      caseDateColumn ? String(row[caseDateColumn.column] ?? '').trim() : '(讀不到)',
-      maskCode(String(row[columns.temsisColumn] ?? '').trim()),
-      ...columns.facets.map((facet) => String(row[facet.column] ?? '').trim() || '(空白)'),
-    ]);
-  }
-  header.forEach((name, index) => {
-    sheet.getColumn(index + 1).width = Math.max(14, name.length * 2 + 4);
-  });
-
-  await fs.mkdir(PATHS.reportDir, { recursive: true });
-  const filePath = path.join(PATHS.reportDir, `心電圖-有12導程沒勾EKG-${monthRange.label}.xlsx`);
-  await workbook.xlsx.writeFile(filePath);
-  log.ok(`清單已產出：${path.relative(process.cwd(), filePath)}（TEMSIS 只寫末 4 碼）`);
 }
 
 /**

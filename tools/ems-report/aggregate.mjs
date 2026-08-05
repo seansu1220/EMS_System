@@ -164,6 +164,32 @@ export function countUnionBySquad(sources) {
 }
 
 /**
+ * 取出「在這一份、但不在另一份」的資料列（以某個欄位當比對鍵）。
+ *
+ * 用途：找出「有上傳 12 導程心電圖、但急救處置沒勾 EKG檢查」的案件——
+ * 拿 12 導程那份減掉 EKG檢查那份，剩下的就是漏勾的。
+ *
+ * 鍵值前後空白會去掉；**空鍵的列一律排除**（匯出檔常見的表尾合計、空行），
+ * 否則一堆空鍵會被當成「不在另一份裡」而全部混進結果。
+ *
+ * @param {Record<string, unknown>[]} rows 要篩的資料列
+ * @param {string} keyColumn `rows` 的比對鍵欄名
+ * @param {Record<string, unknown>[]} otherRows 拿來比對的另一份
+ * @param {string} otherKeyColumn `otherRows` 的比對鍵欄名（兩份的欄名未必相同）
+ * @returns {Record<string, unknown>[]} 原樣的資料列，順序不變
+ */
+export function rowsNotIn(rows, keyColumn, otherRows, otherKeyColumn) {
+  const keyOf = (row, column) => String(row?.[column] ?? '').trim();
+  const existing = new Set(
+    otherRows.map((row) => keyOf(row, otherKeyColumn)).filter(Boolean),
+  );
+  return rows.filter((row) => {
+    const key = keyOf(row, keyColumn);
+    return key !== '' && !existing.has(key);
+  });
+}
+
+/**
  * 合併兩份計數，產生各分隊的比較結果。
  * 依總案件數由多到少排序，數量相同則依分隊名稱排序，確保每次輸出順序一致。
  *

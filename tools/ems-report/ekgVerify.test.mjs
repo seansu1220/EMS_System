@@ -15,7 +15,7 @@ import {
   resolveEkgColumns,
   VERDICT,
 } from './ekgVerify.mjs';
-import { resolveColumnByNames, countUnionBySquad } from './aggregate.mjs';
+import { resolveColumnByNames, countUnionBySquad, rowsNotIn } from './aggregate.mjs';
 import { EKG, QUERY_CRITERIA } from './config.mjs';
 
 const CONTEXT = { defaultYear: 2026, defaultDate: '2026-07-02' };
@@ -239,4 +239,28 @@ test('resolveColumnByNames 完全相符優先，其次取最短的包含者', ()
   // 只有「包含」時取最短的，避免選到複合欄（第 1 章曾因此整份報表算錯）。
   assert.equal(resolveColumnByNames(['TEMSIS ID 修改人', 'TEMSIS ID'], ['TEMSISID']).column, 'TEMSIS ID');
   assert.equal(resolveColumnByNames(headers, ['完全不存在的欄']), null);
+});
+
+test('取差集：找出「有 12 導程、但沒勾 EKG檢查」的案件', () => {
+  // 使用者 2026-08-05 要求把這份清單併進正式流程，用來提醒同仁記得點處置。
+  const twelveLead = [
+    { TEMSISID: 'A1', 出勤單位: '桃園分隊' },
+    { TEMSISID: 'B1', 出勤單位: '蘆竹分隊' },
+    { TEMSISID: 'B2', 出勤單位: '蘆竹分隊' },
+  ];
+  const ekgChecked = [{ TEMSISID: 'A1', 出勤單位: '桃園分隊' }, { TEMSISID: 'C1', 出勤單位: '中壢分隊' }];
+  const missing = rowsNotIn(twelveLead, 'TEMSISID', ekgChecked, 'TEMSISID');
+  assert.deepEqual(missing.map((row) => row.TEMSISID), ['B1', 'B2']);
+});
+
+test('取差集時，鍵值空白的列一律排除', () => {
+  // 匯出檔常見表尾合計與空行；不排除的話一堆空鍵都會被當成「不在另一份裡」而混進來。
+  const rows = [{ T: '' }, { T: '  ' }, { T: 'B1' }];
+  assert.deepEqual(rowsNotIn(rows, 'T', [], 'T'), [{ T: 'B1' }]);
+});
+
+test('取差集允許兩份檔案的鍵欄名不同，且不改動原始順序', () => {
+  const rows = [{ 編號: 'B2' }, { 編號: 'B1' }, { 編號: 'A1' }];
+  const other = [{ TEMSIS: 'A1' }];
+  assert.deepEqual(rowsNotIn(rows, '編號', other, 'TEMSIS').map((r) => r.編號), ['B2', 'B1']);
 });

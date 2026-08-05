@@ -34,6 +34,7 @@ import {
   resolveColumnByNames,
   countBySquad,
   countUnionBySquad,
+  rowsNotIn,
   buildComparison,
   groupByBrigade,
   sortByRatioDesc,
@@ -47,10 +48,10 @@ import {
   buildCaseList,
   verifyEkgCases,
   countVerifiedBySquad,
-  writePendingList,
   progressFilePath,
   VERDICT,
 } from './ekgVerify.mjs';
+import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   PATHS,
@@ -297,6 +298,20 @@ async function runEkgFlow(session, monthRange, options) {
     );
   }
 
+  // 「有上傳 12 導程、卻沒勾 EKG檢查」的清單（使用者 2026-08-05 要求併入正式流程，
+  // 用途是提醒同仁記得點處置）。兩份匯出檔都已經在手上，取差集不必再查一次系統。
+  const missingProcedure = rowsNotIn(
+    numerator.table.rows,
+    denominatorColumns.twelveLead.temsis,
+    ekgChecked.table.rows,
+    denominatorColumns.ekg.temsis,
+  );
+  const missingProcedurePath = await writeMissingProcedureList(missingProcedure, {
+    headers: numerator.table.headers,
+    squadColumn: numerator.column,
+    temsisColumn: denominatorColumns.twelveLead.temsis,
+  }, monthRange);
+
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
   /** 分子不完整的原因；非空字串代表這份數字不能當正式報表。 */
@@ -315,7 +330,7 @@ async function runEkgFlow(session, monthRange, options) {
     const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
     verifiedCounts = countVerifiedBySquad(result.outcomes);
     printVerifySummary(result.outcomes, cases.length);
-    pendingPath = await writePendingList(result.outcomes, monthRange);
+    pendingPath = await writePendingList(result.outcomes, monthRange, VERDICT.unknown);
     if (result.aborted) {
       incomplete = '查核中途被中止（連續多件判定不出來）';
       log.warn('查核中途已中止，這份報表的分子並不完整，請修正問題後重跑（會接續進度）。');
@@ -352,7 +367,12 @@ async function runEkgFlow(session, monthRange, options) {
   } else {
     await writeReport(groupedRows, sortedStats, monthRange, profile);
   }
-  if (pendingPath) log.info(`待人工確認清單：${path.relative(process.cwd(), pendingPath)}`);
+  log.step('這次產出的檔案');
+  if (!incomplete) log.info(`　${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
+  if (missingProcedurePath) {
+    log.info(`　${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
+  }
+  if (pendingPath) log.info(`　${path.basename(pendingPath)}（判定不出來，要你人工看）`);
 
   if (options.keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.denominator)}（含個資，請自行妥善處理）`);
