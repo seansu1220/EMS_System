@@ -50,7 +50,7 @@ function createSpies(overrides = {}) {
       },
       ensureSignedIn: async () => {
         calls.ensure += 1;
-        return true;
+        return overrides.loginResult?.(calls.ensure) ?? '已登入';
       },
     },
   };
@@ -125,8 +125,39 @@ test('心跳時間到了就戳一次系統維持登入', async () => {
 test('心跳發現掉線時要重新登入', async () => {
   const spies = createSpies({ alive: false });
   await withWatchTiming({ pollMs: 0, heartbeatMs: 0 }, () =>
-    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(1) }, spies.deps));
-  assert.equal(spies.calls.ensure, 1, '掉線就要請使用者重新登入');
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(2) }, spies.deps));
+  assert.ok(spies.calls.ensure >= 1, '掉線就要請使用者重新登入');
+});
+
+test('掉線後沒人來登入，監看不可以自己結束——要一直等', async () => {
+  // 2026-08-06 實際踩到：凌晨 06:53 掉線時使用者在睡覺，
+  // 舊版等 10 分鐘就讓整個程式退出，早上看到的是一個已經死掉的視窗。
+  const spies = createSpies({ alive: false, loginResult: () => '等不到' });
+  await withWatchTiming(
+    { pollMs: 0, heartbeatMs: 0, reloginWaitMs: 0, reloginRemindEveryMs: 60 * 60 * 1000 },
+    () => runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(5) }, spies.deps),
+  );
+  // 每一輪都要再試一次登入，而且不可以跑去查雲端（沒登入什麼都不能做）。
+  assert.ok(spies.calls.ensure >= 3, `應該反覆嘗試重新登入，實際 ${spies.calls.ensure} 次`);
+});
+
+test('等到使用者回來登入之後，要繼續正常監看', async () => {
+  let attempts = 0;
+  const spies = createSpies({
+    alive: false,
+    // 第 1 次等不到、第 2 次成功。
+    loginResult: () => (++attempts === 1 ? '等不到' : '重新登入'),
+  });
+  await withWatchTiming(
+    { pollMs: 0, heartbeatMs: 60 * 60 * 1000, reloginWaitMs: 0, reloginRemindEveryMs: 0 },
+    () => runUnlockWatch(
+      { page: { waitForTimeout: async () => {} }, context: {}, range: {} },
+      {},
+      { dryRun: true, shouldStop: stopAfter(4) },
+      { ...spies.deps, heartbeat: async () => false },
+    ),
+  );
+  assert.ok(spies.calls.fetch > 0, '重新登入之後要恢復查詢雲端工單');
 });
 
 test('收到結束指示就停得下來，不會再去查雲端', async () => {

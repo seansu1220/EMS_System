@@ -138,9 +138,12 @@ async function fillCredentialsIfPresent(page, credentials) {
   return false;
 }
 
-/** 輪詢等待登入完成（登入頁消失即視為成功）。 */
-async function waitForLogin(page, credentials) {
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+/**
+ * 輪詢等待登入完成（登入頁消失即視為成功）。
+ * @param {number} [timeoutMs] 等多久放棄；常駐監看會給比較短的值並自己重試。
+ */
+async function waitForLogin(page, credentials, timeoutMs = LOGIN_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!(await isLoginPageVisible(page))) return;
     await page.waitForTimeout(1000);
@@ -148,7 +151,7 @@ async function waitForLogin(page, credentials) {
     const refilled = await fillCredentialsIfPresent(page, credentials).catch(() => false);
     if (refilled) log.info('偵測到登入表單重新出現，已再次代填帳號密碼');
   }
-  throw new Error(`超過 ${LOGIN_TIMEOUT_MS / 60000} 分鐘仍未完成登入`);
+  throw new Error(`超過 ${Math.round(timeoutMs / 60000)} 分鐘仍未完成登入`);
 }
 
 /**
@@ -217,13 +220,13 @@ export async function tryReuseSession(page, timeoutMs = SESSION_STATE.reuseReady
 }
 
 /** 引導使用者本人完成登入（帳密可代填，驗證碼一律本人輸入）。 */
-async function performLogin(page, credentials) {
+async function performLogin(page, credentials, timeoutMs) {
   await fillCredentialsIfPresent(page, credentials);
   log.info(`帳號：${maskAccount(credentials.username)}${credentials.username ? '（已自 .env 代填）' : '（請自行輸入）'}`);
   log.warn('請在剛開啟的瀏覽器視窗完成登入：輸入驗證碼後按下登入按鈕。');
   log.info('（驗證碼不做自動辨識，必須由你本人輸入）');
 
-  await waitForLogin(page, credentials);
+  await waitForLogin(page, credentials, timeoutMs);
   log.ok('登入完成，等待系統主畫面載入');
   await waitForAppReady(page);
 }
@@ -295,17 +298,26 @@ export async function startSession(options = {}) {
  * 不會因為多開一條路而被繞過。
  *
  * @param {EmsSession} session
- * @returns {Promise<boolean>} 原本就還登入著回傳 true；重新登入過回傳 false
+ * @param {{timeoutMs?: number}} [options] 等待使用者登入的上限
+ * @returns {Promise<'已登入'|'重新登入'|'等不到'>}
+ *   `等不到`＝時間內沒人來登入。**這不是致命錯誤**：常駐監看會保持執行、
+ *   下一輪再等一次（2026-08-06 實際踩到——凌晨掉線時使用者在睡覺，
+ *   舊版等 10 分鐘就讓整個監看結束，早上看到的是一個已經死掉的視窗）。
  */
-export async function ensureSignedIn(session) {
-  if (await isSignedIn(session.page)) return true;
+export async function ensureSignedIn(session, options = {}) {
+  if (await isSignedIn(session.page)) return '已登入';
 
   log.warn('登入已失效（伺服器端逾時），需要重新登入一次。');
-  await session.page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
-  await performLogin(session.page, loadCredentials());
+  await session.page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  try {
+    await performLogin(session.page, loadCredentials(), options.timeoutMs);
+  } catch (error) {
+    log.warn(`這段時間內沒有完成登入：${error instanceof Error ? error.message : error}`);
+    return '等不到';
+  }
   await saveSessionState(session.context).catch(() => {});
-  log.ok('已重新登入，繼續監看');
-  return false;
+  log.ok('已重新登入');
+  return '重新登入';
 }
 
 /**

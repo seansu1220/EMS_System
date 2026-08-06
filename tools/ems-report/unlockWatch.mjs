@@ -27,6 +27,16 @@ function describeDuration(ms) {
   return `${Math.floor(minutes / 60)} 小時 ${minutes % 60} 分`;
 }
 
+/**
+ * 在終端機響一聲。
+ *
+ * 掉線是「需要人回來處理」的唯一時刻，而人多半不在螢幕前。
+ * 響一下至少讓還在辦公室的人聽得到（半夜當然沒用，但那時本來就沒人）。
+ */
+function beep(times = 3) {
+  for (let count = 0; count < times; count += 1) process.stdout.write(String.fromCharCode(7));
+}
+
 /** HH:mm，讓畫面上每一行看得出是什麼時候發生的。 */
 function clock(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0');
@@ -102,8 +112,10 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   const runBatch = deps.processBatch ?? processBatch;
   const beat = deps.heartbeat ?? heartbeat;
   const ensureLogin = deps.ensureSignedIn ?? ensureSignedIn;
-  const { pollMs, heartbeatMs, statusEveryMs } = UNLOCK.watch;
+  const { pollMs, heartbeatMs, statusEveryMs, reloginWaitMs, reloginRemindEveryMs } = UNLOCK.watch;
   const startedAt = Date.now();
+  /** 最近一次登入成功的時間；掉線期間為 null。這才是「連續登入多久」的基準。 */
+  let signedInSince = Date.now();
   let lastHeartbeat = Date.now();
   let lastStatus = Date.now();
   let handled = 0;
@@ -118,7 +130,29 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   }
   log.info('要結束請直接關掉這個視窗，或按 Ctrl+C。');
 
+  /** 目前是不是處在「掉線、等使用者回來登入」的狀態。 */
+  let waitingForLogin = false;
+  let lastReminder = 0;
+
   while (!options.shouldStop()) {
+    // 掉線時**不做任何解鎖動作**，只反覆等使用者回來登入。
+    // 等不到不是失敗，跑下一輪再等——監看永遠不會因為沒人在而自己結束。
+    if (waitingForLogin) {
+      const result = await ensureLogin(session, { timeoutMs: reloginWaitMs });
+      if (result === '等不到') {
+        if (Date.now() - lastReminder >= reloginRemindEveryMs) {
+          lastReminder = Date.now();
+          beep();
+          log.warn(`[${clock()}] 還在等你回來登入。這段期間送出的申請都會留在「待處理」，登入後會一起處理。`);
+        }
+        continue;
+      }
+      waitingForLogin = false;
+      signedInSince = Date.now();
+      lastHeartbeat = Date.now();
+      log.ok(`[${clock()}] 已重新登入，繼續監看`);
+    }
+
     const requests = await fetchPending(queue).catch((error) => {
       // 雲端讀不到多半是網路暫時斷了，不該讓整個監看死掉。
       log.warn(`[${clock()}] 查不到雲端工單（下一輪再試）：${error.message}`);
@@ -137,7 +171,12 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
         log.warn('　試跑模式：不處理這幾筆，它們會留在「待處理」。');
       } else {
         // 動手之前先確認還登入著，免得整批被寫成失敗。
-        await ensureLogin(session);
+        if (await ensureLogin(session, { timeoutMs: reloginWaitMs }) === '等不到') {
+          waitingForLogin = true;
+          lastReminder = Date.now();
+          signedInSince = null;
+          continue;
+        }
         const result = await runBatch(session, queue, requests);
         handled += result.done;
         lastHeartbeat = Date.now(); // 剛剛才操作過系統，心跳時間重算
@@ -151,15 +190,22 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
       const alive = await beat(session);
       lastHeartbeat = Date.now();
       if (!alive) {
-        log.warn(`[${clock()}] 登入已被伺服器結束（連續登入了 ${describeDuration(Date.now() - startedAt)}）。`);
-        await ensureLogin(session);
+        beep();
+        log.warn(
+          `[${clock()}] 登入已被伺服器結束（連續登入了 ${describeDuration(Date.now() - signedInSince)}）。`
+            + '請到瀏覽器重新輸入驗證碼；在那之前工單會排隊等著，監看不會結束。',
+        );
+        waitingForLogin = true;
+        lastReminder = Date.now();
+        signedInSince = null;
+        continue;
       }
     }
 
     if (Date.now() - lastStatus >= statusEveryMs) {
       lastStatus = Date.now();
       log.info(
-        `[${clock()}] 監看中｜已連續登入 ${describeDuration(Date.now() - startedAt)}`
+        `[${clock()}] 監看中｜已連續登入 ${describeDuration(Date.now() - signedInSince)}`
           + `｜這次已處理 ${handled} 筆`,
       );
     }
@@ -168,5 +214,5 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   }
 
   log.step('收到結束指示，停止監看');
-  log.info(`這次總共處理了 ${handled} 筆，連續登入 ${describeDuration(Date.now() - startedAt)}。`);
+  log.info(`這次總共處理了 ${handled} 筆，監看了 ${describeDuration(Date.now() - startedAt)}。`);
 }
