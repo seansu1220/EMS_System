@@ -255,6 +255,24 @@ export async function markRunning(session, requestId) {
 }
 
 /**
+ * 把工單退回「待處理」。
+ *
+ * 用途只有一個：**處理到一半發現登入掉了**。這時案件根本沒被處理，
+ * 卻會得到一個「查無案件／失敗」的結果——把它當成失敗寫回去，
+ * 申請人看到的是「需人工處理」，但實際上什麼事都沒發生，那是在騙人。
+ * 退回待處理，下一輪重新登入後會自動再跑一次。
+ */
+export async function resetToPending(session, requestId) {
+  try {
+    await updateDoc(doc(session.db, COLLECTION, requestId), { status: 'pending', result: null });
+    return true;
+  } catch (error) {
+    log.warn(`把工單退回「待處理」失敗：${error.message}`);
+    return false;
+  }
+}
+
+/**
  * 把解鎖結果回寫工單。
  *
  * @param {QueueSession} session

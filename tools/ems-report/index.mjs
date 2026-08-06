@@ -20,6 +20,8 @@
  *   npm run tool:ems -- unlock --temsis=A,B  直接指定 TEMSIS，不用互動輸入
  *   npm run tool:ems -- unlock-online        試跑：看網頁上有哪些待處理的解鎖工單
  *   npm run tool:ems -- unlock-online --execute  真的解鎖，並把結果回寫網頁
+ *   npm run tool:ems -- unlock-watch         常駐監看：只維持登入不解鎖（可用來測登入能撐多久）
+ *   npm run tool:ems -- unlock-watch --execute   常駐監看：有人送出申請就立刻處理
  *
  * 任何指令都可加 --fresh-login：捨棄上次保存的登入狀態，強制重新登入。
  */
@@ -29,6 +31,7 @@ import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange, getRecentRange } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
+import { runUnlockWatch } from './unlockWatch.mjs';
 import {
   closeQueue,
   connectQueue,
@@ -80,11 +83,15 @@ import { log, closePrompt, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
-const COMMANDS = ['run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet', 'unlock', 'unlock-online'];
+const COMMANDS = [
+  'run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet',
+  'unlock', 'unlock-online', 'unlock-watch',
+];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'|'unlock-online'} command
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'|'unlock-online'
+ *   |'unlock-watch'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -574,6 +581,47 @@ async function processUnlockQueue(queue, options) {
   }, { freshLogin: options.freshLogin });
 }
 
+/**
+ * 常駐監看線上工單：登入一次之後就一直開著，有人送出申請就立刻處理。
+ *
+ * 與 `unlock-online` 的差別只有「不結束」。能一直不用重打驗證碼的關鍵是
+ * **定期戳一下系統維持登入**（見 `unlockWatch.mjs`）；真的被踢掉時會停下來
+ * 請本人再輸入一次，絕不自動辨識。
+ *
+ * ⚠ **預設是試跑**（只監看與維持登入、不解鎖），要真的處理必須加 `--execute`。
+ *   試跑本身就是個有用的工具：放著跑就能看出登入到底能撐多久。
+ */
+async function runUnlockWatchCommand(options) {
+  const queue = await connectQueue();
+  /** 關掉視窗或按 Ctrl+C 時，讓迴圈跑完這一輪就收工。 */
+  let stopping = false;
+  const requestStop = () => {
+    if (stopping) return;
+    stopping = true;
+    log.warn('收到結束指示，正在收尾（不會中斷正在處理的那一筆）…');
+  };
+  process.on('SIGINT', requestStop);
+  process.on('SIGTERM', requestStop);
+
+  let session = null;
+  try {
+    session = await startSession({ freshLogin: options.freshLogin });
+    // 解鎖流程要用的查詢期間；監看是長時間執行，掛在 session 上一起帶著走。
+    session.range = getRecentRange(UNLOCK.lookbackMonths);
+    await runUnlockWatch(session, queue, {
+      dryRun: options.dryRun,
+      shouldStop: () => stopping,
+    });
+  } finally {
+    process.off('SIGINT', requestStop);
+    process.off('SIGTERM', requestStop);
+    await session?.close();
+    await closeQueue(queue);
+    closePrompt();
+    log.info('瀏覽器已關閉');
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
@@ -584,6 +632,10 @@ async function main() {
   }
   if (options.command === 'unlock-online') {
     await runUnlockOnlineCommand(options);
+    return;
+  }
+  if (options.command === 'unlock-watch') {
+    await runUnlockWatchCommand(options);
     return;
   }
 

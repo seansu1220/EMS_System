@@ -85,6 +85,18 @@ export async function clearSessionState(filePath = SESSION_STATE.file) {
   await fs.rm(filePath, { force: true });
 }
 
+/**
+ * 目前還是登入狀態嗎（以「畫面上有沒有登入表單」判定）。
+ *
+ * ⚠ 這只看**畫面**，不代表伺服器那邊的 session 還活著。
+ * 要真的確認，得先做一次會碰到伺服器的動作（例如切一次頁），
+ * 逾時的話伺服器會把畫面換回登入頁，這時這個函式才會回 false。
+ * 常駐監看就是這樣用的（見 `unlockWatch.mjs` 的心跳）。
+ */
+export async function isSignedIn(page) {
+  return !(await isLoginPageVisible(page).catch(() => true));
+}
+
 /** 登入頁是否仍顯示（以驗證碼欄位是否存在判定）。 */
 async function isLoginPageVisible(page) {
   for (const frame of page.frames()) {
@@ -271,6 +283,29 @@ export async function startSession(options = {}) {
     await browser.close().catch(() => {});
     throw error;
   }
+}
+
+/**
+ * 確認還登入著；掉線的話**在同一個瀏覽器視窗**請使用者重新登入。
+ *
+ * 給常駐監看用：session 被伺服器踢掉時不必整個重開，把畫面導回入口、
+ * 代填帳密、等使用者本人輸入驗證碼即可，其餘流程完全不受影響。
+ *
+ * 刻意沿用 `performLogin`：驗證碼一律由本人輸入這件事只有一個實作，
+ * 不會因為多開一條路而被繞過。
+ *
+ * @param {EmsSession} session
+ * @returns {Promise<boolean>} 原本就還登入著回傳 true；重新登入過回傳 false
+ */
+export async function ensureSignedIn(session) {
+  if (await isSignedIn(session.page)) return true;
+
+  log.warn('登入已失效（伺服器端逾時），需要重新登入一次。');
+  await session.page.goto(SITE.entryUrl, { waitUntil: 'domcontentloaded' });
+  await performLogin(session.page, loadCredentials());
+  await saveSessionState(session.context).catch(() => {});
+  log.ok('已重新登入，繼續監看');
+  return false;
 }
 
 /**
