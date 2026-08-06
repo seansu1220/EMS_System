@@ -16,7 +16,7 @@
  *   - 終端機與 last-run.log 仍一律只印 TEMSIS 末 4 碼
  */
 import path from 'node:path';
-import { initializeApp } from 'firebase/app';
+import { deleteApp, initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import {
   collection,
@@ -24,6 +24,7 @@ import {
   getDocs,
   getFirestore,
   query,
+  terminate,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -116,6 +117,7 @@ const SETUP_STEPS = [
  * @typedef {Object} QueueSession
  * @property {import('firebase/firestore').Firestore} db
  * @property {string} displayName 登入者顯示名稱（會寫進工單的「由誰執行」）
+ * @property {import('firebase/app').FirebaseApp} app 用完要關掉（見 `closeQueue`）
  */
 
 /**
@@ -132,9 +134,29 @@ export async function connectQueue() {
     const credential = await signInWithEmailAndPassword(auth, email, password);
     const displayName = credential.user.displayName || credential.user.email || '（未命名）';
     log.ok(`已連上線上工單（登入者：${displayName}）`);
-    return { db: getFirestore(app), displayName };
+    return { db: getFirestore(app), displayName, app };
   } catch (error) {
+    // 登入失敗也要把 app 收掉，否則它會撐著 Node 不讓程式結束。
+    await deleteApp(app).catch(() => {});
     throw new Error(`連線上工單失敗（unlockQueue.connectQueue）：${describeAuthError(error)}`);
+  }
+}
+
+/**
+ * 關掉與雲端的連線。
+ *
+ * ⚠ **一定要呼叫**：Firebase 的連線會撐著 Node 的事件迴圈，不關的話事情都做完了、
+ * 訊息也印完了，黑色視窗卻一直不會結束（2026-08-06 實測踩到，看起來像當掉）。
+ *
+ * 關不掉只警告不拋錯：事情已經做完了，不該因為收尾失敗就讓整個指令算失敗。
+ */
+export async function closeQueue(session) {
+  if (!session) return;
+  try {
+    await terminate(session.db);
+    await deleteApp(session.app);
+  } catch (error) {
+    log.warn(`關閉雲端連線時出了狀況（不影響已完成的工作）：${error.message}`);
   }
 }
 

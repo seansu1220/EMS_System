@@ -29,7 +29,13 @@ import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange, getRecentRange } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
-import { connectQueue, fetchPendingRequests, markRunning, saveResult } from './unlockQueue.mjs';
+import {
+  closeQueue,
+  connectQueue,
+  fetchPendingRequests,
+  markRunning,
+  saveResult,
+} from './unlockQueue.mjs';
 import { exportBothDatasets } from './scrape.mjs';
 import { readTable, describeWorkbook } from './workbook.mjs';
 import {
@@ -522,6 +528,17 @@ async function runUnlockCommand(options) {
  */
 async function runUnlockOnlineCommand(options) {
   const queue = await connectQueue();
+  // Firebase 的連線會撐著 Node 的事件迴圈：不關的話事情都做完了、訊息也印完了，
+  // 黑色視窗卻一直不會結束，看起來就像當掉（2026-08-06 實測踩到）。
+  try {
+    await processUnlockQueue(queue, options);
+  } finally {
+    await closeQueue(queue);
+  }
+}
+
+/** 線上工單的實際內容（與雲端連線的開關由呼叫端負責）。 */
+async function processUnlockQueue(queue, options) {
   const requests = await fetchPendingRequests(queue);
   if (requests.length === 0) {
     log.ok('目前沒有待處理的解鎖工單，不需要登入救護系統。');
