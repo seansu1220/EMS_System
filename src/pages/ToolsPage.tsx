@@ -80,7 +80,7 @@ const LOCAL_TOOLS: readonly {
       '每解完一筆就立刻回寫一筆，申請人在網頁上看得到，中途關掉視窗也不會讓前面幾筆卡在「待處理」。',
       '判斷方式與離線版完全相同：判斷不明確的一律略過，不會用猜的。',
     ],
-    note: '第一次要先在 tools\\ems-report\\.env 填入 EMS_WEB_EMAIL 與 EMS_WEB_PASSWORD（你在這個網站的帳密，要用一般使用者或管理員帳號）。填完先跑「捷徑 \\ 不常用 \\ 線上解鎖工單-試跑.bat」確認連得上。',
+    note: '第一次要先給程式一組帳密。你平常用 Google 登入，而 Google 登入沒有密碼可以填，所以請另外開一組專用帳號：在「建立新帳號」頁註冊（Email 可用 你的帳號+unlock@gmail.com 這種 Gmail 別名，信一樣進你的信箱）→ 回來用你自己的帳號在使用者管理核准它、角色維持「一般使用者」→ 把帳密填進 tools\\ems-report\\.env 的 EMS_WEB_EMAIL 與 EMS_WEB_PASSWORD。填完先跑「捷徑 \\ 不常用 \\ 線上解鎖工單-試跑.bat」確認連得上。',
   },
 ];
 
