@@ -143,9 +143,12 @@ function describeAuthError(error) {
   const code = error?.code ?? '';
   if (code === 'auth/invalid-credential' || code === 'auth/wrong-password'
     || code === 'auth/user-not-found' || code === 'auth/invalid-email') {
-    return `email 或密碼不對（${code}）。\n`
-      + '請檢查 tools/ems-report/.env 的 EMS_WEB_EMAIL／EMS_WEB_PASSWORD。\n'
-      + '⚠ 用 Google 登入的帳號**沒有密碼可以填在這裡**——那組密碼是 Google 的。\n'
+    // 最常見的原因排第一行。2026-08-06 使用者就是填了自己平常用 Google 登入的 email，
+    // 一直以為是密碼打錯——那個帳號在系統裡根本沒有密碼，填什麼都會失敗。
+    return `這組帳密登入不了（${code}）。\n`
+      + '最常見的原因：**EMS_WEB_EMAIL 填成了你平常按「Google 登入」的那個 email**。\n'
+      + '　用 Google 登入的帳號在系統裡沒有密碼，因此填什麼密碼都會失敗，換密碼也沒用。\n'
+      + '　你要填的是另外註冊的一組專用帳號（還沒註冊的話請照下面做）。\n'
       + SETUP_STEPS;
   }
   if (code === 'auth/operation-not-allowed') {
