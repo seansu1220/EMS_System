@@ -5,7 +5,7 @@
  * 排序有兩種模式（見 lib/checklistLogic）：
  * - 流程順序：依 sortOrder（標案等多流程業務用，可拖曳調整）。
  * - 依期限：未勾在前、期限近到遠、無期限最後。
- * 逾期且未勾以紅色、urgent 天數內以橙色標示期限。
+ * 逾期且未勾以紅色、剩餘工作日在 urgent 天數內以橙色標示期限（與首頁提醒卡同一套算法）。
  * 純 UI + 事件捕捉；資料存取委由 taskService（更新 task 文件的 checklistItems 陣列）。
  */
 import { useEffect, useState } from 'react';
@@ -34,7 +34,9 @@ import {
   updateChecklistItem,
 } from '../services/taskService';
 import type { ChecklistItem, Task } from '../types/task';
+import { useHolidays } from '../hooks/useHolidays';
 import { nowTime, today } from '../lib/taskLogic';
+import type { WorkdayCalendar } from '../lib/workday';
 import {
   CHECKLIST_SORT_MODES,
   checklistDeadlineToneClass,
@@ -52,6 +54,8 @@ interface ChecklistSectionProps {
 }
 
 export function ChecklistSection({ task, locked = false }: ChecklistSectionProps) {
+  // 假日清單讀取失敗不阻擋畫面：仍以內建清單判斷期限色調，故此處不取 error。
+  const { workdayCalendar } = useHolidays();
   const [content, setContent] = useState('');
   const [deadline, setDeadline] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -284,6 +288,7 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
                 <ChecklistRow
                   key={item.id}
                   item={item}
+                  workdayCalendar={workdayCalendar}
                   locked={locked}
                   canDrag={canDrag}
                   busy={saving}
@@ -319,6 +324,8 @@ export function ChecklistSection({ task, locked = false }: ChecklistSectionProps
 
 interface ChecklistRowProps {
   item: ChecklistItem;
+  /** 假日索引（由 useHolidays 提供），決定期限色調用的剩餘工作日怎麼扣。 */
+  workdayCalendar: WorkdayCalendar;
   locked: boolean;
   canDrag: boolean;
   busy: boolean;
@@ -337,6 +344,7 @@ interface ChecklistRowProps {
 /** 單列待辦（可拖曳）。顯示模式含勾選/內容/期限/編輯/刪除；編輯模式顯示內容與期限輸入框。 */
 function ChecklistRow({
   item,
+  workdayCalendar,
   locked,
   canDrag,
   busy,
@@ -432,7 +440,9 @@ function ChecklistRow({
       {item.deadline ? (
         <span
           className={`shrink-0 font-mono text-xs ${
-            item.done ? 'text-slate-400 line-through' : checklistDeadlineToneClass(item.deadline)
+            item.done
+              ? 'text-slate-400 line-through'
+              : checklistDeadlineToneClass(item.deadline, workdayCalendar)
           }`}
         >
           {item.deadline}

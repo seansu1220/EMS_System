@@ -131,14 +131,20 @@ export function sortTasks(tasks: Task[]): Task[] {
  * 取得提醒清單（統一項目型別）。
  * 來源：①未完成業務的期限；②未完成業務中「未勾掉且有期限」的待辦事項。
  * 納入規則：
- * - 有期限者：期限在 (今天 + withinDays) 之內（含逾期）才納入。
- * - 未完成且「無期限」的業務：一律納入（不受 withinDays 限制，deadline 為 null），避免被遺忘。
+ * - 有期限者：由 isWithinWindow 判定是否落在提醒視窗內（逾期一律回 true）。
+ * - 未完成且「無期限」的業務：一律納入（不受視窗限制，deadline 為 null），避免被遺忘。
  * - 已完成業務、已勾掉的待辦、無期限的待辦事項皆不納入。
  * 排序：有期限者在前（依期限近到遠），無期限者集中在最後。
- * @param withinDays 未來幾天內到期納入提醒（逾期一律納入）
+ *
+ * 視窗判定以函式注入（實際使用的是 lib/workday 的 isWithinWorkdays，以工作日計算），
+ * 讓本模組維持純邏輯、不必依賴假日清單。
+ *
+ * @param isWithinWindow 判定某期限（yyyy-MM-dd）是否納入提醒
  */
-export function getReminderTasks(tasks: Task[], withinDays: number): ReminderItem[] {
-  const base = today();
+export function getReminderTasks(
+  tasks: Task[],
+  isWithinWindow: (deadline: string) => boolean,
+): ReminderItem[] {
   const items: ReminderItem[] = [];
 
   for (const task of tasks) {
@@ -157,7 +163,7 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
         categoryId: task.categoryId,
         recurrenceLabel,
       });
-    } else if (daysUntil(task.deadline, base) <= withinDays) {
+    } else if (isWithinWindow(task.deadline)) {
       items.push({
         kind: 'task',
         taskId: task.id,
@@ -171,7 +177,7 @@ export function getReminderTasks(tasks: Task[], withinDays: number): ReminderIte
     // ② 未勾掉且有期限的待辦事項（無期限待辦不納入）。
     for (const item of task.checklistItems) {
       if (item.done || !item.deadline) continue;
-      if (daysUntil(item.deadline, base) > withinDays) continue;
+      if (!isWithinWindow(item.deadline)) continue;
       items.push({
         kind: 'checklist',
         taskId: task.id,

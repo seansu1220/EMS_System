@@ -110,3 +110,35 @@ export function workdaysUntil(
   }
   return workdays;
 }
+
+/**
+ * 期限是否落在「剩餘 N 個工作日」的視窗內（已逾期、今天到期一律算在內）。
+ *
+ * 等同於 workdaysUntil(deadline) <= limit，但一超過門檻就中止掃描：
+ * 提醒卡每次渲染都要對所有未完成業務判定一次，遠期業務（例如明年才到期）
+ * 不該為了算出精確天數而逐日跑上數百圈。
+ *
+ * @param deadline 期限（yyyy-MM-dd）
+ * @param calendar 假日索引（由 buildWorkdayCalendar 產生）
+ * @param limit 視窗天數（工作日）
+ * @param from 基準日（yyyy-MM-dd），預設今天
+ */
+export function isWithinWorkdays(
+  deadline: string,
+  calendar: WorkdayCalendar,
+  limit: number,
+  from: string = today(),
+): boolean {
+  const totalDays = daysUntil(deadline, from);
+  if (totalDays <= 0) return true; // 已逾期或今天到期。
+  if (totalDays > MAX_SCAN_DAYS) return false; // 那麼遠的期限必定超出提醒視窗。
+
+  let workdays = 0;
+  let cursor = from;
+  for (let step = 0; step < totalDays; step += 1) {
+    cursor = addDaysToDate(cursor, 1);
+    if (isWorkday(cursor, calendar)) workdays += 1;
+    if (workdays > limit) return false;
+  }
+  return true;
+}

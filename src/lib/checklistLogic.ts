@@ -3,8 +3,9 @@
  * 不依賴 React 或 Firebase，皆為純函式（輸入 → 輸出，無副作用），方便獨立測試。
  */
 import type { ChecklistItem } from '../types/task';
-import { REMINDER_DAYS } from '../config/constants';
+import { REMINDER_WORKDAYS } from '../config/constants';
 import { daysUntil } from './taskLogic';
+import { workdaysUntil, type WorkdayCalendar } from './workday';
 
 /**
  * 待辦排序模式（配置驅動，UI 由 CHECKLIST_SORT_MODES 產生切換選項）。
@@ -85,11 +86,13 @@ export function checklistProgress(items: ChecklistItem[]): ChecklistProgress {
 
 /**
  * 未勾待辦依剩餘天數決定期限文字色調 class。
- * 逾期紅色、REMINDER_DAYS.urgent 天內橙色，其餘灰色。
+ * 逾期紅色、剩餘工作日在 REMINDER_WORKDAYS.urgent 內橙色，其餘灰色。
+ * 剩餘量與提醒卡一致，以工作日計算（週五看到下週一到期即為剩 1 個工作日 → 橙色）。
  */
-export function checklistDeadlineToneClass(deadline: string): string {
-  const remaining = daysUntil(deadline);
-  if (remaining < 0) return 'text-red-600 font-semibold';
-  if (remaining <= REMINDER_DAYS.urgent) return 'text-amber-600 font-semibold';
+export function checklistDeadlineToneClass(deadline: string, calendar: WorkdayCalendar): string {
+  if (daysUntil(deadline) < 0) return 'text-red-600 font-semibold';
+  if (workdaysUntil(deadline, calendar) <= REMINDER_WORKDAYS.urgent) {
+    return 'text-amber-600 font-semibold';
+  }
   return 'text-slate-500';
 }

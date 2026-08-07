@@ -1,7 +1,7 @@
 /**
  * 首頁上方的近期任務提醒卡。
- * 預設顯示「已逾期 + 7 天內到期」的未完成業務；點「展開」改為 30 天內。
- * 剩餘天數以「工作日」呈現（扣掉週末與國定假日，見 lib/workday），
+ * 預設顯示「已逾期 + 剩 7 個工作日內到期」的未完成業務；點「展開」改為 30 個工作日內。
+ * 提醒視窗與剩餘天數皆以「工作日」計算（扣掉週末與國定假日，見 lib/workday），
  * 避免週五看到下週一到期的業務時，因日曆日顯示「剩 3 天」而誤判還有餘裕。
  * 顏色：已逾期＝紅、剩餘工作日在 urgent 天數內＝橙、其餘＝一般色。點擊跳轉業務詳情。
  * 無期限的未完成業務不受視窗限制，永遠顯示於獨立的「未定期限」區段（避免被遺忘）。
@@ -12,9 +12,14 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '../types/task';
 import type { Category } from '../types/category';
-import { REMINDER_DAYS } from '../config/constants';
+import { REMINDER_WORKDAYS } from '../config/constants';
 import { daysUntil, getReminderTasks, type ReminderItem } from '../lib/taskLogic';
-import { isYearCovered, workdaysUntil, type WorkdayCalendar } from '../lib/workday';
+import {
+  isWithinWorkdays,
+  isYearCovered,
+  workdaysUntil,
+  type WorkdayCalendar,
+} from '../lib/workday';
 import { Card } from './ui';
 
 interface ReminderPanelProps {
@@ -46,7 +51,7 @@ function remainingOf(deadline: string, calendar: WorkdayCalendar): Remaining {
 /** 依剩餘量決定文字顏色（逾期紅、剩餘工作日在 urgent 內橙、其餘一般色）。 */
 function toneClass({ calendarDays, workdays }: Remaining): string {
   if (calendarDays < 0) return 'text-red-600';
-  if (workdays <= REMINDER_DAYS.urgent) return 'text-amber-600';
+  if (workdays <= REMINDER_WORKDAYS.urgent) return 'text-amber-600';
   return 'text-slate-600';
 }
 
@@ -68,13 +73,19 @@ export function ReminderPanel({ tasks, categories, workdayCalendar }: ReminderPa
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
 
-  const withinDays = expanded ? REMINDER_DAYS.expanded : REMINDER_DAYS.default;
+  const withinWorkdays = expanded ? REMINDER_WORKDAYS.expanded : REMINDER_WORKDAYS.default;
   const categoryName = useMemo(() => {
     const map = new Map(categories.map((category) => [category.id, category.name]));
     return (id: string) => map.get(id) ?? '未分類';
   }, [categories]);
 
-  const reminders = useMemo(() => getReminderTasks(tasks, withinDays), [tasks, withinDays]);
+  const reminders = useMemo(
+    () =>
+      getReminderTasks(tasks, (deadline) =>
+        isWithinWorkdays(deadline, workdayCalendar, withinWorkdays),
+      ),
+    [tasks, withinWorkdays, workdayCalendar],
+  );
 
   // 拆成「有期限」與「無期限」兩段：無期限段永遠顯示於有期限段之後。
   const datedReminders = useMemo(
@@ -92,14 +103,16 @@ export function ReminderPanel({ tasks, categories, workdayCalendar }: ReminderPa
         <h2 className="text-base font-bold text-slate-800">
           近期提醒
           <span className="ml-2 text-xs font-normal text-slate-400">
-            （逾期 + {withinDays} 天內到期）
+            （逾期 + {withinWorkdays} 個工作日內到期）
           </span>
         </h2>
         <button
           onClick={() => setExpanded((prev) => !prev)}
           className="text-sm font-medium text-slate-600 hover:underline"
         >
-          {expanded ? '收合（7 天）' : '展開（30 天）'}
+          {expanded
+            ? `收合（${REMINDER_WORKDAYS.default} 個工作日）`
+            : `展開（${REMINDER_WORKDAYS.expanded} 個工作日）`}
         </button>
       </div>
 

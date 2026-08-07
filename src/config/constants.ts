@@ -38,15 +38,15 @@ export const COLLECTIONS = {
 export type Tone = 'slate' | 'green' | 'amber' | 'red' | 'blue';
 
 /**
- * 提醒天數門檻。
- * - default：預設提醒範圍（逾期 + 7 個日曆日內到期）。
- * - expanded：展開後的提醒範圍（逾期 + 30 個日曆日內到期）。
- * - urgent：剩餘「工作日」在此天數內（含逾期）以橙色標示。
+ * 提醒門檻，單位一律為「工作日」（扣掉週末與國定假日，見 lib/workday）。
+ * - default：預設提醒範圍（逾期 + 剩餘 7 個工作日內到期）。
+ * - expanded：展開後的提醒範圍（逾期 + 剩餘 30 個工作日內到期）。
+ * - urgent：剩餘工作日在此天數內（含逾期）以橙色標示。
  *
- * 註：default / expanded 為「納入提醒的視窗」，以日曆日計算（避免視窗被假日壓縮）；
- *     urgent 與畫面上顯示的剩餘天數一致，皆以工作日計算。
+ * 註：全站的剩餘天數（提醒視窗、畫面文字、急迫度色）都以工作日計算，
+ *     避免同一個數字在不同地方代表不同的「天」。逾期天數例外，以日曆日呈現較直覺。
  */
-export const REMINDER_DAYS = {
+export const REMINDER_WORKDAYS = {
   default: 7,
   expanded: 30,
   urgent: 3,

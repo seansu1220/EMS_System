@@ -4,6 +4,45 @@
 
 ---
 
+## 2026-08-07　v1.18.2 近期提醒的 7 / 30 天也改成工作日，全站單位統一
+
+### 問題描述
+提醒卡上顯示的是「剩 N 個工作日」，但**決定哪些業務會出現在卡片上的 7 天 / 30 天視窗，
+以及卡片標題與展開按鈕上的「7 天 / 30 天」，都還是日曆日**。同一張卡片上兩種「天」，
+使用者看到的數字和篩選用的數字對不起來。業務詳情頁待辦事項的橙色警示（3 天內）也是日曆日。
+
+### 根本原因
+v1.11.8 只把「顯示的剩餘天數」換成工作日，視窗門檻刻意留在日曆日（當時的理由是
+「避免視窗被假日壓縮」）。但這個理由站不住腳：使用者要的就是「還有幾天能上班處理」，
+視窗跟著工作日走才對得上。`REMINDER_DAYS` 三個值中 urgent 是工作日、default/expanded
+是日曆日，同一個常數兩種單位，是誤解的來源。
+
+### 修改內容
+- `src/config/constants.ts`：`REMINDER_DAYS` 改名為 **`REMINDER_WORKDAYS`**（default 7 /
+  expanded 30 / urgent 3），註解寫明三者單位一律為工作日。
+- `src/lib/workday.ts`：新增 **`isWithinWorkdays(deadline, calendar, limit, from)`**。
+  等同 `workdaysUntil() <= limit`，但一超過門檻就中止掃描——提醒卡每次渲染都要對所有
+  未完成業務判定一次，明年才到期的業務不該為了算出精確天數逐日跑上數百圈。
+- `src/lib/taskLogic.ts`：`getReminderTasks(tasks, withinDays)` 改為
+  `getReminderTasks(tasks, isWithinWindow)`，視窗判定以函式注入。
+  taskLogic 是純邏輯模組、不該依賴假日清單，workday.ts 又反過來 import taskLogic
+  （會形成循環相依），注入是唯一乾淨的解法。
+- `src/components/ReminderPanel.tsx`：改傳 `isWithinWorkdays(...)`；標題改「（逾期 +
+  N 個工作日內到期）」、按鈕改「展開（30 個工作日）」/「收合（7 個工作日）」，
+  按鈕文字改由常數產生，不再寫死。
+- `src/lib/checklistLogic.ts`：`checklistDeadlineToneClass(deadline, calendar)` 新增假日
+  清單參數，橙色門檻改用 `workdaysUntil()`（逾期紅色仍以日曆日判定）。
+- `src/components/ChecklistSection.tsx`：以 `useHolidays()` 取得假日索引並傳給每一列。
+
+### 副作用（預期行為）
+跨連假時，7 個工作日的視窗會涵蓋較多日曆日（例如中間卡到三天連假就是 10 個日曆日），
+提醒卡上的項目會比改版前多一些。這正是這次要的：提醒的單位是「還有幾天能上班處理」。
+
+### 驗證
+`npm run build`（tsc -b + vite build）通過，無型別錯誤。
+
+---
+
 ## 2026-08-07　v1.18.1 整夜實跑：心跳撐了 6 小時 46 分，但掉線後監看會自己結束
 
 ### 實跑結果（2026-08-06 整夜，試跑模式）
