@@ -32,10 +32,11 @@ async function withTempLog(run) {
   }
 }
 
-/** 等落檔的佇列排空（追加是非同步的）。 */
-async function settle() {
-  await new Promise((resolve) => setTimeout(resolve, 50));
-}
+/**
+ * 落檔是**同步**的，寫完就在磁碟上了，不需要等。
+ * 保留這個函式只是讓測試讀起來仍然是「寫了 → 檢查」的順序。
+ */
+async function settle() {}
 
 test('啟用之後，每一行都要立刻落檔（不是等結束才寫）', async () => {
   await withTempLog(async (file) => {
@@ -83,6 +84,16 @@ test('沒啟用時不會亂寫檔案（其他指令維持原本行為）', async
     log.info('這行不該落檔');
     await settle();
     await assert.rejects(fs.readFile(file, 'utf8'), '不該產生檔案');
+  });
+});
+
+test('寫入是同步的：呼叫完立刻讀得到（關掉視窗也不會漏掉最後幾行）', async () => {
+  await withTempLog(async (file) => {
+    await enableLiveLog(file);
+    log.warn('掉線當下的那一行');
+    // 完全不等待就直接讀——非同步寫入的話這裡會讀不到。
+    const content = await fs.readFile(file, 'utf8');
+    assert.match(content, /掉線當下的那一行/);
   });
 });
 

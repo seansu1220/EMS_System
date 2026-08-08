@@ -30,8 +30,15 @@ const logLines = [];
  */
 let liveLogPath = null;
 
-/** 落檔用的序列化佇列：確保每一行依序寫入，不會交錯。 */
-let liveLogChain = Promise.resolve();
+/**
+ * 追加用的同步寫檔函式（啟用時才載入）。
+ *
+ * ⚠ 刻意用**同步**寫入。監看最常見的結束方式是「直接關掉視窗」，
+ * 那在 Windows 上是把程序硬砍——非同步的寫入還排在佇列裡就會一起消失，
+ * 而那幾行往往正是掉線當下最關鍵的訊息（2026-08-08 實際損失過一次）。
+ * 這個檔案一小時只寫幾行，同步寫入的代價可以忽略。
+ */
+let appendSync = null;
 
 /** 記錄一行並輸出到終端機。 */
 function record(text, toStderr = false) {
@@ -49,13 +56,12 @@ function record(text, toStderr = false) {
  * 影響到正在進行的解鎖流程。
  */
 function appendLive(line) {
-  if (!liveLogPath) return;
-  liveLogChain = liveLogChain
-    .then(async () => {
-      const { appendFile } = await import('node:fs/promises');
-      await appendFile(liveLogPath, `${line}\n`, 'utf8');
-    })
-    .catch(() => {});
+  if (!liveLogPath || !appendSync) return;
+  try {
+    appendSync(liveLogPath, `${line}\n`, 'utf8');
+  } catch {
+    // 磁碟滿了、檔案被鎖…都不該讓解鎖流程受影響。
+  }
 }
 
 /**
@@ -67,20 +73,18 @@ function appendLive(line) {
  * @param {string} filePath
  */
 export async function enableLiveLog(filePath) {
-  const { mkdir, appendFile } = await import('node:fs/promises');
+  const { appendFileSync, mkdirSync } = await import('node:fs');
   const { dirname } = await import('node:path');
-  await mkdir(dirname(filePath), { recursive: true });
+  mkdirSync(dirname(filePath), { recursive: true });
+  appendSync = appendFileSync;
   liveLogPath = filePath;
-  await appendFile(
-    filePath,
-    `\n${'='.repeat(60)}\n[${new Date().toISOString()}] 開始執行\n`,
-    'utf8',
-  ).catch(() => {});
+  appendLive(`${'='.repeat(60)}\n[${new Date().toISOString()}] 開始執行`);
 }
 
 /** 停用即時落檔（測試用；正常流程不需要呼叫）。 */
 export function disableLiveLog() {
   liveLogPath = null;
+  appendSync = null;
 }
 
 export const log = {
