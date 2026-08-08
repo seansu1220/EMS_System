@@ -125,6 +125,13 @@ export const PATHS = {
   reportDir: path.join(TOOL_DIR, 'out', 'report'),
   /** 最近一次執行的完整紀錄（只有流程訊息，不含個案資料）。 */
   logFile: path.join(TOOL_DIR, 'out', 'last-run.log'),
+  /**
+   * 常駐監看的**即時**紀錄（邊跑邊寫、跨多次執行追加）。
+   *
+   * 與 `logFile` 分開的原因：`logFile` 是結束時整份覆寫的，
+   * 對跑一整天的監看等於沒有紀錄——程式還活著就什麼都查不到（2026-08-08 踩到）。
+   */
+  watchLogFile: path.join(TOOL_DIR, 'out', 'watch.log'),
 };
 
 /** 等待使用者手動登入的上限（毫秒）。 */

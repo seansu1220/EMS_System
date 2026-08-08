@@ -79,7 +79,7 @@ import {
   resolveAdjustColumns,
   countAdjustmentsBySquad,
 } from './adjustSheet.mjs';
-import { log, closePrompt, writeLogFile } from './logger.mjs';
+import { log, closePrompt, enableLiveLog, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
@@ -592,6 +592,10 @@ async function processUnlockQueue(queue, options) {
  *   試跑本身就是個有用的工具：放著跑就能看出登入到底能撐多久。
  */
 async function runUnlockWatchCommand(options) {
+  // 監看會跑很久，而且多半是被直接關掉視窗而結束——結束時才落檔等於沒有紀錄。
+  // 改成邊跑邊寫，事後才查得出「半夜到底發生什麼事」。
+  await enableLiveLog(PATHS.watchLogFile);
+  log.info(`即時紀錄：${path.relative(process.cwd(), PATHS.watchLogFile)}（邊跑邊寫，關掉視窗也留得住）`);
   const queue = await connectQueue();
   /** 關掉視窗或按 Ctrl+C 時，讓迴圈跑完這一輪就收工。 */
   let stopping = false;

@@ -21,11 +21,66 @@ export function maskAccount(account) {
  */
 const logLines = [];
 
+/**
+ * 「邊跑邊落檔」的目標檔案；null 代表不啟用（見 {@link enableLiveLog}）。
+ *
+ * 為什麼需要：`writeLogFile` 是**程式結束時**才寫的，對跑一整天的常駐監看等於沒有紀錄——
+ * 2026-08-08 就踩到了：監看還活著（所以還沒落檔），中途掉過線，
+ * 但完全查不出是什麼時候、為什麼掉的。
+ */
+let liveLogPath = null;
+
+/** 落檔用的序列化佇列：確保每一行依序寫入，不會交錯。 */
+let liveLogChain = Promise.resolve();
+
 /** 記錄一行並輸出到終端機。 */
 function record(text, toStderr = false) {
-  logLines.push(`[${new Date().toISOString()}] ${text}`);
+  const line = `[${new Date().toISOString()}] ${text}`;
+  logLines.push(line);
+  appendLive(line);
   if (toStderr) console.error(text);
   else console.log(text);
+}
+
+/**
+ * 把一行追加到即時紀錄檔。
+ *
+ * 失敗**一律安靜吞掉**：這只是紀錄，不該讓寫檔問題（磁碟滿了、檔案被鎖）
+ * 影響到正在進行的解鎖流程。
+ */
+function appendLive(line) {
+  if (!liveLogPath) return;
+  liveLogChain = liveLogChain
+    .then(async () => {
+      const { appendFile } = await import('node:fs/promises');
+      await appendFile(liveLogPath, `${line}\n`, 'utf8');
+    })
+    .catch(() => {});
+}
+
+/**
+ * 啟用「邊跑邊落檔」，給常駐監看這種**跑很久、可能被直接關掉**的指令用。
+ *
+ * 刻意用**追加**而不是覆寫：跨多次執行的歷史才留得住，
+ * 事後要查「前天半夜到底發生什麼事」時才有東西可看。
+ *
+ * @param {string} filePath
+ */
+export async function enableLiveLog(filePath) {
+  const { mkdir, appendFile } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  await mkdir(dirname(filePath), { recursive: true });
+  liveLogPath = filePath;
+  await appendFile(
+    filePath,
+    `\n${'='.repeat(60)}\n[${new Date().toISOString()}] 開始執行\n`,
+    'utf8',
+  ).catch(() => {});
+}
+
+/** 停用即時落檔（測試用；正常流程不需要呼叫）。 */
+export function disableLiveLog() {
+  liveLogPath = null;
 }
 
 export const log = {
