@@ -26,15 +26,75 @@ export async function waitForContentAp(page, apName, timeoutMs = 20000) {
 }
 
 /**
- * 導向「報表系統 → 救護紀錄表查詢」。
+ * 在內容框「目前這份文件」上蓋一個記號。
  *
- * 主要路徑：觸發左側選單那個連結（走系統自己的導航流程）。
- * 注意：上方 header 那排報表連結要進入報表系統後才會出現，登入直後並不存在，不可用來導航。
- * 備援路徑：直接把內容框導到該功能的網址。
+ * 為什麼需要：這套系統的網址常常在換頁前後**一模一樣**（POST 換頁），
+ * 而點選單回到同一個功能時網址更是完全不變。只看網址判斷「到了沒」，
+ * 會在點下去的**那一瞬間**就認定已經到了——但新頁面其實還在路上。
+ * 記號則不會騙人：新文件的 `window` 是全新的，一定沒有這個記號。
  *
- * @returns {Promise<string>} 實際使用的路徑描述
+ * @returns {Promise<string>} 這次用的記號
  */
-export async function gotoRecordQuery(page) {
+async function stampContent(page) {
+  const stamp = `ems-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await getFrame(page, SITE.frames.content)
+    .evaluate((value) => {
+      window.__emsNavStamp = value;
+    }, stamp)
+    .catch(() => {
+      // 蓋不上去（例如文件正在換）只會讓下面的等待提早成立，不影響正確性。
+    });
+  return stamp;
+}
+
+/**
+ * 等內容框真的換成**另一份文件**。
+ *
+ * 判定只認一件事：記號不見了。換頁進行到一半時執行環境會被銷毀，
+ * `evaluate` 這時會拋錯——那代表「還在換」，不是「換好了」，必須繼續等，
+ * 否則又會退回舊版那種「太早往下做」的毛病。
+ *
+ * @returns {Promise<boolean>} 期限內是否確實換過文件
+ */
+async function waitForContentReplaced(page, stamp, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const content = page.frames().find((item) => item.name() === SITE.frames.content);
+    // undefined＝讀不到（正在換頁），null＝讀得到但沒有記號（已是新文件）。
+    const current = content
+      ? await content.evaluate(() => window.__emsNavStamp ?? null).catch(() => undefined)
+      : undefined;
+    if (current === null) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
+/**
+ * 等救護紀錄表查詢頁「可以開始填了」。
+ *
+ * 用查詢條件欄位是否存在來判定，而不是網址或載入事件：真正要緊的是
+ * 「等一下要填的欄位在不在」，這才是後續步驟唯一依賴的東西。
+ */
+async function waitForQueryFormReady(page, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const content = page.frames().find((item) => item.name() === SITE.frames.content);
+    const found = content
+      ? await content.locator(SITE.queryFields.dateFrom).count().catch(() => 0)
+      : 0;
+    if (found > 0) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
+/**
+ * 點左側選單的「救護紀錄表查詢」，並確認內容框確實換了一份新文件。
+ * @returns {Promise<string|null>} 成功時回傳路徑描述，沒點到或沒換頁時回傳 null
+ */
+async function clickRecordQueryMenu(page) {
+  const stamp = await stampContent(page);
   const sideMenu = getFrame(page, SITE.frames.sideMenu);
   // 選單可能是收合狀態，用 JS 觸發而非 Playwright 點擊，才不會因為元素不可見而失敗。
   const clicked = await sideMenu.evaluate((menuText) => {
@@ -45,18 +105,45 @@ export async function gotoRecordQuery(page) {
     link.click();
     return true;
   }, SITE.menu.recordQuery);
+  if (!clicked) return null;
+  if (!(await waitForContentReplaced(page, stamp))) return null;
+  return (await waitForContentAp(page, SITE.apNames.recordQuery)) ? '左側選單連結' : null;
+}
 
-  if (clicked && (await waitForContentAp(page, SITE.apNames.recordQuery))) {
-    return '左側選單連結';
+/**
+ * 導向「報表系統 → 救護紀錄表查詢」，並確保查詢表單真的可以開始填了。
+ *
+ * 主要路徑：觸發左側選單那個連結（走系統自己的導航流程）。
+ * 注意：上方 header 那排報表連結要進入報表系統後才會出現，登入直後並不存在，不可用來導航。
+ * 備援路徑：直接把內容框導到該功能的網址。
+ *
+ * ⚠ 這裡**一定要等到新頁面真的到位才回傳**（2026-08-09 踩到）：舊版只比對網址，
+ * 而內容框當下的網址本來就已經是這個功能，於是點完選單 0.05 秒就宣告「到了」。
+ * 接著填進去的查詢期間與 TEMSIS，全被隨後才抵達的新頁面洗掉，
+ * 等於用一張空白表單去查詢——畫面上看起來就是「這個案件查無資料」。
+ *
+ * @param {{formReadyTimeoutMs?: number}} [options] 等查詢欄位出現的上限（毫秒）
+ * @returns {Promise<string>} 實際使用的路徑描述
+ */
+export async function gotoRecordQuery(page, options = {}) {
+  let route = await clickRecordQueryMenu(page);
+  if (!route) {
+    log.warn('點選單沒有成功切換，改用直接載入網址的備援方式');
+    const content = getFrame(page, SITE.frames.content);
+    await content.goto(SITE.contentUrl(SITE.apNames.recordQuery), { waitUntil: 'domcontentloaded' });
+    if (!(await waitForContentAp(page, SITE.apNames.recordQuery))) {
+      throw new Error('選單與直接載入網址都無法開啟救護紀錄表查詢頁');
+    }
+    route = '直接載入網址（備援）';
   }
 
-  log.warn('點選單沒有成功切換，改用直接載入網址的備援方式');
-  const content = getFrame(page, SITE.frames.content);
-  await content.goto(SITE.contentUrl(SITE.apNames.recordQuery), { waitUntil: 'domcontentloaded' });
-  if (!(await waitForContentAp(page, SITE.apNames.recordQuery))) {
-    throw new Error('選單與直接載入網址都無法開啟救護紀錄表查詢頁');
+  if (!(await waitForQueryFormReady(page, options.formReadyTimeoutMs))) {
+    throw new Error(
+      `已切到救護紀錄表查詢（${route}），但查詢條件欄位 ${SITE.queryFields.dateFrom} 一直沒出現，`
+        + '不敢在這種狀態下填條件查詢（填了也會被還沒載完的頁面洗掉）。',
+    );
   }
-  return '直接載入網址（備援）';
+  return route;
 }
 
 /**
@@ -90,7 +177,7 @@ export async function listMenuItems(page) {
  * @returns {Promise<void>}
  */
 export async function gotoMenuItem(page, menuText, options = {}) {
-  const urlBefore = getFrame(page, SITE.frames.content).url();
+  const stamp = await stampContent(page);
   const sideMenu = getFrame(page, SITE.frames.sideMenu);
   const clicked = await sideMenu.evaluate((text) => {
     const links = [...document.querySelectorAll('a')];
@@ -110,12 +197,10 @@ export async function gotoMenuItem(page, menuText, options = {}) {
     );
   }
 
-  // 這套系統以 POST 換頁，網址有時不變，因此「網址改變」與「載入完成」兩者取其一即可。
-  const deadline = Date.now() + (options.timeoutMs ?? 20000);
-  while (Date.now() < deadline) {
-    const current = page.frames().find((frame) => frame.name() === SITE.frames.content);
-    if (current && current.url() !== urlBefore) break;
-    await page.waitForTimeout(500);
+  // 這套系統以 POST 換頁，網址有時不變，所以不能靠網址判斷「換好了沒」，
+  // 改認「內容框換成另一份文件」（見 `waitForContentReplaced`）。
+  if (!(await waitForContentReplaced(page, stamp, options.timeoutMs ?? 20000))) {
+    log.warn(`點了選單「${menuText}」，但內容框看起來沒有換頁；仍照原步驟往下做`);
   }
   await page.waitForLoadState('load', { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(options.settleMs ?? SITE.querySettleMs);
