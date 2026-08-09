@@ -390,6 +390,12 @@ await check(
   ),
 );
 await check(
+  '管理員可把工單退回待處理重跑（重新送單）',
+  assertSucceeds(
+    updateDoc(doc(admin, 'unlockRequests/req-mine'), { status: 'pending', result: null }),
+  ),
+);
+await check(
   '回寫結果時不可竄改申請內容',
   assertFails(
     updateDoc(doc(member, 'unlockRequests/req-others'), {
@@ -397,6 +403,19 @@ await check(
       status: 'unlocked',
     }),
   ),
+);
+// 刪除會把文件變不見，因此這三項一定要排在其他用得到這兩張工單的檢查之後。
+await check(
+  '一般使用者不可刪除工單',
+  assertFails(deleteDoc(doc(member, 'unlockRequests/req-mine'))),
+);
+await check(
+  '解鎖專用帳號不可刪除自己送的工單',
+  assertFails(deleteDoc(doc(unlocker, 'unlockRequests/req-mine'))),
+);
+await check(
+  '管理員可刪除任何一張工單',
+  assertSucceeds(deleteDoc(doc(admin, 'unlockRequests/req-others'))),
 );
 await check(
   '待審核帳號不可送出解鎖工單',

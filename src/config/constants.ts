@@ -105,6 +105,24 @@ export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }>
 };
 
 /**
+ * 結果欄給**申請人**看的一句話。
+ *
+ * 本機工具回寫的 `result.detail` 是寫給維護的人看的（第幾張紀錄表、比對到哪個按鈕、
+ * 畫面出現什麼訊息…），對分隊來說只是雜訊。申請人要知道的只有「這筆到底怎麼了、
+ * 我現在能不能去改」，所以清單上只給這一句；真要追過程請看執行電腦的
+ * `tools/ems-report/out/watch.log`（使用者 2026-08-09 指定）。
+ *
+ * 管理員另外看得到完整的 `detail`（見 `UnlockPage` 的 `ResultCell`）。
+ */
+export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
+  pending: '等救護科電腦執行',
+  running: '正在處理…',
+  unlocked: '已解鎖，可以進系統修改了',
+  noAction: '本來就沒有鎖，直接改就可以',
+  failed: '這筆程式處理不了，救護科會人工接手',
+};
+
+/**
  * 一次最多能送出幾筆解鎖工單。
  * 純粹是防手殘（例如整欄幾百個編號誤貼進來），不是系統限制。
  */

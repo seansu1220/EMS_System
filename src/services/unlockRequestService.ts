@@ -13,9 +13,12 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
   onSnapshot,
   query,
   serverTimestamp,
+  updateDoc,
   where,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -109,6 +112,47 @@ export async function createUnlockRequests(
   } catch (error) {
     throw new Error(
       `送出解鎖工單失敗（unlockRequestService.createUnlockRequests）：${(error as Error).message}`,
+    );
+  }
+}
+
+/**
+ * 把一張工單重新排隊，讓本機工具再跑一次。
+ *
+ * 用途：解鎖流程本身出過狀況（例如頁面沒載完就查詢，被誤判成「查無案件」），
+ * 案件其實好好的。這種時候申請人不必重打一次編號，管理員按一下就重來。
+ *
+ * 狀態退回 `pending`、結果清空——**這兩件事必須一起做**，
+ * 否則清單上會出現「待處理」卻掛著上次失敗說明的矛盾畫面。
+ *
+ * @throws 寫入失敗時（含權限不足）
+ */
+export async function requeueUnlockRequest(requestId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, COLLECTIONS.unlockRequests, requestId), {
+      status: 'pending',
+      result: null,
+    });
+  } catch (error) {
+    throw new Error(
+      `重新送單失敗（unlockRequestService.requeueUnlockRequest）：${(error as Error).message}`,
+    );
+  }
+}
+
+/**
+ * 刪除一張工單（僅管理員；安全規則同步限制）。
+ *
+ * 刪掉就沒了，呼叫端必須先向使用者確認。
+ *
+ * @throws 刪除失敗時（含權限不足）
+ */
+export async function deleteUnlockRequest(requestId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, COLLECTIONS.unlockRequests, requestId));
+  } catch (error) {
+    throw new Error(
+      `刪除工單失敗（unlockRequestService.deleteUnlockRequest）：${(error as Error).message}`,
     );
   }
 }
