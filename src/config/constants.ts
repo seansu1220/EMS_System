@@ -121,7 +121,7 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
   running: '正在處理…',
   unlocked: '已解鎖，可以進系統修改了',
   noAction: '案件未結案，不需解鎖。有問題請洽救護科承辦人',
-  failed: '這筆程式處理不了，救護科會人工接手',
+  failed: '請洽救護科承辦人處理',
 };
 
 /**

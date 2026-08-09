@@ -21,6 +21,8 @@
 - `src/config/constants.ts`
   - `UNLOCK_STATUS_LABELS.noAction` 的標籤：`本來就沒鎖` → **`案件未結案`**
   - `UNLOCK_RESULT_SUMMARY.noAction`：**`案件未結案，不需解鎖。有問題請洽救護科承辦人`**
+  - `UNLOCK_RESULT_SUMMARY.failed`：**`請洽救護科承辦人處理`**
+    （原本寫「這筆程式處理不了，救護科會人工接手」——申請人只需要知道去找誰）
 - 本機工具的終端機用語**維持「本來就沒鎖」不動**：那是給操作電腦的人看的，
   與網頁面對的對象不同（同一件事在兩端各自用各自聽得懂的話）。
 - `docs/SPEC.md` 2.8 狀態表同步（升至 v1.18.4）；
