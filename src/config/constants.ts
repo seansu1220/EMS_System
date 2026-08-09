@@ -100,7 +100,9 @@ export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }>
   pending: { label: '待處理', tone: 'amber' },
   running: { label: '處理中', tone: 'blue' },
   unlocked: { label: '已解鎖', tone: 'green' },
-  noAction: { label: '本來就沒鎖', tone: 'slate' },
+  // 「案件未結案」是**申請人聽得懂的說法**：沒有鎖頭＝這件本來就還沒結案，
+  // 直接進去改就好。本機工具的終端機仍講「本來就沒鎖」，那是給操作的人看的。
+  noAction: { label: '案件未結案', tone: 'slate' },
   failed: { label: '需人工處理', tone: 'red' },
 };
 
@@ -118,7 +120,7 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
   pending: '等救護科電腦執行',
   running: '正在處理…',
   unlocked: '已解鎖，可以進系統修改了',
-  noAction: '本來就沒有鎖，直接改就可以',
+  noAction: '案件未結案，不需解鎖。有問題請洽救護科承辦人',
   failed: '這筆程式處理不了，救護科會人工接手',
 };
 

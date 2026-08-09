@@ -159,7 +159,7 @@ export function UnlockPage() {
       <div>
         <h1 className="text-xl font-bold text-slate-800">解鎖救護紀錄表</h1>
         <p className="mt-1 text-sm text-slate-500">
-          在這裡提出申請，救護科的電腦執行後結果會直接顯示在下面，不用另外打電話問。
+          執行電腦有開啟就會自動偵測並解鎖。案件狀態若變為需人工處理，請通知救護科承辦人。
         </p>
       </div>
 
