@@ -21,6 +21,19 @@
 /** 民國年的上限：3 位數以內視為民國年（`115/07/02`）。 */
 const ROC_YEAR_MAX = 300;
 
+/**
+ * 早於這一年就當成「沒有這個時間」。
+ *
+ * ⚠ 這是實跑（2026-08-11）踩到的坑。系統的到院時間欄沒填時，
+ * 匯出檔寫的是 `0001/01/01 00:00:00`（.NET 的 DateTime 最小值），
+ * 而不是空白。它長得完全像一個合法日期，還會被當成民國 1 年換算成 1912，
+ * 於是「上傳時間晚於 1912 年」永遠成立——整件被判成到院後，分隊白白掉一件。
+ *
+ * 認出它之後回 null（＝讀不到），呼叫端才會往下一個來源（查詢結果、紀錄表 PDF）
+ * 找真正的到院時間；真的都沒有就列入人工確認，而不是給一個錯的結論。
+ */
+const EARLIEST_PLAUSIBLE_YEAR = 2000;
+
 /** 年月日 + 時分[秒]，年份 4 碼（西元）或 2~3 碼（民國）。 */
 const FULL_PATTERN =
   /(\d{2,4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*日?\s*[T\s]\s*(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?/;
@@ -63,6 +76,9 @@ function isValidParts(month, day, hour, minute, second) {
   );
 }
 
+/** 年份是不是真的可能是一件救護案件的年份（見 {@link EARLIEST_PLAUSIBLE_YEAR}）。 */
+const isPlausibleYear = (year) => year >= EARLIEST_PLAUSIBLE_YEAR;
+
 /**
  * 從一段文字裡解析出日期時間。
  *
@@ -92,8 +108,11 @@ export function parseDateTime(text, context = {}) {
     const minute = Number(rawMinute);
     const second = Number(rawSecond ?? 0);
     if (!isValidParts(month, day, hour, minute, second)) return null;
+    const year = normalizeYear(rawYear);
+    // 空值哨兵（`0001/01/01`）長得像日期，但那代表「這一欄沒填」，不是一個時間。
+    if (!isPlausibleYear(year)) return null;
     return {
-      epochMs: toEpochMs(normalizeYear(rawYear), month, day, hour, minute, second),
+      epochMs: toEpochMs(year, month, day, hour, minute, second),
       kind: 'datetime',
       matched: matched.trim(),
     };
@@ -109,7 +128,7 @@ export function parseDateTime(text, context = {}) {
     const second = Number(rawSecond ?? 0);
     if (!isValidParts(month, day, hour, minute, second)) return null;
     // 沒給年份就無從補齊，不猜（呼叫端會把它當成讀不到而列入人工確認）。
-    if (!context.defaultYear) return null;
+    if (!context.defaultYear || !isPlausibleYear(context.defaultYear)) return null;
     return {
       epochMs: toEpochMs(context.defaultYear, month, day, hour, minute, second),
       kind: 'monthday',
@@ -124,7 +143,7 @@ export function parseDateTime(text, context = {}) {
     const hour = Number(rawHour);
     const minute = Number(rawMinute);
     const second = Number(rawSecond ?? 0);
-    if (parts && isValidParts(1, 1, hour, minute, second)) {
+    if (parts && isValidParts(1, 1, hour, minute, second) && isPlausibleYear(Number(parts[1]))) {
       return {
         epochMs: toEpochMs(Number(parts[1]), Number(parts[2]), Number(parts[3]), hour, minute, second),
         kind: 'timeonly',

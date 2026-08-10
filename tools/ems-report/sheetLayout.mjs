@@ -6,6 +6,7 @@
  * 於是「案件日期」這種 4 個字的欄名配上 `2026/07/01 09:04:50` 的值就被截掉
  * （使用者 2026-08-05 回報「有文字被遮住」）。抽成同一份之後兩邊一起修好。
  */
+import { REPORT_FORMAT } from './config.mjs';
 
 /**
  * 字串在等寬環境下的顯示寬度（中日韓字元佔 2 格）。
@@ -67,6 +68,20 @@ export function computeColumnWidths(header, rows, options = {}) {
 }
 
 /**
+ * 一個**粗體標題**需要多寬才放得下，含餘裕。
+ *
+ * 與 {@link excelWidthFor} 分開是因為標題有兩個內文沒有的問題：粗體比較寬，
+ * 而且它在合併儲存格裡放不下就直接被切掉（見 `REPORT_FORMAT.titleWidthFactor`）。
+ *
+ * @param {string} title
+ * @param {number} fontSize
+ * @returns {number}
+ */
+export function titleWidthFor(title, fontSize) {
+  return Math.ceil(excelWidthFor(title, fontSize) * REPORT_FORMAT.titleWidthFactor);
+}
+
+/**
  * 確保跨欄合併的標題放得下。
  *
  * 合併儲存格**不會**像一般儲存格那樣把文字溢出到隔壁——放不下就直接被切掉。
@@ -81,7 +96,7 @@ export function computeColumnWidths(header, rows, options = {}) {
 export function widenToFitTitle(widths, title, fontSize) {
   const adjusted = [...widths];
   if (adjusted.length === 0) return adjusted;
-  const needed = excelWidthFor(title, fontSize);
+  const needed = titleWidthFor(title, fontSize);
   const total = adjusted.reduce((sum, width) => sum + width, 0);
   if (total >= needed) return adjusted;
   const widestIndex = adjusted.indexOf(Math.max(...adjusted));

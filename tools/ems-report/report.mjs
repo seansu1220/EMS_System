@@ -24,6 +24,12 @@ import { displayWidth, excelWidthFor, widenToFitTitle } from './sheetLayout.mjs'
 
 /**
  * 報表標題，例如「本局6/1-6/30到院前預警案件執行率」。
+ *
+ * ⚠ 標題後半段以數字開頭時要**空一格**：心電圖那份的後綴是「12導程…」，
+ * 直接接上去會變成「本局7/1-7/3112導程心電圖…」，日期和後綴糊成一團看不懂
+ * （使用者 2026-08-11 回報標題文字卡在一起）。後綴是中文開頭的則不加，
+ * 維持既有報表原本的樣子。
+ *
  * @param {typeof REPORT_PROFILES.alert} profile
  */
 function buildTitle(monthRange, profile) {
@@ -31,7 +37,9 @@ function buildTitle(monthRange, profile) {
     const [, month, day] = isoDate.split('-');
     return `${Number(month)}/${Number(day)}`;
   };
-  return `本局${toMonthDay(monthRange.start)}-${toMonthDay(monthRange.end)}${profile.titleSuffix}`;
+  const period = `${toMonthDay(monthRange.start)}-${toMonthDay(monthRange.end)}`;
+  const separator = /^\d/.test(profile.titleSuffix) ? ' ' : '';
+  return `本局${period}${separator}${profile.titleSuffix}`;
 }
 
 /** 將字串補齊到指定顯示寬度。 */

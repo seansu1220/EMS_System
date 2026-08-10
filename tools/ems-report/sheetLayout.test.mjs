@@ -5,7 +5,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { displayWidth, excelWidthFor, computeColumnWidths, widenToFitTitle } from './sheetLayout.mjs';
+import {
+  displayWidth, excelWidthFor, computeColumnWidths, widenToFitTitle, titleWidthFor,
+} from './sheetLayout.mjs';
 
 test('中文字算兩格寬，英數算一格', () => {
   assert.equal(displayWidth('分隊'), 4);
@@ -51,6 +53,20 @@ test('合併標題放不下時要把欄位加寬（合併儲存格不會溢出�
   const widths = widenToFitTitle([10, 10], '2026-07　有處置未勾選清冊', 14);
   const total = widths.reduce((sum, width) => sum + width, 0);
   assert.ok(total >= excelWidthFor('2026-07　有處置未勾選清冊', 14), `總寬 ${total} 不足`);
+});
+
+test('標題要留餘裕，不能剛好等於理論寬度（粗體比較寬，剛好就會被切掉）', () => {
+  // ⚠ 使用者 2026-08-05、08-11 兩度回報「標題被卡到」，兩次都是因為
+  //    加寬後總寬**剛好等於**理論值，而標題是粗體、實際比理論略寬。
+  const title = '2026-07　有處置未勾選清冊';
+  assert.ok(
+    titleWidthFor(title, 14) > excelWidthFor(title, 14),
+    '粗體標題的需求寬度必須大於一般字寬公式算出來的值',
+  );
+
+  const widths = widenToFitTitle([10, 10], title, 14);
+  const total = widths.reduce((sum, width) => sum + width, 0);
+  assert.ok(total > excelWidthFor(title, 14), `總寬 ${total} 沒有留餘裕`);
 });
 
 test('標題本來就放得下時，欄寬一格都不動', () => {

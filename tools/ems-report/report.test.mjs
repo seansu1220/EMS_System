@@ -164,7 +164,8 @@ test('換一份 profile 就換一份報表：分頁名、欄名、標題都跟�
     [ekg.sheets.grouped, ekg.sheets.sorted],
   );
   const sheet = workbook.getWorksheet(ekg.sheets.grouped);
-  assert.equal(sheet.getCell('A1').value, '本局6/1-6/3012導程心電圖到院前傳輸率');
+  // 後綴以數字開頭時要空一格，否則會變成看不懂的「6/3012導程」（使用者 2026-08-11 回報）。
+  assert.equal(sheet.getCell('A1').value, '本局6/1-6/30 12導程心電圖到院前傳輸率');
   assert.deepEqual(sheet.getRow(2).values.slice(1), [...ekg.columns]);
 
   // 兩份報表共用同一套樣式，換 profile 不該把大隊列的底色或框線弄丟。

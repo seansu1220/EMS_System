@@ -64,6 +64,22 @@ test('數值超出合理範圍的不當成時間', () => {
   assert.equal(parseDateTime('2026-07-02 25:44', CONTEXT), null);
 });
 
+test('系統的空值哨兵 0001/01/01 不是時間，要當成沒填', () => {
+  // ⚠ 實跑（2026-08-11）踩到：三民分隊 7/12 那件到院時間欄就是這個值。
+  //   它會被當成民國 1 年換算成 1912，於是任何上傳時間都「晚於到院」，整件判成到院後。
+  for (const text of ['0001/01/01 00:00:00', '0001-01-01 00:00', '到院時間：0001/01/01 00:00:00']) {
+    assert.equal(parseDateTime(text, CONTEXT), null, `「${text}」是空值哨兵，不該解析出時間`);
+  }
+});
+
+test('空值哨兵當到院時間時判定不出來，不可以判成到院後', () => {
+  const upload = parseDateTime('2026-07-12 16:14:14', CONTEXT);
+  const arrival = parseDateTime('0001/01/01 00:00:00', CONTEXT);
+  const { verdict, reason } = compareUploadToArrival(upload, arrival);
+  assert.equal(verdict, '無法判定');
+  assert.match(reason, /到院時間/);
+});
+
 test('findFirstDateTime 逐格找，取第一個看得懂的', () => {
   const cells = ['3', '12導程心電圖', 'ekg.pdf', '2026/07/02 12:44:08', '王小明'];
   const parsed = findFirstDateTime(cells, CONTEXT);
