@@ -371,12 +371,12 @@ export async function applyAppealSheet(cases, monthRange) {
   const results = matchAppeals(appeals, cases);
   printAppealResults(results, skipped);
 
-  const adjustments = tallyAdjustments(results);
+  const adjustments = { ...tallyAdjustments(results), results, skipped };
   if (adjustments.numerator.size > 0) {
     log.ok(`分子補進：${describeCounts(adjustments.numerator)}`);
   }
   if (adjustments.denominator.size > 0) {
     log.ok(`分母另外補進（系統查不到的案件）：${describeCounts(adjustments.denominator)}`);
   }
-  return { ...adjustments, results };
+  return adjustments;
 }

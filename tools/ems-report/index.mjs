@@ -67,6 +67,7 @@ import {
 import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
+import { writeRunSummary } from './ekgSummary.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   PATHS,
@@ -462,15 +463,36 @@ async function runEkgFlow(session, monthRange, options) {
       appeals?.results ?? [],
     );
   }
-  log.step('這次產出的檔案');
-  if (!incomplete) log.info(`　${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
+  const produced = [];
+  if (!incomplete) produced.push(`${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
   if (ledgerPath) {
-    log.info(`　out/internal/${path.basename(ledgerPath)}（每一件算在哪。**內部用，不要發給分隊**）`);
+    produced.push(`out/internal/${path.basename(ledgerPath)}（每一件算在哪。**內部用，不要發給分隊**）`);
   }
   if (missingProcedurePath) {
-    log.info(`　${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
+    produced.push(`${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
   }
-  if (pendingPath) log.info(`　${path.basename(pendingPath)}（判定不出來，要你人工看）`);
+  if (pendingPath) produced.push(`${path.basename(pendingPath)}（判定不出來，要你人工看）`);
+
+  // 執行報告放最後寫：它要把上面所有產出與待確認事項整理成一份給人看的摘要。
+  if (!incomplete) {
+    const summaryPath = await writeRunSummary({
+      monthRange,
+      denominatorCounts,
+      numeratorCounts: verifiedCounts,
+      sourceCounts: {
+        ekgChecked: ekgChecked.table.rows.length,
+        twelveLead: numerator.table.rows.length,
+        union: union.total,
+      },
+      outcomes: verifyOutcomes,
+      appeals,
+      files: produced,
+    });
+    produced.push(`out/internal/${path.basename(summaryPath)}（**先看這份**：狀況摘要與待確認事項）`);
+  }
+
+  log.step('這次產出的檔案');
+  for (const file of produced) log.info(`　${file}`);
 
   if (options.keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.denominator)}（含個資，請自行妥善處理）`);

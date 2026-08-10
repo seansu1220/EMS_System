@@ -427,17 +427,19 @@ export async function queryByTemsis(page, temsis, range) {
 async function verifyOneCase(context, page, target, range, timeContext) {
   const base = { temsis: target.temsis, squad: target.squad };
 
-  let rowIndex = await queryByTemsis(page, target.temsis, range);
+  const rowIndex = await queryByTemsis(page, target.temsis, range);
   if (rowIndex < 0) {
-    return {
-      ...base,
-      verdict: VERDICT.unknown,
-      reason: '這個 TEMSIS 在查詢期間內查不到案件（可能已被修改或刪除）',
-      arrival: target.arrivalText || null,
-      upload: null,
-      source: '查無案件',
-      caseDate: null,
-    };
+    /**
+     * ⚠ 這裡**丟例外讓上層重試**，不可以直接判成「無法判定」。
+     *
+     * 這個 TEMSIS 是從**同一次匯出檔**拿出來的，系統裡一定有這件案子。
+     * 查不到幾乎都是查詢頁還沒換完就被送出、條件被洗掉（第 1.8 節那個坑）。
+     *
+     * 舊版直接回傳「可能已被修改或刪除」，於是暫時性失敗變成永久結論——
+     * 2026-08-10 實跑一次就有 4 件這樣，使用者回系統一查全都在，
+     * 而那句理由還把人引去查「案件是不是被刪了」，方向完全錯。
+     */
+    throw new Error('以 TEMSIS 查不到案件（查詢頁可能還沒就緒，稍後重試）');
   }
 
   // ---- 到院時間：匯出檔 → 查詢結果那一列 → 救護紀錄表 PDF，由便宜到昂貴依序試 ----
@@ -559,8 +561,11 @@ async function verifyOneCase(context, page, target, range, timeContext) {
  * 這些是前一件收尾時畫面停在奇怪的位置、或頁面還在換就被點，重跑一次就會過。
  * 讓它們變成要人工核對的案件既浪費使用者的時間，也會低估分子。
  *
- * **只重試「跑到一半出錯」的情況**；程式好好跑完並判定為「到院後」或
- * 「查不到案件」的結果是結論，不是失敗，重跑幾次都一樣，不重試。
+ * **只重試「跑到一半出錯」的情況**；程式好好跑完並判定為「到院後」的結果是結論，
+ * 不是失敗，重跑幾次都一樣，不重試。
+ *
+ * ⚠ 「以 TEMSIS 查不到案件」**算失敗、要重試**（2026-08-10 改）：
+ * 待查核的 TEMSIS 全部來自同一次匯出檔，系統裡一定有，查不到就是畫面沒就緒。
  *
  * @returns {Promise<VerifyOutcome>}
  */
