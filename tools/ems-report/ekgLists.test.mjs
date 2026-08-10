@@ -8,7 +8,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMissingProcedureWorkbook, buildPendingWorkbook } from './ekgLists.mjs';
+import {
+  buildEkgOnlyWorkbook,
+  buildMissingProcedureWorkbook,
+  buildPendingWorkbook,
+} from './ekgLists.mjs';
 import { displayWidth } from './sheetLayout.mjs';
 
 const MONTH = { start: '2026-07-01', end: '2026-07-31', label: '2026-07' };
@@ -89,6 +93,25 @@ test('各分隊件數：合計在第一列，其餘依件數由多到少', () =>
   assert.deepEqual([summary.getCell(3, 1).value, summary.getCell(3, 2).value], ['合計', 3]);
   assert.deepEqual([summary.getCell(4, 1).value, summary.getCell(4, 2).value], ['蘆竹分隊', 2]);
   assert.deepEqual([summary.getCell(5, 1).value, summary.getCell(5, 2).value], ['山峰分隊', 1]);
+});
+
+test('有EKG處置無12導程清冊：版面一樣，但用語不可以跟另一份混在一起', () => {
+  const { workbook, squadCount } = buildEkgOnlyWorkbook(ROWS, COLUMNS, MONTH);
+  const summary = workbook.getWorksheet('各分隊件數');
+  const detail = workbook.getWorksheet('逐案清單');
+  const expected = `${MONTH.label}　有EKG處置無12導程清冊`;
+
+  assert.equal(summary.getCell(1, 1).value, expected);
+  assert.equal(detail.getCell(1, 1).value, expected);
+  // 這一份不是「漏勾」——漏勾的是另一份，兩份用同一個欄名會讓人拿錯清單去提醒同仁。
+  assert.equal(summary.getCell(2, 2).value, '件數');
+  assert.equal(squadCount, 2);
+  // 逐案清單的欄位與 TEMSIS 完整顯示比照另一份，才能拿著回系統把案件叫出來。
+  assert.deepEqual(
+    [detail.getCell(2, 1).value, detail.getCell(2, 2).value, detail.getCell(2, 3).value],
+    ['分隊', '案件日期', 'TEMSIS'],
+  );
+  assert.equal(detail.getCell(3, 3).value, ROWS[0]['TEMSIS ID']);
 });
 
 test('待人工確認清冊：標題兩列置中，TEMSIS 也完整顯示', () => {

@@ -5,11 +5,12 @@
  * 因此把「要當面問系統的問題」集中在一次登入裡問完，而且**同樣的查詢只跑一次**
  * ——每一次查詢＋匯出要花約一分鐘，重複問等於平白讓人多等。
  *
- * 目前回答四個問題：
+ * 目前回答五個問題：
  *   一、EKG檢查與 12 導程是不是包含關係？（量 A／B／交集）
  *   二、「傳輸紀錄」與「上傳」到底各是什麼？（拿一筆真案件兩邊都走一遍）
  *   三、加上「已結案＋送醫」會差多少？
  *   四、有 12 導程卻沒勾 EKG檢查的那些案件，是什麼情形？
+ *   五、分母（聯集）由哪兩塊差集組成？各自列成清冊，供分隊核對自己查到的件數
  *
  * ⚠ 個資原則：
  *   - 匯出檔只用來數筆數與比對 TEMSIS，用完立刻刪除
@@ -27,7 +28,7 @@ import {
 } from './caseFlow.mjs';
 import { applyBaseCriteria, locateEkgFields, queryAndExport } from './ekgScrape.mjs';
 import { queryByTemsis } from './ekgVerify.mjs';
-import { writeMissingProcedureList } from './ekgLists.mjs';
+import { writeEkgOnlyList, writeMissingProcedureList } from './ekgLists.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import { clickMatch, findClickables, findMarkedRows, listTableHeaders } from './pageFinder.mjs';
@@ -163,29 +164,23 @@ function reportStrictCriteria(tables) {
  * 四、把「有 12 導程、卻沒勾 EKG檢查」那批挑出來，看是什麼情形。
  *
  * 依「救護狀態」「送醫情形」交叉分析，多半就能看出成因。
+ * 這一段刻意用**不限狀態**的 A／B：交叉分析要有東西可看，就不能事先把狀態篩掉
+ * ——拿已篩成「已結案＋送醫」的資料去分析救護狀態，每一件當然都長一樣。
+ * 清冊則由第五段用同口徑的資料另外產出。
  */
-async function reportTwelveLeadOnly(tables, monthRange) {
-  log.step('四、有 12 導程、卻沒勾 EKG檢查的案件是什麼情形');
-  const ekgTable = tables.get('A');
+function reportTwelveLeadOnly(tables) {
+  log.step('四、有 12 導程、卻沒勾 EKG檢查的案件是什麼情形（不限狀態）');
   const twelveTable = tables.get('B');
-  const temsisColumn = temsisColumnOf(twelveTable);
   // 與正式流程用同一支差集函式，兩邊算出來的件數才保證一致。
   const onlyTwelveLead = rowsNotIn(
     twelveTable.rows,
-    temsisColumn,
-    ekgTable.rows,
-    temsisColumnOf(ekgTable),
+    temsisColumnOf(twelveTable),
+    tables.get('A').rows,
+    temsisColumnOf(tables.get('A')),
   );
   log.ok(`有 12 導程但沒勾 EKG檢查：${onlyTwelveLead.length} 件`);
   if (onlyTwelveLead.length === 0) return;
 
-  const { column: squadColumn } = resolveSquadColumn(
-    twelveTable.headers,
-    twelveTable.rows,
-    SQUAD_COLUMN_CANDIDATES,
-  );
-  /** 交叉分析的面向，只用於畫面上的說明。 */
-  const facets = [];
   for (const [name, candidates, hints] of [
     ['救護狀態', ['救護狀態', '狀態'], ['狀態', '結案', '填寫']],
     ['送醫情形', ['送醫情形', '送醫', '運送'], ['送醫', '運送', '醫院']],
@@ -201,7 +196,6 @@ async function reportTwelveLeadOnly(tables, monthRange) {
       log.info(`　　名字相近的欄位有：${similar.join('｜') || '(一個都沒有)'}`);
       continue;
     }
-    facets.push({ name, column: column.column });
 
     const tally = new Map();
     for (const row of onlyTwelveLead) {
@@ -214,13 +208,45 @@ async function reportTwelveLeadOnly(tables, monthRange) {
       .join('、');
     log.info(`　依${name}：${shown}`);
   }
+}
+
+/** 把一份匯出檔整理成清冊產生器要的欄位資訊。 */
+function listColumnsOf(table) {
+  const { column: squadColumn } = resolveSquadColumn(
+    table.headers,
+    table.rows,
+    SQUAD_COLUMN_CANDIDATES,
+  );
+  return { headers: table.headers, squadColumn, temsisColumn: temsisColumnOf(table) };
+}
+
+/**
+ * 五、分母的兩塊差集，各自列成清冊。
+ *
+ * 分母是**聯集**（有勾 EKG檢查「或」有 12 導程），因此它比任何單一條件都多。
+ * 分隊只用其中一個條件自己查、發現件數對不上時，差的就是這兩份裡的案件——
+ * 2026-08-10 平鎮分隊來問「我只查到 9 件、報表寫 10 件」就是這個情形。
+ *
+ * ⚠ 這一段用 **A2／B2（已結案＋送醫）**，也就是正式報表分母的口徑。
+ *   用不限狀態的 A／B 會產出跟報表對不起來的清冊，而且檔名相同，
+ *   會把正式流程寫出來的那份蓋掉。
+ */
+async function reportDenominatorParts(tables, monthRange) {
+  log.step('五、分母的兩塊差集（與正式報表同口徑：已結案＋送醫）');
+  const ekgTable = tables.get('A2');
+  const twelveTable = tables.get('B2');
+  const ekgKey = temsisColumnOf(ekgTable);
+  const twelveKey = temsisColumnOf(twelveTable);
+
+  const onlyTwelveLead = rowsNotIn(twelveTable.rows, twelveKey, ekgTable.rows, ekgKey);
+  const onlyEkg = rowsNotIn(ekgTable.rows, ekgKey, twelveTable.rows, twelveKey);
+  const both = twelveTable.rows.length - onlyTwelveLead.length;
+  log.info(`分母 ${both + onlyTwelveLead.length + onlyEkg.length} 件 ＝ 兩者都有 ${both} 件`
+    + ` ＋ 只有 12 導程 ${onlyTwelveLead.length} 件 ＋ 只勾 EKG檢查 ${onlyEkg.length} 件`);
 
   // 清單與正式流程用同一支實作，格式才不會兩邊各長各的。
-  await writeMissingProcedureList(onlyTwelveLead, {
-    headers: twelveTable.headers,
-    squadColumn,
-    temsisColumn,
-  }, monthRange);
+  await writeMissingProcedureList(onlyTwelveLead, listColumnsOf(twelveTable), monthRange);
+  await writeEkgOnlyList(onlyEkg, listColumnsOf(ekgTable), monthRange);
 }
 
 /**
@@ -336,7 +362,8 @@ export async function runEkgDiagnose(session, monthRange) {
 
   reportOverlap(tables);
   reportStrictCriteria(tables);
-  await reportTwelveLeadOnly(tables, monthRange);
+  reportTwelveLeadOnly(tables);
+  await reportDenominatorParts(tables, monthRange);
 
   // 樣本直接取自已經抓回來的 12 導程那一份，不必為了拿一個編號再查一次。
   const twelveTable = tables.get('B');
