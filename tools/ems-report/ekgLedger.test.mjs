@@ -123,3 +123,32 @@ test('活頁簿：大標與欄名都在，TEMSIS 完整顯示', () => {
   assert.equal(sheet.getCell(2, 9).value, '計入分子');
   assert.equal(sheet.getCell(3, 3).value, 'T-2501');
 });
+
+test('有申訴時多一個分頁，而且不可以把發生地點寫進去', () => {
+  const rows = buildLedgerRows(source([只勾處置]), source([]), []);
+  const workbook = buildLedgerWorkbook(rows, MONTH, [{
+    appeal: {
+      squad: '平鎮分隊', caseDate: '2026/7/20 20:20', temsis: 'T-2501',
+      place: '平鎮區延平路三段8號', epochMs: 0, lineNumber: 3,
+    },
+    outcome: '補進分子',
+    matchedBy: 'TEMSIS',
+    reason: '原本沒有 12 導程可查核，依申訴改列為到院前傳出',
+  }]);
+
+  const sheet = workbook.getWorksheet('申訴處理');
+  assert.ok(sheet, '應該要有申訴處理分頁');
+  assert.equal(sheet.getCell(2, 4).value, '處理結果');
+  assert.equal(sheet.getCell(3, 1).value, '平鎮分隊');
+  assert.equal(sheet.getCell(3, 4).value, '補進分子');
+
+  // 發生地點是個資，只用來比對，一個儲存格都不可以寫出來。
+  const everyCell = [];
+  sheet.eachRow((row) => row.eachCell((item) => everyCell.push(String(item.value ?? ''))));
+  assert.ok(!everyCell.some((value) => value.includes('延平路')), '發生地點不可以出現在輸出檔裡');
+});
+
+test('沒有申訴時不要生出一個空的申訴分頁', () => {
+  const rows = buildLedgerRows(source([只勾處置]), source([]), []);
+  assert.equal(buildLedgerWorkbook(rows, MONTH, []).getWorksheet('申訴處理'), undefined);
+});

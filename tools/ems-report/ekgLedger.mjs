@@ -17,13 +17,15 @@
  * ⚠ 個資原則：含完整 TEMSIS 與時間，比照另外兩份清冊——
  *   檔案只落在 `out/report/`（已 gitignore、不上雲），終端機與 log 仍只印末 4 碼。
  */
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
-import { PATHS, UNLOCK } from './config.mjs';
+import { EKG, PATHS, UNLOCK } from './config.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { buildListSheet } from './ekgLists.mjs';
 import { log } from './logger.mjs';
 import { VERDICT } from './ekgVerify.mjs';
+import { parseDateTime } from './timeParse.mjs';
 
 /** 檔名前綴與大標（改名時兩個一起改）。 */
 const LEDGER = { prefix: '心電圖逐案判定', heading: '心電圖逐案判定表' };
@@ -46,6 +48,20 @@ const NOT_VERIFIABLE = '沒有12導程，未查核';
  * @property {string|null} arrivalColumn 到院時間欄；匯出檔沒有這一欄時為 null
  */
 
+/**
+ * @typedef {Object} DenominatorCase 分母裡的一件案子，以及它算在哪
+ * @property {string} temsis
+ * @property {string} squad
+ * @property {string} caseDate 案發日期原文
+ * @property {number|null} epochMs 案發日期換算成毫秒；解析不出來為 null
+ * @property {string} place 發生地點。**只供申訴表比對用，不寫進任何輸出檔**
+ * @property {string} arrival 到院時間原文
+ * @property {boolean} hasProcedure 有勾 EKG檢查
+ * @property {boolean} hasTwelveLead 有 12 導程
+ * @property {import('./ekgVerify.mjs').VerifyOutcome|null} outcome 查核結果；沒查核為 null
+ * @property {boolean} counted 已計入分子
+ */
+
 /** 取一列的某一欄，去掉前後空白；沒有那一欄就回傳空字串。 */
 const cell = (row, column) => (column ? String(row[column] ?? '').trim() : '');
 
@@ -56,10 +72,13 @@ const cell = (row, column) => (column ? String(row[column] ?? '').trim() : '');
  * 與 `countUnionBySquad` 的去重規則一致，兩邊算出來的分母才會是同一批案件。
  *
  * @param {LedgerSource} source
- * @returns {Map<string, {squad: string, caseDate: string, arrival: string}>}
+ * @returns {Map<string, {squad: string, caseDate: string, place: string, arrival: string}>}
  */
 function indexByTemsis(source) {
-  const caseDateColumn = resolveColumnByNames(source.headers, UNLOCK.listColumns.caseDate)?.column ?? null;
+  const columnFor = (candidates) => resolveColumnByNames(source.headers, candidates)?.column ?? null;
+  const caseDateColumn = columnFor(UNLOCK.listColumns.caseDate);
+  const placeColumn = columnFor(EKG.appeal.exportPlaceColumns);
+
   const indexed = new Map();
   for (const row of source.rows) {
     const temsis = cell(row, source.temsisColumn);
@@ -67,6 +86,7 @@ function indexByTemsis(source) {
     indexed.set(temsis, {
       squad: cell(row, source.squadColumn),
       caseDate: cell(row, caseDateColumn),
+      place: cell(row, placeColumn),
       arrival: cell(row, source.arrivalColumn),
     });
   }
@@ -74,14 +94,17 @@ function indexByTemsis(source) {
 }
 
 /**
- * 組出逐案判定表的資料列（純函式，不碰檔案）。
+ * 把分母（聯集）攤平成一件一列，並標明各自算在哪。
+ *
+ * 逐案判定表與申訴表比對都以這個為準——「分母是哪些案件、哪些算進分子」
+ * 只有一份定義，兩邊才不會各算各的。
  *
  * @param {LedgerSource} ekgChecked 有勾 EKG檢查 的那份匯出檔
  * @param {LedgerSource} twelveLead 有 12 導程 的那份匯出檔
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes 逐案查核結果（可為空陣列）
- * @returns {unknown[][]} 與 {@link LEDGER_COLUMNS} 同順序的資料列
+ * @returns {DenominatorCase[]}
  */
-export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
+export function buildDenominatorCases(ekgChecked, twelveLead, outcomes) {
   const checkedIndex = indexByTemsis(ekgChecked);
   const twelveIndex = indexByTemsis(twelveLead);
   const outcomeIndex = new Map((outcomes ?? []).map((item) => [item.temsis, item]));
@@ -89,27 +112,49 @@ export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
   // 先放 12 導程那份：有 12 導程的案件才有查核結果，讓它決定分隊與案件日期比較貼近查核當下。
   const allTemsis = [...new Set([...twelveIndex.keys(), ...checkedIndex.keys()])];
 
-  const rows = allTemsis.map((temsis) => {
-    const hasTwelveLead = twelveIndex.has(temsis);
-    const hasProcedure = checkedIndex.has(temsis);
+  return allTemsis.map((temsis) => {
     const base = twelveIndex.get(temsis) ?? checkedIndex.get(temsis);
-    const outcome = outcomeIndex.get(temsis);
-
-    // 判定欄要分得出「查核過但沒過」與「根本沒得查」——這正是分隊最容易誤會的地方。
-    const verdict = outcome?.verdict ?? (hasTwelveLead ? '未查核' : NOT_VERIFIABLE);
-    const counted = outcome?.verdict === VERDICT.before;
-
-    return [
-      base?.squad ?? '(讀不到分隊)',
-      base?.caseDate || '(讀不到)',
+    const outcome = outcomeIndex.get(temsis) ?? null;
+    return {
       temsis,
-      hasProcedure ? '是' : '否',
-      hasTwelveLead ? '是' : '否',
-      outcome?.arrival || base?.arrival || '(讀不到)',
-      outcome?.upload || '(讀不到)',
+      squad: base?.squad || '(讀不到分隊)',
+      caseDate: base?.caseDate ?? '',
+      epochMs: parseDateTime(base?.caseDate, {})?.epochMs ?? null,
+      place: base?.place ?? '',
+      arrival: outcome?.arrival || base?.arrival || '',
+      hasProcedure: checkedIndex.has(temsis),
+      hasTwelveLead: twelveIndex.has(temsis),
+      outcome,
+      counted: outcome?.verdict === VERDICT.before,
+    };
+  });
+}
+
+/**
+ * 組出逐案判定表的資料列（純函式，不碰檔案）。
+ *
+ * @param {LedgerSource} ekgChecked
+ * @param {LedgerSource} twelveLead
+ * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
+ * @returns {unknown[][]} 與 {@link LEDGER_COLUMNS} 同順序的資料列
+ */
+export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
+  // ⚠ 發生地點只用於申訴表比對，**不放進這裡的任何一欄**。
+  const rows = buildDenominatorCases(ekgChecked, twelveLead, outcomes).map((item) => {
+    // 判定欄要分得出「查核過但沒過」與「根本沒得查」——這正是分隊最容易誤會的地方。
+    const verdict = item.outcome?.verdict ?? (item.hasTwelveLead ? '未查核' : NOT_VERIFIABLE);
+    return [
+      item.squad,
+      item.caseDate || '(讀不到)',
+      item.temsis,
+      item.hasProcedure ? '是' : '否',
+      item.hasTwelveLead ? '是' : '否',
+      item.arrival || '(讀不到)',
+      item.outcome?.upload || '(讀不到)',
       verdict,
-      counted ? '是' : '否',
-      outcome?.reason ?? (hasTwelveLead ? '這次沒有查核到這一件' : '分母裡有這件，但沒有 12 導程可以查核上傳時間'),
+      item.counted ? '是' : '否',
+      item.outcome?.reason
+        ?? (item.hasTwelveLead ? '這次沒有查核到這一件' : '分母裡有這件，但沒有 12 導程可以查核上傳時間'),
     ];
   });
 
@@ -122,23 +167,43 @@ export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
   );
 }
 
+/** 申訴處理分頁的欄位。**不含發生地點**——那只用來比對，不輸出。 */
+const APPEAL_COLUMNS = ['分隊', '表上填的案件日期', 'TEMSIS', '處理結果', '配對方式', '說明'];
+
 /**
  * 組出逐案判定表的活頁簿（不寫檔，供測試在記憶體中檢查版面）。
  *
+ * 第二個分頁放申訴處理結果：使用者要看的是「每一件的判斷狀況」，
+ * 而申訴改判過的那幾件，光看逐案判定表只會看到原始判定，看不出被改過。
+ *
  * @param {unknown[][]} rows {@link buildLedgerRows} 的輸出
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {import('./ekgAppeal.mjs').AppealResult[]} [appealResults]
  * @returns {ExcelJS.Workbook}
  */
-export function buildLedgerWorkbook(rows, monthRange) {
+export function buildLedgerWorkbook(rows, monthRange, appealResults = []) {
   const workbook = new ExcelJS.Workbook();
-  buildListSheet(
-    workbook,
-    '逐案判定',
-    `${monthRange.label}　${LEDGER.heading}`,
-    LEDGER_COLUMNS,
-    rows,
-    { wideColumns: ['依據'] },
-  );
+  const title = `${monthRange.label}　${LEDGER.heading}`;
+  buildListSheet(workbook, '逐案判定', title, LEDGER_COLUMNS, rows, { wideColumns: ['依據'] });
+
+  if (appealResults.length > 0) {
+    const appealRows = appealResults.map((result) => [
+      result.appeal.squad,
+      result.appeal.caseDate,
+      result.appeal.temsis || '(沒填)',
+      result.outcome,
+      result.matchedBy || '(配對不到)',
+      result.reason,
+    ]);
+    buildListSheet(
+      workbook,
+      '申訴處理',
+      `${monthRange.label}　分隊申訴處理結果`,
+      APPEAL_COLUMNS,
+      appealRows,
+      { wideColumns: ['說明'] },
+    );
+  }
   return workbook;
 }
 
@@ -149,17 +214,20 @@ export function buildLedgerWorkbook(rows, monthRange) {
  * @param {LedgerSource} twelveLead
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {import('./ekgAppeal.mjs').AppealResult[]} [appealResults]
  * @returns {Promise<string|null>} 檔案路徑；一件都沒有時回傳 null
  */
-export async function writeLedger(ekgChecked, twelveLead, outcomes, monthRange) {
+export async function writeLedger(ekgChecked, twelveLead, outcomes, monthRange, appealResults = []) {
   const rows = buildLedgerRows(ekgChecked, twelveLead, outcomes);
   if (rows.length === 0) {
     log.warn('分母一件都沒有，不產生逐案判定表。');
     return null;
   }
 
-  const filePath = path.join(PATHS.reportDir, `${LEDGER.prefix}-${monthRange.label}.xlsx`);
-  const workbook = buildLedgerWorkbook(rows, monthRange);
+  // 落在 internalDir 而不是 reportDir：這份不能跟要發給分隊的報表放在一起。
+  await fs.mkdir(PATHS.internalDir, { recursive: true });
+  const filePath = path.join(PATHS.internalDir, `${LEDGER.prefix}-${monthRange.label}.xlsx`);
+  const workbook = buildLedgerWorkbook(rows, monthRange, appealResults);
   try {
     await workbook.xlsx.writeFile(filePath);
   } catch (error) {
@@ -175,8 +243,10 @@ export async function writeLedger(ekgChecked, twelveLead, outcomes, monthRange) 
   const counted = rows.filter((row) => row[countedIndex] === '是').length;
   log.ok(
     `逐案判定表已寫出：${path.relative(process.cwd(), filePath)}`
-      + `（共 ${rows.length} 件，其中 ${counted} 件計入分子）`,
+      + `（共 ${rows.length} 件，其中 ${counted} 件計入分子`
+      + `${appealResults.length > 0 ? `；另有 ${appealResults.length} 件申訴列在第二個分頁` : ''}）`,
   );
   log.info('之後有人來問「某一件算在哪」，直接開這份檔案就看得到，不必重跑。');
+  log.warn('⚠ 這份是內部查核紀錄（含全局每一件的判定），**不要發給分隊**，所以沒有放在 out/report/。');
   return filePath;
 }

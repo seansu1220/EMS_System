@@ -65,7 +65,8 @@ import {
   VERDICT,
 } from './ekgVerify.mjs';
 import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
-import { writeLedger } from './ekgLedger.mjs';
+import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
+import { applyAppealSheet } from './ekgAppeal.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   PATHS,
@@ -252,6 +253,25 @@ async function runReportFlow(session, monthRange, keepRaw) {
 }
 
 /**
+ * 把申訴表的調整加到原本的分隊件數上。
+ *
+ * **回傳新的 Map，不改動輸入**：`union.counts` 之後還會被拿去對照，
+ * 就地改掉的話「調整前是多少」就永遠問不出來了。
+ *
+ * @param {Map<string, number>} base
+ * @param {Map<string, number>|undefined|null} extra 沒有申訴表時為 null
+ * @returns {Map<string, number>}
+ */
+function mergeCounts(base, extra) {
+  if (!extra || extra.size === 0) return base;
+  const merged = new Map(base);
+  for (const [squad, count] of extra) {
+    merged.set(squad, (merged.get(squad) ?? 0) + count);
+  }
+  return merged;
+}
+
+/**
  * 分子必定是分母的子集合，超過就是**程式算錯了**。
  *
  * 分母是「有勾 EKG檢查 ∪ 有 12 導程」的聯集，分子是後者中查核通過的那些，
@@ -324,17 +344,15 @@ async function runEkgFlow(session, monthRange, options) {
 
   // 「有上傳 12 導程、卻沒勾 EKG檢查」的清單（使用者 2026-08-05 要求併入正式流程，
   // 用途是提醒同仁記得點處置）。兩份匯出檔都已經在手上，取差集不必再查一次系統。
+  //
+  // ⚠ 差集現在算出來、清冊**等申訴表比對完才寫**：申訴表可能補進系統查不到的案件，
+  //   那些也要列進這份清冊提醒補勾（使用者 2026-08-10 指定）。
   const missingProcedure = rowsNotIn(
     numerator.table.rows,
     denominatorColumns.twelveLead.temsis,
     ekgChecked.table.rows,
     denominatorColumns.ekg.temsis,
   );
-  const missingProcedurePath = await writeMissingProcedureList(missingProcedure, {
-    headers: numerator.table.headers,
-    squadColumn: numerator.column,
-    temsisColumn: denominatorColumns.twelveLead.temsis,
-  }, monthRange);
 
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
@@ -378,9 +396,42 @@ async function runEkgFlow(session, monthRange, options) {
     log.warn('  **沒有**排除掉到院後才上傳的案件，數字會偏高，不可當成正式報表。');
   }
 
-  const stats = buildComparison(union.counts, verifiedCounts);
+  // ---- 分隊申訴表：把「因非個人因素沒能順利上傳」的案件補回分子 ----
+  //
+  // 一定要在逐案查核**之後**才做：要先知道每一件算不算進分子，才判斷得出
+  // 這筆申訴是「本來就算進去了」還是「要補」。
+  const ledgerSourceOf = (counted, columns) => ({
+    headers: counted.table.headers,
+    rows: counted.table.rows,
+    temsisColumn: columns.temsis,
+    squadColumn: counted.column,
+    arrivalColumn: columns.arrival,
+  });
+  const ledgerSources = [
+    ledgerSourceOf(ekgChecked, denominatorColumns.ekg),
+    ledgerSourceOf(numerator, denominatorColumns.twelveLead),
+  ];
+  const denominatorCases = buildDenominatorCases(...ledgerSources, verifyOutcomes);
+  // 查核不完整時不套用申訴：那時多數案件還沒有查核結果，會把「還沒查」誤當成
+  // 「查了沒過」而全部補進分子，數字會憑空變好看。
+  const appeals = incomplete ? null : await applyAppealSheet(denominatorCases, monthRange);
+
+  // 申訴補進來、系統查不到的那些案件，也要列進「有處置未勾選清冊」提醒補勾。
+  const appealRows = (appeals?.results ?? [])
+    .filter((result) => result.outcome === '新增案件')
+    .map((result) => [result.appeal.squad, result.appeal.caseDate, result.appeal.temsis || '(沒填)']);
+  const missingProcedurePath = await writeMissingProcedureList(missingProcedure, {
+    headers: numerator.table.headers,
+    squadColumn: numerator.column,
+    temsisColumn: denominatorColumns.twelveLead.temsis,
+  }, monthRange, appealRows);
+
+  const denominatorCounts = mergeCounts(union.counts, appeals?.denominator);
+  verifiedCounts = mergeCounts(verifiedCounts, appeals?.numerator);
+
+  const stats = buildComparison(denominatorCounts, verifiedCounts);
   // 分子是分母的子集合，超過就代表聯集算錯了（例如 TEMSIS 欄抓錯而去重失敗）。
-  warnIfNumeratorExceedsDenominator(union.counts, verifiedCounts);
+  warnIfNumeratorExceedsDenominator(denominatorCounts, verifiedCounts);
   if (stats.length === 0) log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
 
   const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
@@ -404,23 +455,18 @@ async function runEkgFlow(session, monthRange, options) {
     log.info('上面的表格只能拿來核對欄位判定是否正確，數字不可當成正式結果。');
   } else {
     await writeReport(groupedRows, sortedStats, monthRange, profile);
-    const ledgerSourceOf = (counted, columns) => ({
-      headers: counted.table.headers,
-      rows: counted.table.rows,
-      temsisColumn: columns.temsis,
-      squadColumn: counted.column,
-      arrivalColumn: columns.arrival,
-    });
     ledgerPath = await writeLedger(
-      ledgerSourceOf(ekgChecked, denominatorColumns.ekg),
-      ledgerSourceOf(numerator, denominatorColumns.twelveLead),
+      ...ledgerSources,
       verifyOutcomes,
       monthRange,
+      appeals?.results ?? [],
     );
   }
   log.step('這次產出的檔案');
   if (!incomplete) log.info(`　${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
-  if (ledgerPath) log.info(`　${path.basename(ledgerPath)}（每一件算在哪，來對數字時看這份）`);
+  if (ledgerPath) {
+    log.info(`　out/internal/${path.basename(ledgerPath)}（每一件算在哪。**內部用，不要發給分隊**）`);
+  }
   if (missingProcedurePath) {
     log.info(`　${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
   }

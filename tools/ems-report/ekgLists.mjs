@@ -189,9 +189,11 @@ const titleOf = (spec, monthRange) => `${monthRange.label}　${spec.heading}`;
  * @param {{headers: string[], squadColumn: string, temsisColumn: string}} columns
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {{heading: string, countLabel: string}} spec 這份清冊的用語（見上方兩個常數）
+ * @param {string[][]} [extraRows] 匯出檔以外要一併列入的案件（`[分隊, 案件日期, TEMSIS]`）。
+ *   用於分隊申訴表補進來、系統查詢結果裡根本沒有的那些案件。
  * @returns {{workbook: ExcelJS.Workbook, squadCount: number}}
  */
-function buildTallyWorkbook(rows, columns, monthRange, spec) {
+function buildTallyWorkbook(rows, columns, monthRange, spec, extraRows = []) {
   const title = titleOf(spec, monthRange);
   const caseDateColumn = resolveColumnByNames(columns.headers, UNLOCK.listColumns.caseDate);
   const workbook = new ExcelJS.Workbook();
@@ -202,8 +204,12 @@ function buildTallyWorkbook(rows, columns, monthRange, spec) {
     const squad = String(row[columns.squadColumn] ?? '').trim() || '(讀不到分隊)';
     tally.set(squad, (tally.get(squad) ?? 0) + 1);
   }
+  // 申訴補進來的案件也要算進件數，否則第一個分頁的數字會少於逐案清單的列數。
+  for (const [squad] of extraRows.map((row) => [String(row[0] ?? '').trim() || '(讀不到分隊)'])) {
+    tally.set(squad, (tally.get(squad) ?? 0) + 1);
+  }
   const summaryRows = [
-    ['合計', rows.length],
+    ['合計', rows.length + extraRows.length],
     ...[...tally].sort(
       (left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'),
     ),
@@ -219,11 +225,14 @@ function buildTallyWorkbook(rows, columns, monthRange, spec) {
 
   // ---- 分頁二：逐案清單（拿去系統核對用）----
   // TEMSIS 完整顯示：這份要拿去跟分隊逐案核對，遮成末 4 碼反而不好對（使用者 2026-08-05 指示）。
-  const detailRows = rows.map((row) => [
-    String(row[columns.squadColumn] ?? '').trim(),
-    caseDateColumn ? String(row[caseDateColumn.column] ?? '').trim() : '(讀不到)',
-    String(row[columns.temsisColumn] ?? '').trim(),
-  ]);
+  const detailRows = [
+    ...rows.map((row) => [
+      String(row[columns.squadColumn] ?? '').trim(),
+      caseDateColumn ? String(row[caseDateColumn.column] ?? '').trim() : '(讀不到)',
+      String(row[columns.temsisColumn] ?? '').trim(),
+    ]),
+    ...extraRows,
+  ];
   buildListSheet(workbook, '逐案清單', title, ['分隊', '案件日期', 'TEMSIS'], detailRows);
   return { workbook, squadCount: tally.size };
 }
@@ -236,13 +245,13 @@ function buildTallyWorkbook(rows, columns, monthRange, spec) {
  * @returns {Promise<{filePath: string|null, squadCount: number, removedStale: boolean}>}
  *   沒有案件時 `filePath` 為 null，`removedStale` 表示確實刪掉了一份舊檔
  */
-async function writeTallyList(rows, columns, monthRange, spec) {
+async function writeTallyList(rows, columns, monthRange, spec, extraRows = []) {
   const filePath = path.join(PATHS.reportDir, `${spec.prefix}-${monthRange.label}.xlsx`);
-  if (rows.length === 0) {
+  if (rows.length + extraRows.length === 0) {
     const removedStale = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
     return { filePath: null, squadCount: 0, removedStale };
   }
-  const { workbook, squadCount } = buildTallyWorkbook(rows, columns, monthRange, spec);
+  const { workbook, squadCount } = buildTallyWorkbook(rows, columns, monthRange, spec, extraRows);
   await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行。');
   return { filePath, squadCount, removedStale: false };
 }
@@ -307,10 +316,12 @@ export function buildEkgOnlyWorkbook(rows, columns, monthRange) {
  * @param {Record<string, unknown>[]} rows 漏勾的資料列（取自 12 導程那份匯出檔）
  * @param {{headers: string[], squadColumn: string, temsisColumn: string}} columns
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {string[][]} [appealRows] 分隊申訴表補進來的案件（`[分隊, 案件日期, TEMSIS]`）。
+ *   這些案件系統查詢結果裡根本沒有，但同仁申報有做心電圖，一樣要提醒他們補勾處置。
  * @returns {Promise<string|null>} 檔案路徑；沒有漏勾案件時回傳 null（並清掉舊檔）
  */
-export async function writeMissingProcedureList(rows, columns, monthRange) {
-  const written = await writeTallyList(rows, columns, monthRange, MISSING_PROCEDURE_LIST);
+export async function writeMissingProcedureList(rows, columns, monthRange, appealRows = []) {
+  const written = await writeTallyList(rows, columns, monthRange, MISSING_PROCEDURE_LIST, appealRows);
 
   if (!written.filePath) {
     if (written.removedStale) log.info('這次沒有漏勾 EKG檢查的案件；先前留下的清冊已一併清掉。');
@@ -319,9 +330,10 @@ export async function writeMissingProcedureList(rows, columns, monthRange) {
   }
 
   await noteLegacyFile(monthRange);
+  const fromAppeal = appealRows.length > 0 ? `（含分隊申訴補列的 ${appealRows.length} 件）` : '';
   log.warn(
-    `有 ${rows.length} 件上傳了 12 導程、卻沒勾「EKG檢查」，涉及 ${written.squadCount} 個分隊`
-      + `：${path.relative(process.cwd(), written.filePath)}`,
+    `有 ${rows.length + appealRows.length} 件${fromAppeal}上傳了 12 導程、卻沒勾「EKG檢查」，`
+      + `涉及 ${written.squadCount} 個分隊：${path.relative(process.cwd(), written.filePath)}`,
   );
   log.info('這是要拿去提醒同仁「記得點選急救處置」的清冊，第一個分頁就是各分隊件數。');
   return written.filePath;
