@@ -78,9 +78,16 @@ export const VERDICT = { before: '到院前', after: '到院後', unknown: '無�
  */
 const diagnosedButtons = new Set();
 
-/** 進度檔路徑（與匯出明細同層，統計後一起刪除）。 */
+/**
+ * 進度檔路徑。
+ *
+ * 2026-08-10 從 `out/raw/`（跑完即刪）搬到 `out/internal/`（留三個月）：
+ * 刪掉的話任何一點小調整都要重跑一兩個小時，而逐案判定表本來就留著同樣的
+ * TEMSIS 與時間，刪這一份並沒有多保護到什麼。檔名做成 `-YYYY-MM` 結尾，
+ * 好讓 `retention.mjs` 跟其他產出一起用同一套保留期限清掉。
+ */
 export function progressFilePath(monthRange) {
-  return path.join(PATHS.rawDir, `${monthRange.label}-ekg-verify-progress.json`);
+  return path.join(PATHS.internalDir, `心電圖查核進度-${monthRange.label}.json`);
 }
 
 /**
@@ -628,17 +635,34 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
 
   log.step(`逐案查核 12 導程的上傳時間（共 ${planned.length} 件）`);
   if (done.size > 0) {
-    log.ok(`接續上次的進度：已完成 ${done.size} 件，這次只跑沒做過的`);
+    log.ok(`接續上次的進度：已完成 ${done.size} 件，這次只跑沒做過與判不出來的`);
   }
   if (skipped > 0) {
     log.warn(`依 --limit 只查核前 ${planned.length} 件，其餘 ${skipped} 件未查核（不會計入分子）`);
   }
   log.info('每完成一件都會存檔，中途關掉視窗也不必從頭再跑一次。');
 
+  /**
+   * 已經有**結論**的才跳過。
+   *
+   * ⚠ 「無法判定」不是結論，是這次沒查出來，續跑時要再試一次
+   * （2026-08-10 加）：實測那些多半是暫時性失敗——查詢頁還沒就緒、
+   * 紀錄表視窗還在載入。舊版連它一起跳過，等於把一次失敗永久固定下來，
+   * 連程式修好了都救不回，只能整月重跑。
+   */
+  const settled = (temsis) => {
+    const outcome = done.get(temsis);
+    return outcome !== undefined && outcome.verdict !== VERDICT.unknown;
+  };
+  const retryable = planned.filter((item) => done.has(item.temsis) && !settled(item.temsis)).length;
+  if (retryable > 0) {
+    log.info(`上次有 ${retryable} 件判定不出來，這次會重新查一遍（那多半是暫時性失敗）。`);
+  }
+
   let consecutiveFailures = 0;
   let aborted = false;
   for (const [position, target] of planned.entries()) {
-    if (done.has(target.temsis)) continue;
+    if (settled(target.temsis)) continue;
 
     log.step(`第 ${position + 1} / ${planned.length} 件：${target.squad}　${maskCode(target.temsis)}`);
     const outcome = await verifyWithRetry(session, target, monthRange, timeContext);

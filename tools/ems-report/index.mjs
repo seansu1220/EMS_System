@@ -498,11 +498,13 @@ async function runEkgFlow(session, monthRange, options) {
   if (options.keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.denominator)}（含個資，請自行妥善處理）`);
   } else {
+    // ⚠ 進度檔**不再跟著刪**（2026-08-10 改）：刪掉的話任何一點調整
+    // ——補一筆申訴、修好一個讀取問題——都要重跑一兩個小時。
+    // 它已搬到 out/internal/，與逐案判定表一起用三個月的保留期限清掉，
+    // 而那份本來就留著同樣的 TEMSIS 與時間，刪這一份並沒有多保護到什麼。
     await removeRawFiles({
       denominator: rawFiles.denominator,
       numerator: rawFiles.numerator,
-      // 進度檔含完整 TEMSIS，屬個案明細，跟匯出檔同一批處理掉。
-      progress: progressFilePath(monthRange),
     });
   }
 }

@@ -16,8 +16,11 @@ import path from 'node:path';
 import { PATHS, REPORT_RETENTION_MONTHS } from './config.mjs';
 import { log } from './logger.mjs';
 
-/** 產出檔的檔名樣式：`任意名稱-YYYY-MM.副檔名`。 */
-const MONTHLY_FILE_PATTERN = /-(\d{4})-(\d{2})\.(xlsx|xls|md|csv)$/i;
+/**
+ * 產出檔的檔名樣式：`任意名稱-YYYY-MM.副檔名`。
+ * `json` 是逐案查核的進度檔（2026-08-10 起也留在 `out/internal/`）。
+ */
+const MONTHLY_FILE_PATTERN = /-(\d{4})-(\d{2})\.(xlsx|xls|md|csv|json)$/i;
 
 /**
  * 從一批檔名裡挑出「該刪的」。純函式，方便測試各種邊界。

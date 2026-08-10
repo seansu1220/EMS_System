@@ -52,6 +52,14 @@ test('認不出月份的檔案一個都不可以刪', () => {
   assert.deepEqual(expired, ['報表-2020-01.xlsx']);
 });
 
+test('查核進度檔（.json）也跟著同一套保留期限', () => {
+  const { expired } = selectExpiredFiles([
+    '心電圖查核進度-2026-07.json',
+    '心電圖查核進度-2026-01.json',
+  ], 1);
+  assert.deepEqual(expired, ['心電圖查核進度-2026-01.json']);
+});
+
 test('月份數還不到保留上限時，一個都不刪', () => {
   const { expired } = selectExpiredFiles(['報表-2026-07.xlsx', '報表-2026-06.xlsx'], 3);
   assert.deepEqual(expired, []);

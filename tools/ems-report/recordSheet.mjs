@@ -193,7 +193,23 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
         }
 
         const text = await readAllFramesText(candidate);
-        if (text.trim()) return { text, kind: 'html', source: '另開視窗的網頁' };
+        /**
+         * ⚠ 不可以「有字就算數」。
+         *
+         * 實測（2026-08-10）有一件抓到**只有 10 個字元**的頁面——那是新視窗還在載入的
+         * 空殼，真正的 PDF 隨後才到。當成紀錄表回傳的後果是後面每個欄位都讀不到，
+         * 而錯誤訊息卻寫成「紀錄表上讀不到指派案號」，把人引去懷疑那張表的格式不同
+         * （使用者因此回報「救護紀錄表格式都一樣，為什麼會讀不到」）。
+         *
+         * 同一輪 283 件正常的紀錄表都在 2400~2750 個字元之間，門檻取得很寬鬆，
+         * 只擋明顯不是紀錄表的空殼。長度不夠就**繼續等**，讓 PDF 那條路還有機會。
+         */
+        if (text.trim().length >= UNLOCK.minSheetTextLength) {
+          return { text, kind: 'html', source: '另開視窗的網頁' };
+        }
+        if (text.trim()) {
+          log.info(`紀錄表視窗目前只有 ${text.trim().length} 個字元，還不像紀錄表，繼續等`);
+        }
       }
       if (pdfBytes) break;
       // 系統已經明說開不了，再等下去也不會有紀錄表，早點結束才不會白等一分鐘。
