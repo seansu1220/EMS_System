@@ -9,6 +9,7 @@
  *   npm run tool:ems -- run                  只做到院前預警比率（預設查上個月）
  *   npm run tool:ems -- ekg                  只做 12 導程心電圖到院前傳輸率
  *   npm run tool:ems -- ekg --limit=5        只逐案查核前 5 件（先確認判斷正確再跑整月）
+ *   npm run tool:ems -- ekg --squad=平鎮分隊 只查核某一分隊，逐件印出判定（分隊來對數字時用）
  *   npm run tool:ems -- ekg --no-verify      跳過逐案查核，只看原始件數（很快）
  *   npm run tool:ems -- <指令> --month=2026-06  指定月份
  *   npm run tool:ems -- <指令> --keep-raw    保留系統匯出的原始檔（含個資）
@@ -99,6 +100,7 @@ const COMMANDS = [
  * @property {boolean} dryRun
  * @property {boolean} freshLogin
  * @property {number|undefined} limit 心電圖逐案查核只跑前幾件
+ * @property {string|undefined} squad 心電圖逐案查核只跑某一分隊（診斷用，不產生正式報表）
  * @property {boolean} verify 心電圖是否逐案查核上傳時間
  */
 
@@ -126,6 +128,11 @@ function parseArgs(argv) {
     month: args.find((arg) => arg.startsWith('--month='))?.split('=')[1],
     keepRaw: args.includes('--keep-raw'),
     limit: parseLimit(args),
+    /**
+     * 只查核某一分隊。分隊拿著自己的數字來對時，重跑整月要一兩個小時，
+     * 而真正要看的往往只有那幾件（2026-08-10 平鎮分隊來問時發現）。
+     */
+    squad: args.find((arg) => arg.startsWith('--squad='))?.split('=')[1]?.trim() || undefined,
     /**
      * 心電圖的逐案查核很花時間（每件要開好幾個畫面）。
      * `--no-verify` 可以先看原始件數，確認查詢條件抓對了再跑完整流程。
@@ -336,17 +343,25 @@ async function runEkgFlow(session, monthRange, options) {
     const columns = denominatorColumns.twelveLead;
     for (const note of columns.notes) log.info(note);
 
-    const cases = buildCaseList(numerator.table.rows, {
+    const allCases = buildCaseList(numerator.table.rows, {
       temsis: columns.temsis,
       squad: numerator.column,
       arrival: columns.arrival,
     });
-    log.info(`可逐案查核的案件：${cases.length} 件（匯出檔共 ${numerator.table.rows.length} 列）`);
+    log.info(`可逐案查核的案件：${allCases.length} 件（匯出檔共 ${numerator.table.rows.length} 列）`);
+    const cases = options.squad ? onlySquad(allCases, options.squad) : allCases;
 
     const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
     verifiedCounts = countVerifiedBySquad(result.outcomes);
     printVerifySummary(result.outcomes, cases.length);
-    pendingPath = await writePendingList(result.outcomes, monthRange, VERDICT.unknown);
+    if (options.squad) {
+      // 只查一個分隊時，重點就是「哪一件被判成什麼」，逐件印出來比寫檔有用。
+      printSquadOutcomes(result.outcomes, options.squad);
+      incomplete = `只查核了「${options.squad}」的 ${cases.length} 件`;
+    } else {
+      // 待人工確認清單是整月的；只查一個分隊時寫出去會把整月那份蓋成殘缺版本。
+      pendingPath = await writePendingList(result.outcomes, monthRange, VERDICT.unknown);
+    }
     if (result.aborted) {
       incomplete = '查核中途被中止（連續多件判定不出來）';
       log.warn('查核中途已中止，這份報表的分子並不完整，請修正問題後重跑（會接續進度）。');
@@ -399,6 +414,62 @@ async function runEkgFlow(session, monthRange, options) {
       // 進度檔含完整 TEMSIS，屬個案明細，跟匯出檔同一批處理掉。
       progress: progressFilePath(monthRange),
     });
+  }
+}
+
+/**
+ * 篩出某一分隊的待查核案件。
+ *
+ * 打錯分隊名稱就**直接中止**：不擋的話會安安靜靜地查核 0 件，
+ * 跑完只說「到院前傳出 0 件」，看起來像是那個分隊真的一件都沒有。
+ * 分隊名稱屬單位名稱、不是個人資料，可以列進錯誤訊息供比對。
+ *
+ * @param {import('./ekgVerify.mjs').EkgCase[]} cases
+ * @param {string} squad
+ * @returns {import('./ekgVerify.mjs').EkgCase[]}
+ */
+function onlySquad(cases, squad) {
+  const wanted = squad.replace(/\s/g, '');
+  const matched = cases.filter((item) => item.squad.replace(/\s/g, '') === wanted);
+  if (matched.length === 0) {
+    const available = [...new Set(cases.map((item) => item.squad))].sort();
+    throw new Error(
+      `--squad=${squad} 在這個月的 12 導程案件裡一件都沒有。`
+        + `實際有的分隊：${available.join('、') || '(一個都沒有)'}`,
+    );
+  }
+  log.warn(
+    `依 --squad 只查核「${squad}」的 ${matched.length} 件（其餘 ${cases.length - matched.length} 件不查）。`
+      + '這是診斷用途，**不會**產出正式報表，也不會動到整月的清單。',
+  );
+  return matched;
+}
+
+/**
+ * 只查一個分隊時，把每一件的判定逐件印出來。
+ *
+ * ⚠ 個資：TEMSIS 只印末 4 碼（與其他終端機輸出同一個標準）；
+ *   到院與上傳時間是判定依據，不印就看不出為什麼判成這樣。
+ *
+ * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
+ * @param {string} squad
+ */
+function printSquadOutcomes(outcomes, squad) {
+  log.step(`${squad}　逐件判定`);
+  const order = { [VERDICT.after]: 0, [VERDICT.unknown]: 1, [VERDICT.before]: 2 };
+  // 到院後與判不出來的排前面：會來對數字，要看的就是這些沒進分子的案件。
+  const sorted = [...outcomes].sort(
+    (left, right) => (order[left.verdict] ?? 9) - (order[right.verdict] ?? 9)
+      || String(left.caseDate ?? '').localeCompare(String(right.caseDate ?? '')),
+  );
+  for (const [position, item] of sorted.entries()) {
+    const counted = item.verdict === VERDICT.before;
+    log[counted ? 'ok' : 'warn'](
+      `${position + 1}. ${item.caseDate ?? '(讀不到日期)'}　${maskCode(item.temsis)}　${item.verdict}`
+        + `${counted ? '（計入分子）' : '（不計入分子）'}`,
+    );
+    log.info(`　　到院 ${item.arrival ?? '(讀不到)'}　上傳 ${item.upload ?? '(讀不到)'}`);
+    log.info(`　　${item.reason}`);
   }
 }
 
