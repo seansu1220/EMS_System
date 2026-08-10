@@ -96,10 +96,16 @@ function buildAppealSection(appeals) {
     return lines;
   }
 
+  // ⚠ 三項都要列。少列「有處置未勾選清冊」那一項，會讓人以為程式只加了分母分子
+  //   而沒處理清冊（使用者 2026-08-10 實際這樣誤會過，其實清冊早就補了）。
   lines.push(
-    `共 ${appeals.results.length} 件。`
-      + `分子補進：${describeCounts(appeals.numerator)}；`
-      + `分母另外補進：${describeCounts(appeals.denominator)}。`,
+    `共 ${appeals.results.length} 件。調整結果：`,
+    '',
+    '| 調整到哪裡 | 各分隊件數 |',
+    '| --- | --- |',
+    `| 分子 | ${describeCounts(appeals.numerator)} |`,
+    `| 分母（不在兩份查詢結果裡的案件） | ${describeCounts(appeals.denominator)} |`,
+    `| 有處置未勾選清冊 | ${describeCounts(appeals.missingProcedure)} |`,
     '',
     '| 分隊 | 案件日期 | TEMSIS | 結果 | 配對方式 |',
     '| --- | --- | --- | --- | --- |',

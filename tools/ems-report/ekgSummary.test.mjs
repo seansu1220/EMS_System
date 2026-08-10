@@ -88,11 +88,32 @@ test('判定不出來的要寫成「怎麼了 → 你要做什麼」，並逐件
   assert.ok(!text.includes('2026070510100322073401'), '摘要不寫完整 TEMSIS');
 });
 
+test('三項調整都要列出來，少列清冊會讓人以為程式沒處理', async () => {
+  const text = await render({
+    appeals: {
+      numerator: new Map([['龍岡分隊', 1]]),
+      denominator: new Map([['龍岡分隊', 1]]),
+      missingProcedure: new Map([['龍岡分隊', 1]]),
+      results: [{
+        appeal: { squad: '龍岡分隊', caseDate: '2026/07/06 8:37:13', temsis: '2026070610100308371301' },
+        outcome: '新增案件',
+        matchedBy: '',
+        reason: '不在本次兩份查詢結果裡',
+      }],
+      skipped: { example: 1, outOfRange: 0, noDate: [], noSquad: [] },
+    },
+  });
+  assert.match(text, /\| 分子 \| 龍岡分隊 1 件 \|/);
+  assert.match(text, /\| 分母（不在兩份查詢結果裡的案件） \| 龍岡分隊 1 件 \|/);
+  assert.match(text, /\| 有處置未勾選清冊 \| 龍岡分隊 1 件 \|/);
+});
+
 test('申訴表填錯的地方要指出是第幾列', async () => {
   const text = await render({
     appeals: {
       numerator: new Map([['平鎮分隊', 1]]),
       denominator: new Map(),
+      missingProcedure: new Map(),
       results: [{
         appeal: { squad: '平鎮分隊', caseDate: '2026/7/20 20:20', temsis: '2026072010100320182701' },
         outcome: '補進分子',

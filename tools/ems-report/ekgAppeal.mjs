@@ -279,7 +279,10 @@ export function matchAppeals(appeals, cases) {
       appeal,
       outcome: '新增案件',
       matchedBy: '',
-      reason: '系統查詢結果裡沒有這一件（既沒勾 EKG 處置、也沒上傳心電圖），分母與分子都補 1 件',
+      // ⚠ 措辭要講明是「**不在這兩份查詢結果裡**」，不是「系統裡沒有這件案子」。
+      //   使用者 2026-08-10 看到舊寫法後回系統查，案件當然找得到，於是以為程式錯了。
+      reason: '不在本次兩份查詢結果裡（既沒勾 EKG 處置、也沒上傳心電圖），'
+        + '分母與分子各補 1 件，並列入有處置未勾選清冊',
     };
   });
 }
@@ -405,7 +408,11 @@ export async function applyAppealSheet(cases, monthRange) {
     log.ok(`分子補進：${describeCounts(adjustments.numerator)}`);
   }
   if (adjustments.denominator.size > 0) {
-    log.ok(`分母另外補進（系統查不到的案件）：${describeCounts(adjustments.denominator)}`);
+    log.ok(`分母另外補進（不在兩份查詢結果裡的案件）：${describeCounts(adjustments.denominator)}`);
+  }
+  // 這一項也要印。少印它使用者會以為只加了分母分子、清冊沒處理（2026-08-10 實際誤會過）。
+  if (adjustments.missingProcedure.size > 0) {
+    log.ok(`有處置未勾選清冊補列：${describeCounts(adjustments.missingProcedure)}`);
   }
   return adjustments;
 }
