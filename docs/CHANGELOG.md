@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-08-10　v1.19.2 只填日期的申訴不再被丟掉；產出檔只留三個月
+
+### 問題描述
+1. 申訴表第 30 列（`2026/07/19`，只有日期沒有時間）**整列被丟掉**。
+   使用者指正：那一列的 TEMSIS 是好的 22 碼，光靠 TEMSIS 就認得出是哪一件，
+   不該因為沒填時間就整列不處理。
+2. 使用者要求：月報至少保留三個月，更舊的掃到就刪。
+
+### 根本原因
+1. `parseDateTime()` 對「只有日期」一律回傳 null——那支是設計來讀**系統畫面**的，
+   那邊的時間一定帶時分。人工填寫的表單套同一套標準太嚴。
+2. 產出檔從來沒有清理機制，`out/report/` 會一路累積。
+
+### 修改內容
+- `tools/ems-report/ekgAppeal.mjs`
+  - 新增 `parseAppealDate()`：先試完整日期時間，失敗改用 `parseSheetDate()` 只認日期
+    （連民國年都接得住），時間當成當天 00:00，並記下 `hasTime: false`
+  - `matchByPlaceAndTime()`：`hasTime` 為 false 時，後備比對改成比**同一天**。
+    仍照 10 分鐘容差比的話，會拿當天 00:00 去比，等於這條後備路線直接斷掉
+- 新增 `tools/ems-report/retention.mjs`
+  - `selectExpiredFiles()`（純函式）：只留最近 `REPORT_RETENTION_MONTHS`（3）個月份
+  - 保留範圍依**檔名裡最新的月份**往回算，不是依今天——補跑舊月份時
+    不該把比它新的檔案掃掉
+  - **只刪檔名結尾是 `-YYYY-MM` 的產出檔**，使用者自己放的檔案認不出月份，一個都不碰
+  - 刪不掉（多半被 Excel 開著）只警告不中斷：報表都已經產好了
+- `tools/ems-report/config.mjs`：新增 `REPORT_RETENTION_MONTHS`
+- `tools/ems-report/index.mjs`：`run`／`ekg`／`monthly` 跑完後清理舊月份
+- 新增 `retention.test.mjs`（5 項）、`ekgAppeal.test.mjs` 補 3 項
+
+### 驗證
+`node --test "tools/ems-report/*.test.mjs"` → **266 項全過，連跑三次結果一致**。
+以真實申訴表乾跑：2026-07 由 8 件變 **9 件**（第 30 列不再被丟掉），日期看不懂 0 列。
+
+---
+
 ## 2026-08-10　v1.19.1 修好「查不到案件」誤判，新增執行報告
 
 ### 問題描述

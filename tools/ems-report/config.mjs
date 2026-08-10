@@ -92,6 +92,14 @@ export const SITE = {
   querySettleMs: 3000,
 };
 
+/**
+ * 產出檔要保留幾個月份（使用者 2026-08-10 指定「至少三個月」）。
+ *
+ * 更舊的在每次跑完時掃到就刪。不清的話 `out/report/` 會一路累積，
+ * 舊檔留著遲早被誤認成本次結果。
+ */
+export const REPORT_RETENTION_MONTHS = 3;
+
 /** 等待匯出檔案開始下載的上限（毫秒）；資料量大時伺服器產檔會久一點。 */
 export const DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
 

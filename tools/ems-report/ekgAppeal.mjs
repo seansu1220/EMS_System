@@ -21,7 +21,7 @@
  */
 import path from 'node:path';
 import { EKG, PATHS } from './config.mjs';
-import { fetchSheetRows } from './adjustSheet.mjs';
+import { fetchSheetRows, parseSheetDate } from './adjustSheet.mjs';
 import { log } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 import { parseDateTime } from './timeParse.mjs';
@@ -31,10 +31,31 @@ import { parseDateTime } from './timeParse.mjs';
  * @property {string} temsis
  * @property {string} squad 由救護車編號推出的分隊
  * @property {string} caseDate 案件日期原文
- * @property {number|null} epochMs 案件日期換算成毫秒
+ * @property {number|null} epochMs 案件日期換算成毫秒（只有日期時為當天 00:00）
+ * @property {boolean} hasTime 表上有沒有填時分。沒填時後備比對改成「同一天」
  * @property {string} place 發生地點（**只在記憶體比對，不輸出**）
  * @property {number} lineNumber 試算表列號，供人回表上找那一列
  */
+
+/**
+ * 解析申訴表的案件日期，**允許只有日期沒有時間**。
+ *
+ * ⚠ `parseDateTime()` 對「2026/07/19」這種只有日期的寫法一律回傳 null——
+ * 那支是設計來讀**系統畫面**的，那邊的時間一定帶時分。人工填的表不該用同一套標準：
+ * 實測（2026-08-10）就有人只填日期，整列因此被丟掉，但它的 TEMSIS 是好的，
+ * 本來光靠 TEMSIS 就認得出是哪一件（使用者指正）。
+ *
+ * @param {string} text 已經過 {@link normalizeSheetDateTime} 整理的字串
+ * @returns {{epochMs: number, hasTime: boolean}|null}
+ */
+export function parseAppealDate(text) {
+  const withTime = parseDateTime(text, {});
+  if (withTime) return { epochMs: withTime.epochMs, hasTime: true };
+
+  // 退一步只認日期（`parseSheetDate` 連民國年都接得住）。時間當成當天 00:00。
+  const isoDate = parseSheetDate(text);
+  return isoDate ? { epochMs: Date.parse(`${isoDate}T00:00:00Z`), hasTime: false } : null;
+}
 
 /**
  * @typedef {Object} AppealResult 一列申訴的處理結果
@@ -145,7 +166,7 @@ export function parseAppeals(rows, monthRange) {
     }
 
     const caseDate = String(row[columns.caseDate] ?? '').trim();
-    const parsed = parseDateTime(normalizeSheetDateTime(caseDate), {});
+    const parsed = parseAppealDate(normalizeSheetDateTime(caseDate));
     if (!parsed) {
       skipped.noDate.push(String(lineNumber));
       continue;
@@ -168,6 +189,7 @@ export function parseAppeals(rows, monthRange) {
       squad,
       caseDate,
       epochMs: parsed.epochMs,
+      hasTime: parsed.hasTime,
       place: String(row[columns.place] ?? '').trim(),
       lineNumber,
     });
@@ -193,10 +215,17 @@ export function matchByPlaceAndTime(appeal, cases) {
   const place = normalizePlace(appeal.place);
   if (!place || appeal.epochMs === null) return null;
 
+  // 表上只填日期沒填時分時，時間比不了，改成要求「同一天」——
+  // 否則會拿當天 00:00 去比，10 分鐘容差內幾乎不可能有案件，等於這條路直接斷掉。
+  const dayOf = (epochMs) => new Date(epochMs).toISOString().slice(0, 10);
+  const closeEnough = (epochMs) => (appeal.hasTime === false
+    ? dayOf(epochMs) === dayOf(appeal.epochMs)
+    : Math.abs(epochMs - appeal.epochMs) <= EKG.appeal.timeToleranceMs);
+
   const matched = cases.filter((item) => item.squad === appeal.squad
     && normalizePlace(item.place) === place
     && item.epochMs !== null
-    && Math.abs(item.epochMs - appeal.epochMs) <= EKG.appeal.timeToleranceMs);
+    && closeEnough(item.epochMs));
 
   // 配對到兩件以上時**不選**：選錯會把調整加到別人的案件上，寧可回報讓人自己看。
   return matched.length === 1 ? matched[0] : null;

@@ -71,6 +71,36 @@ test('半日制的午夜與正午不可以換算錯', () => {
   assert.equal(normalizeSheetDateTime('2026/7/1 下午 12:30'), '2026/7/1 12:30');
 });
 
+test('只填日期沒填時間的列不可以被丟掉——TEMSIS 本來就認得出是哪一件', () => {
+  const { appeals, skipped } = parseAppeals(sheet(
+    ['1', CODE_到院後, '2026/07/19', '平鎮91', '平鎮區中豐路山頂段50號', ''],
+  ), MONTH);
+  assert.deepEqual(skipped.noDate, []);
+  assert.equal(appeals.length, 1);
+  assert.equal(appeals[0].hasTime, false);
+
+  const [result] = matchAppeals(appeals, CASES);
+  assert.equal(result.outcome, '補進分子');
+  assert.equal(result.matchedBy, 'TEMSIS');
+});
+
+test('只填日期時，後備比對改成比「同一天」', () => {
+  const appeal = {
+    temsis: '', squad: '平鎮分隊', caseDate: '2026/07/19', place: '平鎮區中豐路山頂段50號',
+    epochMs: Date.parse('2026-07-19T00:00:00Z'), hasTime: false, lineNumber: 3,
+  };
+  // 案件是 12:13，跟 00:00 差 12 小時；若還照 10 分鐘容差比就永遠配不到。
+  assert.equal(matchByPlaceAndTime(appeal, CASES)?.temsis, CODE_到院後);
+});
+
+test('只填日期時，不同天的還是不可以配對', () => {
+  const appeal = {
+    temsis: '', squad: '平鎮分隊', caseDate: '2026/07/18', place: '平鎮區中豐路山頂段50號',
+    epochMs: Date.parse('2026-07-18T00:00:00Z'), hasTime: false, lineNumber: 3,
+  };
+  assert.equal(matchByPlaceAndTime(appeal, CASES), null);
+});
+
 test('日期看不懂的列要記下列號，讓人回表上修', () => {
   const { appeals, skipped } = parseAppeals(sheet(
     ['1', CODE_到院後, '看不懂的日期', '平鎮91', '某處', ''],
@@ -192,7 +222,7 @@ test('TEMSIS 長度不對又配對不到時，是「無法處理」而不是「�
 test('後備比對：時間超過容差就不算同一件', () => {
   const appeal = {
     temsis: '', squad: '平鎮分隊', caseDate: '', place: '平鎮區中豐路山頂段50號',
-    epochMs: Date.parse('2026-07-19T11:50:00Z'), lineNumber: 3,
+    epochMs: Date.parse('2026-07-19T11:50:00Z'), hasTime: true, lineNumber: 3,
   };
   assert.equal(matchByPlaceAndTime(appeal, CASES), null, '差 23 分鐘，超過 10 分鐘容差');
 });
@@ -200,7 +230,7 @@ test('後備比對：時間超過容差就不算同一件', () => {
 test('後備比對：地點的空白與標點不影響配對', () => {
   const appeal = {
     temsis: '', squad: '平鎮分隊', caseDate: '', place: '平鎮區 中豐路山頂段 50號',
-    epochMs: Date.parse('2026-07-19T12:15:00Z'), lineNumber: 3,
+    epochMs: Date.parse('2026-07-19T12:15:00Z'), hasTime: true, lineNumber: 3,
   };
   assert.equal(matchByPlaceAndTime(appeal, CASES)?.temsis, CODE_到院後);
 });
@@ -212,7 +242,7 @@ test('後備比對：同分隊同地點在容差內有兩件時不猜', () => {
   })];
   const appeal = {
     temsis: '', squad: '平鎮分隊', caseDate: '', place: '平鎮區中豐路山頂段50號',
-    epochMs: Date.parse('2026-07-19T12:14:00Z'), lineNumber: 3,
+    epochMs: Date.parse('2026-07-19T12:14:00Z'), hasTime: true, lineNumber: 3,
   };
   assert.equal(matchByPlaceAndTime(appeal, 雙胞胎), null, '配對到兩件就該回報，不可以挑一件');
 });
@@ -220,7 +250,7 @@ test('後備比對：同分隊同地點在容差內有兩件時不猜', () => {
 test('後備比對：分隊不同就不算同一件（地點與時間都對也一樣）', () => {
   const appeal = {
     temsis: '', squad: '龍岡分隊', caseDate: '', place: '平鎮區中豐路山頂段50號',
-    epochMs: Date.parse('2026-07-19T12:15:00Z'), lineNumber: 3,
+    epochMs: Date.parse('2026-07-19T12:15:00Z'), hasTime: true, lineNumber: 3,
   };
   assert.equal(matchByPlaceAndTime(appeal, CASES), null);
 });

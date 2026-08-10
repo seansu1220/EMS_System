@@ -68,6 +68,7 @@ import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
+import { pruneOldOutputs } from './retention.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   PATHS,
@@ -832,6 +833,13 @@ async function main() {
     }
     await runReportFlow(session, monthRange, options.keepRaw);
   }, { freshLogin: options.freshLogin });
+
+  // 報表都產好了才清舊檔。清理失敗不該影響已經完成的產出，因此不讓它往外拋。
+  if (['run', 'ekg', 'monthly'].includes(options.command)) {
+    await pruneOldOutputs().catch((error) => {
+      log.warn(`清理舊月份檔案時出錯（不影響本次報表）：${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
 }
 
 /**
