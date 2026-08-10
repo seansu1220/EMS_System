@@ -41,3 +41,6 @@ venv/
 
 # Excel 開啟中產生的暫存鎖定檔
 ~$*
+
+# 暫時性的效能測試腳本（不進版控）
+tools/ems-report/_bench.mjs
