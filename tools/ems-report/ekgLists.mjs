@@ -45,7 +45,7 @@ function centerRow(row, columnCount) {
  * @param {{wideColumns?: string[]}} [options] 指定要放寬的欄（說明類長文字）
  * @returns {ExcelJS.Worksheet}
  */
-function buildListSheet(workbook, sheetName, title, header, rows, options = {}) {
+export function buildListSheet(workbook, sheetName, title, header, rows, options = {}) {
   const sheet = workbook.addWorksheet(sheetName);
   const columnCount = header.length;
 

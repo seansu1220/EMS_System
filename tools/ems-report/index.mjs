@@ -65,6 +65,7 @@ import {
   VERDICT,
 } from './ekgVerify.mjs';
 import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
+import { writeLedger } from './ekgLedger.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   PATHS,
@@ -337,6 +338,8 @@ async function runEkgFlow(session, monthRange, options) {
 
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
+  /** 逐案查核結果，逐案判定表要用（沒查核時為空陣列）。 */
+  let verifyOutcomes = [];
   /** 分子不完整的原因；非空字串代表這份數字不能當正式報表。 */
   let incomplete = '';
   if (options.verify) {
@@ -352,6 +355,7 @@ async function runEkgFlow(session, monthRange, options) {
     const cases = options.squad ? onlySquad(allCases, options.squad) : allCases;
 
     const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
+    verifyOutcomes = result.outcomes;
     verifiedCounts = countVerifiedBySquad(result.outcomes);
     printVerifySummary(result.outcomes, cases.length);
     if (options.squad) {
@@ -392,14 +396,31 @@ async function runEkgFlow(session, monthRange, options) {
   // 分子不完整時**不寫檔**：一份每個分隊都是 0.0% 的 xlsx 看起來跟正式報表一模一樣，
   // 擺在 out/report/ 裡遲早會被誤當成真的寄出去。終端機上的表格照印，
   // 因為那正是拿來核對「欄位有沒有抓對」用的（2026-08-04 實跑後補上）。
+  // 逐案判定表與正式報表**同進退**：查核不完整時它會把整批案件標成「未查核」，
+  // 擺在 out/report/ 裡看起來像是真的沒查到，比沒有這份檔案更糟。
+  let ledgerPath = null;
   if (incomplete) {
     log.warn(`因為${incomplete}，這次**不會**寫出 ${profile.fileNamePrefix} 的 Excel 檔。`);
     log.info('上面的表格只能拿來核對欄位判定是否正確，數字不可當成正式結果。');
   } else {
     await writeReport(groupedRows, sortedStats, monthRange, profile);
+    const ledgerSourceOf = (counted, columns) => ({
+      headers: counted.table.headers,
+      rows: counted.table.rows,
+      temsisColumn: columns.temsis,
+      squadColumn: counted.column,
+      arrivalColumn: columns.arrival,
+    });
+    ledgerPath = await writeLedger(
+      ledgerSourceOf(ekgChecked, denominatorColumns.ekg),
+      ledgerSourceOf(numerator, denominatorColumns.twelveLead),
+      verifyOutcomes,
+      monthRange,
+    );
   }
   log.step('這次產出的檔案');
   if (!incomplete) log.info(`　${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
+  if (ledgerPath) log.info(`　${path.basename(ledgerPath)}（每一件算在哪，來對數字時看這份）`);
   if (missingProcedurePath) {
     log.info(`　${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
   }
