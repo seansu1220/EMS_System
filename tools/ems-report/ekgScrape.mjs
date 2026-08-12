@@ -156,6 +156,37 @@ export async function applyBaseCriteria(page, monthRange, criteria = {}) {
 }
 
 /**
+ * 找出「急救處置」裡的 **CPR 勾選框**（與 EKG檢查同一區）。
+ *
+ * 用途：使用者 2026-08-12 給的規則——**處置勾了 CPR 就是 OHCA 案件**，
+ * 那些案件要排除在 12 導程傳輸率的分母與分子之外（見 `EKG.excludeCprCases`）。
+ *
+ * 找不到就**中止**並列出這一頁的勾選框旁邊各寫著什麼：這條規則會直接改動報表數字，
+ * 勾錯一個框會產出看起來正常、實際完全錯誤的報表。
+ *
+ * @returns {Promise<{selector: string, label: string}>}
+ */
+export async function locateCprCheckbox(page) {
+  const checkbox = await findCheckbox(content(page), EKG.cprLabels);
+  if (!checkbox) {
+    const available = await listCheckboxLabels(content(page)).catch(() => []);
+    throw new Error(
+      `找不到「CPR」勾選框（試過：${EKG.cprLabels.join('、')}）。`
+        + `這一頁的勾選框旁邊寫著：${available.join('｜') || '(一個都讀不到)'}。`
+        + '請把正確字樣加進 config.mjs 的 EKG.cprLabels。',
+    );
+  }
+  log.ok(`CPR＝${checkbox.selector}（${checkbox.matchedBy}：「${checkbox.labelText}」）`);
+  if (!checkbox.matchedBy.includes('完全相符')) {
+    log.warn(
+      '　⚠ 這是「包含」比對到的，可能勾到「旁觀者CPR」之類的別的框。'
+        + '請看畫面確認，不對的話把正確字樣加進 EKG.cprLabels。',
+    );
+  }
+  return { selector: checkbox.selector, label: `CPR（${checkbox.labelText}）` };
+}
+
+/**
  * 設定其中一次查詢的條件，然後查詢並匯出。
  *
  * 診斷指令（`ekg-diag`）也用這一支去量各種條件組合的件數，
@@ -208,12 +239,13 @@ export async function queryAndExport(context, page, fields, dataset, monthRange)
 }
 
 /**
- * 跑完心電圖流程的兩次查詢與匯出。
+ * 跑完心電圖流程的查詢與匯出。
  *
  * @param {import('playwright-core').BrowserContext} context
  * @param {import('playwright-core').Page} page
  * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {Promise<{denominator: string, numerator: string, fields: EkgFields}>}
+ * @returns {Promise<{denominator: string, numerator: string, cpr: string|null, fields: EkgFields}>}
+ *   `cpr`＝處置勾了 CPR 的案件（要排除的那批）；`EKG.excludeCprCases` 關掉時為 null
  */
 export async function exportEkgDatasets(context, page, monthRange) {
   await fs.mkdir(PATHS.rawDir, { recursive: true });
@@ -223,13 +255,28 @@ export async function exportEkgDatasets(context, page, monthRange) {
   log.ok(`已開啟（${route}）`);
 
   const fields = await locateEkgFields(page);
+  const cprBox = EKG.excludeCprCases ? await locateCprCheckbox(page) : null;
   await applyBaseCriteria(page, monthRange);
+
+  /**
+   * CPR 勾選框的設定。
+   *
+   * ⚠ **每一次查詢都要明講勾或不勾**。這系統的查詢條件會殘留，只在要勾的那次傳的話，
+   *   後面每一次查詢都被偷偷多加了一個條件，件數全部是錯的。
+   */
+  const withCpr = (checked) => (cprBox ? [{ ...cprBox, checked }] : []);
 
   const denominator = await queryAndExport(
     context,
     page,
     fields,
-    { key: 'denominator', label: '分母：EKG檢查案件', procedureChecked: true, ecgValue: '' },
+    {
+      key: 'denominator',
+      label: '分母：EKG檢查案件',
+      procedureChecked: true,
+      ecgValue: '',
+      extraCheckboxes: withCpr(false),
+    },
     monthRange,
   );
 
@@ -245,9 +292,32 @@ export async function exportEkgDatasets(context, page, monthRange) {
       label: `分子：${fields.twelveLeadText}案件`,
       procedureChecked: EKG.keepProcedureCheckedForNumerator,
       ecgValue: fields.twelveLeadValue,
+      extraCheckboxes: withCpr(false),
     },
     monthRange,
   );
 
-  return { denominator, numerator, fields };
+  /**
+   * 要排除的那批：**整個月處置勾了 CPR 的案件**（心電圖不限、EKG檢查不勾）。
+   *
+   * 刻意不加心電圖條件：分母是聯集，CPR 案件可能從「勾EKG檢查」那一邊進來，
+   * 只查「12導程＋CPR」會漏掉那些。撈全部再跟分母取交集才排得乾淨。
+   */
+  const cpr = cprBox
+    ? await queryAndExport(
+      context,
+      page,
+      fields,
+      {
+        key: 'cpr',
+        label: '要排除的：處置勾了CPR的案件（OHCA）',
+        procedureChecked: false,
+        ecgValue: '',
+        extraCheckboxes: withCpr(true),
+      },
+      monthRange,
+    )
+    : null;
+
+  return { denominator, numerator, cpr, fields };
 }

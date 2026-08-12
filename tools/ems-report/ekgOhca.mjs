@@ -143,35 +143,6 @@ export async function resolveEcgOptions(page) {
 }
 
 /**
- * 找出「急救處置」裡的 CPR 勾選框。
- *
- * 使用者 2026-08-12 給的判定規則：**處置勾了 CPR 就是 OHCA 案件**。
- * 找不到就中止並列出這一頁的勾選框旁邊各寫著什麼——這條規則是整段分析的地基，
- * 勾錯一個框會產出看起來正常但完全錯誤的清單。
- *
- * @returns {Promise<{selector: string, label: string}>}
- */
-export async function locateCprCheckbox(page) {
-  const checkbox = await findCheckbox(content(page), EKG.ohca.cprLabels);
-  if (!checkbox) {
-    const available = await listCheckboxLabels(content(page)).catch(() => []);
-    throw new Error(
-      `找不到「CPR」勾選框（試過：${EKG.ohca.cprLabels.join('、')}）。`
-        + `這一頁的勾選框旁邊寫著：${available.join('｜') || '(一個都讀不到)'}。`
-        + '請把正確字樣加進 config.mjs 的 EKG.ohca.cprLabels。',
-    );
-  }
-  log.ok(`CPR＝${checkbox.selector}（${checkbox.matchedBy}：「${checkbox.labelText}」）`);
-  if (!checkbox.matchedBy.includes('完全相符')) {
-    log.warn(
-      `　⚠ 這是「包含」比對到的，可能勾到「旁觀者CPR」之類的別的框。`
-        + '請看畫面確認，不對的話把正確字樣加進 EKG.ohca.cprLabels。',
-    );
-  }
-  return { selector: checkbox.selector, label: `CPR（${checkbox.labelText}）` };
-}
-
-/**
  * 每一種心電圖類型各查一次並匯出，讀進記憶體後立刻刪檔。
  *
  * 每一次查詢都套用**同一組基準條件**（已結案＋送醫，與正式報表同口徑），

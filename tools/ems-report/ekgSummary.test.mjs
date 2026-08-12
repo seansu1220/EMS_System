@@ -137,3 +137,35 @@ test('報告本身要提醒不能發給分隊', async () => {
   const text = await render();
   assert.match(text, /不要發給分隊/);
 });
+
+test('排除的 OHCA 案件要在報告上交代清楚，不可以默默少掉', () => {
+  return render({
+    excluded: {
+      cases: [
+        { temsis: '2026071210100315383901', squad: '三民分隊', caseDate: '2026/07/12 15:38:39', from: '有12導程' },
+        { temsis: '2026071010100321472201', squad: '龜山分隊', caseDate: '2026/07/10 21:47:22', from: '有勾EKG檢查、有12導程' },
+      ],
+      countsBySquad: new Map([['三民分隊', 1], ['龜山分隊', 1]]),
+    },
+  }).then((text) => {
+    assert.match(text, /## 已排除的案件（處置勾了 CPR ＝ OHCA）/);
+    assert.match(text, /共 2 件，\*\*分母與分子都不計入\*\*/);
+    assert.match(text, /三民分隊 1 件、龜山分隊 1 件/);
+    // 結論那一段也要提一句，免得只看數字的人以為分母算錯了。
+    assert.match(text, /以上已排除 2 件 OHCA/);
+    // TEMSIS 只寫末 4 碼（與這份報告其餘部分同一個標準）。
+    assert.ok(!text.includes('2026071210100315383901'), '摘要不寫完整 TEMSIS');
+    assert.match(text, /\*+3901/);
+  });
+});
+
+test('沒有排除的案件時，不要留一個空的排除段落', () => {
+  return Promise.all([
+    render({ excluded: { cases: [], countsBySquad: new Map() } }),
+    render({}),
+  ]).then(([empty, missing]) => {
+    assert.ok(!empty.includes('已排除的案件'), '一件都沒有就整段不寫');
+    assert.ok(!missing.includes('已排除的案件'), '沒傳這個欄位也不該出現');
+    assert.ok(!empty.includes('以上已排除'), '結論那一句也不該出現');
+  });
+});

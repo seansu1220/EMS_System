@@ -86,6 +86,34 @@ function buildTodoList(outcomes, appeals) {
   return todo;
 }
 
+/**
+ * 被排除的 OHCA 案件（處置勾了 CPR）那一段。一件都沒有就整段不寫。
+ *
+ * ⚠ 這一段**非寫不可**。分隊拿自己的件數來對時，少掉的那幾件如果沒有交代，
+ * 就變成一個查不出原因的差異——而排除本身是使用者的規則，不是錯誤，
+ * 講清楚反而是這份報告最有價值的地方。
+ */
+function buildExcludedSection(excluded) {
+  if (!excluded || excluded.cases.length === 0) return [];
+
+  const lines = [
+    '## 已排除的案件（處置勾了 CPR ＝ OHCA）',
+    '',
+    `共 ${excluded.cases.length} 件，**分母與分子都不計入**。`
+      + 'OHCA 心電圖與 12 導程心電圖是兩回事，不列入 12 導程的傳輸率。',
+    '',
+    `各分隊：${describeCounts(excluded.countsBySquad)}`,
+    '',
+    '| 分隊 | 案件日期 | TEMSIS | 原本出現在 |',
+    '| --- | --- | --- | --- |',
+  ];
+  for (const item of excluded.cases) {
+    lines.push(`| ${item.squad} | ${item.caseDate} | ${maskCode(item.temsis)} | ${item.from} |`);
+  }
+  lines.push('', '> 完整 TEMSIS 見逐案判定表，這幾件列在最前面。', '');
+  return lines;
+}
+
 /** 分隊申訴那一段。沒有申訴表就整段不寫。 */
 function buildAppealSection(appeals) {
   if (!appeals) return ['## 分隊申訴表', '', '這次沒有讀申訴表（未設定網址或讀取失敗）。', ''];
@@ -152,6 +180,9 @@ function buildPendingSection(outcomes) {
  * @param {{ekgChecked: number, twelveLead: number, union: number}} input.sourceCounts 調整前的原始件數
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} input.outcomes
  * @param {Object|null} input.appeals `applyAppealSheet()` 的回傳
+ * @param {{cases: import('./ekgExclude.mjs').ExcludedCase[],
+ *   countsBySquad: Map<string, number>}} [input.excluded]
+ *   因為處置勾了 CPR（OHCA）而排除在分母外的案件
  * @param {string[]} input.files 這次產出的檔案（相對路徑）
  * @returns {Promise<string>} 檔案路徑
  */
@@ -178,7 +209,10 @@ export async function writeRunSummary(input) {
     `| 全局傳輸率 | **${ratio}** |`,
     '',
     `分母組成：有勾EKG檢查 ${sourceCounts.ekgChecked} 件 ∪ 有12導程 ${sourceCounts.twelveLead} 件`
-      + ` = ${sourceCounts.union} 件${denominator > sourceCounts.union ? `，申訴另補 ${denominator - sourceCounts.union} 件` : ''}。`,
+      + ` = ${sourceCounts.union} 件${denominator > sourceCounts.union ? `，申訴另補 ${denominator - sourceCounts.union} 件` : ''}。`
+      + (input.excluded?.cases.length
+        ? `（以上已排除 ${input.excluded.cases.length} 件 OHCA——處置勾了 CPR，詳見下方。）`
+        : ''),
     '',
     '## 逐案查核',
     '',
@@ -199,6 +233,7 @@ export async function writeRunSummary(input) {
   }
 
   lines.push(
+    ...buildExcludedSection(input.excluded),
     ...buildAppealSection(appeals),
     ...buildPendingSection(outcomes),
     '## 這次產出的檔案',

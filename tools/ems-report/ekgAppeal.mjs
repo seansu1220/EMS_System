@@ -238,8 +238,9 @@ export function matchByPlaceAndTime(appeal, cases) {
  * @param {import('./ekgLedger.mjs').DenominatorCase[]} cases 分母裡的全部案件
  * @returns {AppealResult[]}
  */
-export function matchAppeals(appeals, cases) {
+export function matchAppeals(appeals, cases, excludedCases = []) {
   const byTemsis = new Map(cases.map((item) => [item.temsis, item]));
+  const excludedByTemsis = new Map(excludedCases.map((item) => [item.temsis, item]));
 
   return appeals.map((appeal) => {
     const lengthOk = appeal.temsis.length === EKG.appeal.temsisLength;
@@ -248,6 +249,29 @@ export function matchAppeals(appeals, cases) {
     const byCode = lengthOk ? byTemsis.get(appeal.temsis) : undefined;
     const matched = byCode ?? matchByPlaceAndTime(appeal, cases);
     const matchedBy = byCode ? 'TEMSIS' : (matched ? '分隊＋發生地點＋時間相近' : '');
+
+    /**
+     * ⚠ 先看這件是不是**已經因為 OHCA 被排除**的案件。
+     *
+     * 不擋的話，排除等於白做：那件不在 `cases` 裡，於是申訴比對會判成
+     * 「新增案件」而把分母分子各補 1 回去，還順便算進分子——
+     * 比沒排除還糟（2026-08-13 實跑，平鎮 7/19 與龍岡 7/17 兩件都這樣）。
+     *
+     * 排除的理由（是 OHCA、不屬於這個指標）與申訴的理由（非個人因素沒能上傳）
+     * 是兩回事，前者優先：案件根本不該在母體裡，就沒有補不補的問題。
+     */
+    if (!matched) {
+      const excluded = (lengthOk ? excludedByTemsis.get(appeal.temsis) : undefined)
+        ?? matchByPlaceAndTime(appeal, excludedCases);
+      if (excluded) {
+        return {
+          appeal,
+          outcome: '已排除',
+          matchedBy: excludedByTemsis.has(appeal.temsis) ? 'TEMSIS' : '分隊＋發生地點＋時間相近',
+          reason: '這件的處置勾了 CPR（OHCA 案件），已排除在分母與分子之外，不因申訴補回',
+        };
+      }
+    }
 
     if (matched) {
       if (matched.counted) {
@@ -386,7 +410,7 @@ export async function fetchAppealSheet() {
  * @returns {Promise<{numerator: Map<string, number>, denominator: Map<string, number>,
  *   missingProcedure: Map<string, number>, results: AppealResult[]}|null>}
  */
-export async function applyAppealSheet(cases, monthRange) {
+export async function applyAppealSheet(cases, monthRange, excludedCases = []) {
   let rows;
   try {
     rows = await fetchAppealSheet();
@@ -400,8 +424,17 @@ export async function applyAppealSheet(cases, monthRange) {
   }
 
   const { appeals, skipped } = parseAppeals(rows, monthRange);
-  const results = matchAppeals(appeals, cases);
+  const results = matchAppeals(appeals, cases, excludedCases);
   printAppealResults(results, skipped);
+
+  // 申訴到已排除的 OHCA 案件時要講出來：分隊填了表卻沒有被補回去，
+  // 不說的話他們只會看到成績沒動，卻不知道為什麼。
+  const excludedHits = results.filter((item) => item.outcome === '已排除');
+  if (excludedHits.length > 0) {
+    log.warn(
+      `有 ${excludedHits.length} 件申訴指到「已排除的 OHCA 案件」（處置勾了 CPR），不補回分母分子。`,
+    );
+  }
 
   const adjustments = { ...tallyAdjustments(results), results, skipped };
   if (adjustments.numerator.size > 0) {

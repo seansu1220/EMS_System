@@ -152,3 +152,44 @@ test('沒有申訴時不要生出一個空的申訴分頁', () => {
   const rows = buildLedgerRows(source([只勾處置]), source([]), []);
   assert.equal(buildLedgerWorkbook(rows, MONTH, []).getWorksheet('申訴處理'), undefined);
 });
+
+test('被排除的 OHCA 案件要留在表上，而且排在最前面', () => {
+  // ⚠ 它們已經不在分母裡，但一定要看得到——分隊來對數字時，
+  //   少掉的那幾件如果不在表上，就變成查不出原因的差異。
+  const rows = buildLedgerRows(
+    source([只勾處置]),
+    source([兩者都有_過]),
+    OUTCOMES,
+    [{
+      temsis: 'T-9901', squad: '三民分隊', caseDate: '2026/07/12 15:38:39', from: '有12導程',
+    }],
+  );
+
+  assert.equal(rows.length, 3, '2 件在分母內 ＋ 1 件已排除');
+  assert.equal(rows[0][2], 'T-9901', '排除的要在第一列');
+  assert.equal(rows[0][0], '三民分隊');
+  assert.match(String(rows[0][7]), /排除.*CPR/, '判定欄要講明是為什麼被排除');
+  assert.equal(rows[0][8], '否', '排除的一律不計入分子');
+  assert.match(String(rows[0][9]), /OHCA/, '依據要說得出是 OHCA');
+});
+
+test('排除的案件要標出它原本出現在哪一份查詢結果裡', () => {
+  const rows = buildLedgerRows(
+    source([]),
+    source([]),
+    [],
+    [
+      { temsis: 'T-A', squad: '三民分隊', caseDate: '2026/07/12', from: '有12導程' },
+      { temsis: 'T-B', squad: '平鎮分隊', caseDate: '2026/07/19', from: '有勾EKG檢查、有12導程' },
+    ],
+  );
+  const [onlyTwelve, both] = rows;
+  assert.deepEqual([onlyTwelve[3], onlyTwelve[4]], ['否', '是'], '只在 12 導程那份');
+  assert.deepEqual([both[3], both[4]], ['是', '是'], '兩份都有');
+});
+
+test('沒有排除的案件時，表上一列都不會多出來', () => {
+  const rows = buildLedgerRows(source([只勾處置]), source([]), [], []);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][2], 'T-2501');
+});

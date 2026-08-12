@@ -21,6 +21,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { EKG, PATHS, UNLOCK } from './config.mjs';
+import { EXCLUDED_REASON, EXCLUDED_VERDICT } from './ekgExclude.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { buildListSheet } from './ekgLists.mjs';
 import { log } from './logger.mjs';
@@ -131,14 +132,41 @@ export function buildDenominatorCases(ekgChecked, twelveLead, outcomes) {
 }
 
 /**
+ * 把「因為是 OHCA 而被排除」的案件也組成逐案判定表的列。
+ *
+ * ⚠ 這些案件**已經不在分母裡**，但一定要出現在這張表上。
+ * 不列的話，分隊拿自己的件數來對時會發現少了一件而完全查不出原因——
+ * 而「查得出每一件算在哪」正是這張表存在的理由。
+ *
+ * @param {import('./ekgExclude.mjs').ExcludedCase[]} excludedCases
+ * @returns {unknown[][]}
+ */
+function buildExcludedRows(excludedCases) {
+  return excludedCases.map((item) => [
+    item.squad,
+    item.caseDate || '(讀不到)',
+    item.temsis,
+    item.from.includes('有勾EKG檢查') ? '是' : '否',
+    item.from.includes('有12導程') ? '是' : '否',
+    '(不適用)',
+    '(不適用)',
+    EXCLUDED_VERDICT,
+    '否',
+    EXCLUDED_REASON,
+  ]);
+}
+
+/**
  * 組出逐案判定表的資料列（純函式，不碰檔案）。
  *
  * @param {LedgerSource} ekgChecked
  * @param {LedgerSource} twelveLead
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
+ * @param {import('./ekgExclude.mjs').ExcludedCase[]} [excludedCases]
+ *   因為處置勾了 CPR（OHCA）而排除在分母外的案件
  * @returns {unknown[][]} 與 {@link LEDGER_COLUMNS} 同順序的資料列
  */
-export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
+export function buildLedgerRows(ekgChecked, twelveLead, outcomes, excludedCases = []) {
   // ⚠ 發生地點只用於申訴表比對，**不放進這裡的任何一欄**。
   const rows = buildDenominatorCases(ekgChecked, twelveLead, outcomes).map((item) => {
     // 判定欄要分得出「查核過但沒過」與「根本沒得查」——這正是分隊最容易誤會的地方。
@@ -161,10 +189,14 @@ export function buildLedgerRows(ekgChecked, twelveLead, outcomes) {
   // 沒進分子的排前面：會來對數字的，要看的就是這些。同組內再依案件日期排。
   const countedIndex = LEDGER_COLUMNS.indexOf('計入分子');
   const dateIndex = LEDGER_COLUMNS.indexOf('案件日期');
-  return rows.sort(
+  rows.sort(
     (left, right) => String(left[countedIndex]).localeCompare(String(right[countedIndex]))
       || String(left[dateIndex]).localeCompare(String(right[dateIndex])),
   );
+
+  // 被排除的放**最前面**：它們是最反直覺的一群（不在分母裡卻出現在這張表上），
+  // 而且分隊來對數字時，第一個要找的就是這些。
+  return [...buildExcludedRows(excludedCases), ...rows];
 }
 
 /** 申訴處理分頁的欄位。**不含發生地點**——那只用來比對，不輸出。 */
@@ -215,10 +247,19 @@ export function buildLedgerWorkbook(rows, monthRange, appealResults = []) {
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {import('./ekgAppeal.mjs').AppealResult[]} [appealResults]
+ * @param {import('./ekgExclude.mjs').ExcludedCase[]} [excludedCases]
+ *   因為處置勾了 CPR（OHCA）而排除在分母外的案件，列在最前面
  * @returns {Promise<string|null>} 檔案路徑；一件都沒有時回傳 null
  */
-export async function writeLedger(ekgChecked, twelveLead, outcomes, monthRange, appealResults = []) {
-  const rows = buildLedgerRows(ekgChecked, twelveLead, outcomes);
+export async function writeLedger(
+  ekgChecked,
+  twelveLead,
+  outcomes,
+  monthRange,
+  appealResults = [],
+  excludedCases = [],
+) {
+  const rows = buildLedgerRows(ekgChecked, twelveLead, outcomes, excludedCases);
   if (rows.length === 0) {
     log.warn('分母一件都沒有，不產生逐案判定表。');
     return null;
@@ -243,7 +284,8 @@ export async function writeLedger(ekgChecked, twelveLead, outcomes, monthRange, 
   const counted = rows.filter((row) => row[countedIndex] === '是').length;
   log.ok(
     `逐案判定表已寫出：${path.relative(process.cwd(), filePath)}`
-      + `（共 ${rows.length} 件，其中 ${counted} 件計入分子`
+      + `（共 ${rows.length} 列，其中 ${counted} 件計入分子`
+      + `${excludedCases.length > 0 ? `；含 ${excludedCases.length} 件已排除的 OHCA（列在最前面，不在分母內）` : ''}`
       + `${appealResults.length > 0 ? `；另有 ${appealResults.length} 件申訴列在第二個分頁` : ''}）`,
   );
   log.info('之後有人來問「某一件算在哪」，直接開這份檔案就看得到，不必重跑。');

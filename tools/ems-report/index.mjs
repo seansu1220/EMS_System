@@ -72,12 +72,14 @@ import { writeRunSummary } from './ekgSummary.mjs';
 import { pruneOldOutputs } from './retention.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
+  EKG,
   PATHS,
   BRIGADES,
   REPORT_FORMAT,
   REPORT_PROFILES,
   UNLOCK,
 } from './config.mjs';
+import { excludeOhcaCases, temsisSetOf } from './ekgExclude.mjs';
 import {
   resolveSheetSource,
   fetchSheetRows,
@@ -315,6 +317,72 @@ function warnIfNumeratorExceedsDenominator(denominatorCounts, numeratorCounts) {
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {CliOptions} options
  */
+/**
+ * 把「處置勾了 CPR」的案件從兩份匯出檔裡拿掉（**就地改寫 `table.rows`**）。
+ *
+ * 就地改寫是刻意的：後面每一段（聯集、差集清冊、逐案查核、逐案判定表）都直接讀
+ * `table.rows`，在這裡一次排乾淨，就不必在十幾個地方各記得過濾一次——
+ * 漏掉任何一處都會產出「分母排除了、分子沒排除」這種對不起來的報表。
+ *
+ * @param {string|null} cprFilePath 處置勾 CPR 的匯出檔；沒開啟排除時為 null
+ * @returns {{cases: import('./ekgExclude.mjs').ExcludedCase[],
+ *   countsBySquad: Map<string, number>, total: number}}
+ */
+function applyCprExclusion(cprFilePath, ekgChecked, numerator) {
+  const empty = { cases: [], countsBySquad: new Map(), total: 0 };
+  if (!cprFilePath) {
+    log.info('未開啟「排除處置勾CPR的案件」（config 的 EKG.excludeCprCases）。');
+    return empty;
+  }
+
+  const cprTable = readTable(cprFilePath, SQUAD_COLUMN_CANDIDATES);
+  const cprTemsisColumn = resolveColumnByNames(cprTable.headers, EKG.verify.temsisColumns)?.column;
+  if (!cprTemsisColumn) {
+    throw new Error(
+      `處置勾CPR的匯出檔找不到 TEMSIS 欄，無法排除 OHCA 案件。`
+        + `實際欄名有：${cprTable.headers.join('、')}`,
+    );
+  }
+  const excluded = temsisSetOf(cprTable.rows, cprTemsisColumn);
+  log.info(`整月處置勾了 CPR 的案件：${excluded.size} 件（依規則視為 OHCA）`);
+
+  const sourceOf = (parsed, label) => ({
+    rows: parsed.table.rows,
+    temsisColumn: resolveColumnByNames(parsed.table.headers, EKG.verify.temsisColumns)?.column ?? '',
+    squadColumn: parsed.column,
+    caseDateColumn: resolveColumnByNames(parsed.table.headers, UNLOCK.listColumns.caseDate)?.column ?? null,
+    label,
+  });
+  const sources = [
+    sourceOf(ekgChecked, '有勾EKG檢查'),
+    sourceOf(numerator, '有12導程'),
+  ];
+  const result = excludeOhcaCases(sources, excluded);
+
+  // 就地換掉資料列，後面所有統計自動跟著變。
+  // ⚠ 拿掉的那些列要留著給申訴表比對用（見下方 removedRows）。
+  ekgChecked.table.rows = result.kept[0];
+  numerator.table.rows = result.kept[1];
+  const removedRows = { ekgChecked: result.removed[0], twelveLead: result.removed[1] };
+
+  if (result.cases.length === 0) {
+    log.ok('這個月的分母裡沒有處置勾 CPR 的案件，不需要排除。');
+    return empty;
+  }
+  const listed = [...result.countsBySquad]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'))
+    .map(([squad, count]) => `${squad} ${count} 件`);
+  log.warn(`已排除 ${result.cases.length} 件 OHCA 案件（處置勾CPR），分母與分子都不計入。`);
+  log.info(`　各分隊：${listed.join('、')}`);
+  log.info('　這幾件會列在執行報告與逐案判定表上，不是默默消失。');
+  return {
+    cases: result.cases,
+    countsBySquad: result.countsBySquad,
+    total: result.cases.length,
+    removedRows,
+  };
+}
+
 async function runEkgFlow(session, monthRange, options) {
   const profile = REPORT_PROFILES.ekg;
   const rawFiles = await exportEkgDatasets(session.context, session.page, monthRange);
@@ -322,6 +390,11 @@ async function runEkgFlow(session, monthRange, options) {
   log.step('解析匯出檔並依分隊彙總');
   const ekgChecked = countFile(rawFiles.denominator, '有勾EKG檢查的案件');
   const numerator = countFile(rawFiles.numerator, '有12導程心電圖的案件（分子母體，未查核）');
+
+  // ---- 排除 OHCA 案件（處置勾了 CPR）----
+  // 使用者 2026-08-13 決定：這些案件分母分子都不算。**必須在做任何統計之前**排掉，
+  // 後面的聯集、差集清冊、逐案查核才會全部一致。
+  const excludedOhca = applyCprExclusion(rawFiles.cpr, ekgChecked, numerator);
 
   // 分母＝兩者的**聯集**（使用者 2026-08-04 決定）：實測兩邊互有出入
   // （EKG檢查 243、12導程 285、交集只有 202），用任一邊當分母都會把另一邊
@@ -415,9 +488,28 @@ async function runEkgFlow(session, monthRange, options) {
     ledgerSourceOf(numerator, denominatorColumns.twelveLead),
   ];
   const denominatorCases = buildDenominatorCases(...ledgerSources, verifyOutcomes);
+
+  /**
+   * 已排除的 OHCA 案件，整理成跟分母案件同樣的形狀。
+   *
+   * ⚠ 這個非給申訴比對不可。那些案件已經不在 `denominatorCases` 裡，
+   * 申訴表若指到它們，會被判成「新增案件」而**把分母分子各補 1 回去**，
+   * 排除等於白做（2026-08-13 實跑，平鎮 7/19 與龍岡 7/17 兩件都這樣）。
+   * 用原始資料列建，才帶得到發生地點與時間——17 碼那種 TEMSIS 只能靠它們配對。
+   */
+  const excludedCases = excludedOhca.removedRows
+    ? buildDenominatorCases(
+      { ...ledgerSources[0], rows: excludedOhca.removedRows.ekgChecked },
+      { ...ledgerSources[1], rows: excludedOhca.removedRows.twelveLead },
+      [],
+    )
+    : [];
+
   // 查核不完整時不套用申訴：那時多數案件還沒有查核結果，會把「還沒查」誤當成
   // 「查了沒過」而全部補進分子，數字會憑空變好看。
-  const appeals = incomplete ? null : await applyAppealSheet(denominatorCases, monthRange);
+  const appeals = incomplete
+    ? null
+    : await applyAppealSheet(denominatorCases, monthRange, excludedCases);
 
   // 申訴補進來、系統查不到的那些案件，也要列進「有處置未勾選清冊」提醒補勾。
   const appealRows = (appeals?.results ?? [])
@@ -463,6 +555,7 @@ async function runEkgFlow(session, monthRange, options) {
       verifyOutcomes,
       monthRange,
       appeals?.results ?? [],
+      excludedOhca.cases,
     );
   }
   const produced = [];
@@ -488,6 +581,7 @@ async function runEkgFlow(session, monthRange, options) {
       },
       outcomes: verifyOutcomes,
       appeals,
+      excluded: excludedOhca,
       files: produced,
     });
     produced.push(`out/internal/${path.basename(summaryPath)}（**先看這份**：狀況摘要與待確認事項）`);

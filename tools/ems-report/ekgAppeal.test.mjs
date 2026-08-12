@@ -254,3 +254,67 @@ test('後備比對：分隊不同就不算同一件（地點與時間都對也�
   };
   assert.equal(matchByPlaceAndTime(appeal, CASES), null);
 });
+
+test('申訴指到已排除的 OHCA 案件時不補回去，排除才不會白做', () => {
+  // ⚠ 2026-08-13 實跑踩到：那些案件不在分母裡，申訴比對就判成「新增案件」
+  //   而把分母分子各補 1 回去，比沒排除還糟（還順便算進分子）。
+  const appeal = {
+    temsis: '2026071910100312131702', squad: '平鎮分隊', caseDate: '2026/07/19',
+    epochMs: Date.parse('2026-07-19T12:13:17Z'), hasTime: true, place: '',
+  };
+  const excluded = [{
+    temsis: '2026071910100312131702', squad: '平鎮分隊', caseDate: '2026/07/19 12:13:17',
+    epochMs: Date.parse('2026-07-19T12:13:17Z'), place: '中山路一段', counted: false,
+  }];
+
+  const [result] = matchAppeals([appeal], [], excluded);
+  assert.equal(result.outcome, '已排除');
+  assert.equal(result.matchedBy, 'TEMSIS');
+  assert.match(result.reason, /CPR|OHCA/);
+
+  // 三項調整一件都不可以動。
+  const adjustments = tallyAdjustments([result]);
+  assert.equal(adjustments.numerator.size, 0);
+  assert.equal(adjustments.denominator.size, 0);
+  assert.equal(adjustments.missingProcedure.size, 0);
+});
+
+test('TEMSIS 長度不對時，也要能靠分隊＋地點＋時間認出已排除的案件', () => {
+  // 龍岡那件申訴的 TEMSIS 只有 17 碼，只能靠地點時間配對。
+  const appeal = {
+    temsis: '20260717101000024', squad: '龍岡分隊', caseDate: '2026/07/17 11:07',
+    epochMs: Date.parse('2026-07-17T11:07:24Z'), hasTime: true, place: '龍慈路二段',
+  };
+  const excluded = [{
+    temsis: '2026071710100311072401', squad: '龍岡分隊', caseDate: '2026/07/17 11:07:24',
+    epochMs: Date.parse('2026-07-17T11:07:24Z'), place: '龍慈路二段', counted: false,
+  }];
+
+  const [result] = matchAppeals([appeal], [], excluded);
+  assert.equal(result.outcome, '已排除');
+  assert.equal(result.matchedBy, '分隊＋發生地點＋時間相近');
+});
+
+test('分母裡找得到的案件優先，不會被誤判成已排除', () => {
+  const appeal = {
+    temsis: '2026072010100320182701', squad: '平鎮分隊', caseDate: '2026/7/20 20:20',
+    epochMs: Date.parse('2026-07-20T20:18:27Z'), hasTime: true, place: '',
+  };
+  const inDenominator = [{
+    temsis: '2026072010100320182701', squad: '平鎮分隊', caseDate: '2026/07/20 20:18:27',
+    epochMs: Date.parse('2026-07-20T20:18:27Z'), place: '', counted: false,
+  }];
+
+  const [result] = matchAppeals([appeal], inDenominator, inDenominator);
+  assert.notEqual(result.outcome, '已排除');
+  assert.equal(result.outcome, '補進分子');
+});
+
+test('沒傳已排除清單時，行為與從前完全相同', () => {
+  const appeal = {
+    temsis: '2026071910100312131702', squad: '平鎮分隊', caseDate: '2026/07/19',
+    epochMs: Date.parse('2026-07-19T12:13:17Z'), hasTime: true, place: '',
+  };
+  const [result] = matchAppeals([appeal], []);
+  assert.equal(result.outcome, '新增案件');
+});
