@@ -56,6 +56,7 @@ import {
 import { printReport, writeReport } from './report.mjs';
 import { exportEkgDatasets } from './ekgScrape.mjs';
 import { runEkgDiagnose } from './ekgDiagnose.mjs';
+import { diagnoseOhca } from './ekgOhca.mjs';
 import {
   resolveEkgColumns,
   buildCaseList,
@@ -89,13 +90,13 @@ import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
 const COMMANDS = [
-  'run', 'ekg', 'ekg-diag', 'monthly', 'probe', 'check-sheet',
+  'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'monthly', 'probe', 'check-sheet',
   'unlock', 'unlock-online', 'unlock-watch',
 ];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'ekg-diag'|'monthly'|'check-sheet'|'unlock'|'unlock-online'
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'monthly'|'check-sheet'|'unlock'|'unlock-online'
  *   |'unlock-watch'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
@@ -827,6 +828,10 @@ async function main() {
     }
     if (options.command === 'ekg-diag') {
       await runEkgDiagnose(session, monthRange);
+      return;
+    }
+    if (options.command === 'ekg-ohca') {
+      await diagnoseOhca(session.context, session.page, monthRange, { temsis: options.temsis });
       return;
     }
     if (options.command === 'monthly') {

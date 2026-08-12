@@ -162,7 +162,11 @@ export async function applyBaseCriteria(page, monthRange, criteria = {}) {
  * 兩邊走完全同一條路，量出來的數字才和正式流程對得起來。
  *
  * @param {EkgFields} fields
- * @param {{key: string, label: string, procedureChecked: boolean, ecgValue: string}} dataset
+ * @param {{key: string, label: string, procedureChecked: boolean, ecgValue: string,
+ *   ecgLabel?: string,
+ *   extraCheckboxes?: {selector: string, checked: boolean, label: string}[]}} dataset
+ *   `ecgLabel`＝這次選的心電圖類型叫什麼（只影響畫面訊息）。不給就當成 12 導程。
+ *   `extraCheckboxes`＝其他要設定的勾選框，**每次查詢都要完整列出**（見下方註解）。
  * @returns {Promise<string>} 匯出檔路徑
  */
 export async function queryAndExport(context, page, fields, dataset, monthRange) {
@@ -176,12 +180,24 @@ export async function queryAndExport(context, page, fields, dataset, monthRange)
     'EKG檢查',
   );
 
+  // 其他要一併設定的勾選框（目前只有診斷用的 CPR）。
+  // ⚠ 呼叫端**每一次查詢都要把它們列出來並指定 true/false**，不能只在要勾的那次傳。
+  //   少傳一次，上一輪勾的就會留著，後面每一次查詢都被多加了一個條件。
+  for (const extra of dataset.extraCheckboxes ?? []) {
+    await tryReveal(page, extra.selector, extra.label);
+    await setFrameCheckbox(content(page), extra.selector, extra.checked, extra.label);
+  }
+
   await tryReveal(page, fields.ecgSelector, '心電圖');
+  // ⚠ 訊息一定要用**這次真正選的**那個類型的名字。
+  //   舊版寫死 `fields.twelveLeadText`，於是 `ekg-ohca` 查 OHCA 時畫面上照樣印
+  //   「心電圖＝12導程心電圖（已確認）」——值其實是對的（件數 284／18／18 明顯不同），
+  //   但訊息看起來像三次都查同一個條件，整份診斷結果都會被懷疑（2026-08-12 實跑發現）。
   await selectFrameField(
     content(page),
     fields.ecgSelector,
     dataset.ecgValue,
-    dataset.ecgValue ? `心電圖＝${fields.twelveLeadText}` : '心電圖＝不限',
+    dataset.ecgValue ? `心電圖＝${dataset.ecgLabel ?? fields.twelveLeadText}` : '心電圖＝不限',
   );
 
   log.info('按下查詢，等待結果');
