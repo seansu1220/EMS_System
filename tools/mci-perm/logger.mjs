@@ -188,6 +188,23 @@ export async function startLineBuffering() {
   await ensureInterface();
 }
 
+/**
+ * 取走目前緩衝的輸入行（並清空）。
+ *
+ * 給**常駐監看**用：它不能像一般流程那樣停在 `prompt()` 等人輸入，
+ * 那會讓監看整個停擺。改成使用者隨時貼、主迴圈每輪來收一次。
+ *
+ * 沒有開啟緩衝（見 {@link startLineBuffering}）時回傳空陣列。
+ *
+ * @returns {string[]}
+ */
+export function takeBufferedLines() {
+  if (!bufferedLines) return [];
+  const taken = bufferedLines.slice();
+  bufferedLines.length = 0;
+  return taken;
+}
+
 /** 停止緩衝，並丟棄尚未取用的行。 */
 export function stopLineBuffering() {
   bufferedLines = null;

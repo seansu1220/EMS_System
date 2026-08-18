@@ -14,6 +14,8 @@
     "tool:ems:test": "node --test tools/ems-report/*.test.mjs",
     "tool:mci": "node tools/mci-perm/index.mjs",
     "tool:mci:test": "node --test tools/mci-perm/*.test.mjs",
+    "tool:duty": "node tools/duty-watch/index.mjs",
+    "tool:duty:test": "node --test tools/duty-watch/*.test.mjs",
     "deploy": "npm run build && firebase deploy"
   },
   "dependencies": {

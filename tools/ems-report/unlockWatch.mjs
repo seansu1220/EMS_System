@@ -51,7 +51,7 @@ function clock(date = new Date()) {
  *
  * @returns {Promise<boolean>} 心跳之後是否仍在登入狀態
  */
-async function heartbeat(session) {
+export async function heartbeat(session) {
   try {
     await gotoRecordQuery(session.page);
   } catch (error) {
@@ -69,7 +69,7 @@ async function heartbeat(session) {
  *
  * @returns {Promise<{done: number, requeued: number}>}
  */
-async function processBatch(session, queue, requests) {
+export async function processBatch(session, queue, requests) {
   let requeued = 0;
   const outcomes = await runUnlockFlow(session, {
     temsisList: requests.map((request) => request.temsis),

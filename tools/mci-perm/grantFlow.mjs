@@ -206,7 +206,7 @@ async function findQueryPageFrame(session) {
  * 處理完一位要再查下一位時，就是靠它回到有選單的地方。
  * 按不到才退回重新開登入網址（那一頁在已登入時就是主畫面）。
  */
-async function backToMainMenu(session) {
+export async function backToMainMenu(session) {
   const page = activePage(session);
   const clicked = await clickAnywhere(page, SITE.flow.backToMenuTexts);
   if (!clicked) return false;
