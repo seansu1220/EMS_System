@@ -21,14 +21,20 @@ import {
   listFields,
   listSelects,
 } from './domFind.mjs';
-import { openAccountPermissionPage } from './grantFlow.mjs';
+import { openAccountPermissionPage, waitForOptions } from './grantFlow.mjs';
 import { log } from './logger.mjs';
 
 /** 把一個畫面的結構整理成 Markdown 段落。 */
 async function describePage(page, title) {
   const lines = [`## ${title}`, ``];
   const frames = page.frames();
-  lines.push(`- 版面：${frames.length} 個 frame（${frames.map((frame) => frame.name() || '主文件').join('、')}）`, ``);
+  lines.push(
+    `- 網址：${page.url()}`,
+    `- 分頁標題：${await page.title().catch(() => '(讀不到)')}`,
+    `- 同時開著幾個分頁：${page.context().pages().length}`,
+    `- 版面：${frames.length} 個 frame（${frames.map((frame) => frame.name() || '主文件').join('、')}）`,
+    ``,
+  );
 
   for (const frame of frames) {
     const frameName = frame.name() || '主文件';
@@ -38,13 +44,17 @@ async function describePage(page, title) {
     if (fields.length === 0 && clickables.length === 0) continue;
 
     lines.push(`### frame：${frameName}`, ``);
+    if (frames.length > 1) lines.push(`- frame 網址：${frame.url()}`, ``);
     if (fields.length > 0) {
-      lines.push(`**欄位**（標籤／類型／選擇器）`, ``);
+      // 標籤認不出來時，id／name／placeholder 就是判斷「這一欄是什麼」的唯一線索，
+      // 因此每一欄都完整列出來（2026-08-18 實跑就是卡在三個「沒有標籤」的欄位）。
+      lines.push(`**欄位**（標籤／類型／id／name／提示文字）`, ``);
       for (const field of fields) {
         const type = field.type ? `${field.tag}:${field.type}` : field.tag;
         lines.push(
-          `- ${field.nearbyText || '(沒有標籤)'}｜${type}｜${field.selector || '(沒有 id/name)'}` +
-            `${field.visible ? '' : '｜(看不見)'}`,
+          `- ${field.nearbyText || '(沒有標籤)'}｜${type}` +
+            `｜id=${field.id || '無'}｜name=${field.name || '無'}` +
+            `｜提示=${field.hint || '無'}${field.visible ? '' : '｜(看不見)'}`,
         );
       }
       lines.push(``);
@@ -52,7 +62,10 @@ async function describePage(page, title) {
     if (selects.length > 0) {
       lines.push(`**下拉選單與選項**`, ``);
       for (const select of selects) {
-        lines.push(`- ${select.nearbyText || '(沒有標籤)'}｜${select.selector || '(沒有 id/name)'}｜共 ${select.optionCount} 個選項`);
+        lines.push(
+          `- ${select.nearbyText || '(沒有標籤)'}｜id=${select.id || '無'}｜name=${select.name || '無'}` +
+            `｜共 ${select.optionCount} 個選項`,
+        );
         for (const option of select.options) {
           if (option) lines.push(`  - ${option}`);
         }
@@ -110,9 +123,16 @@ export async function runProbe(session, options = {}) {
       `- 當時畫面上看得到：${(opened.candidates ?? []).join('、')}`,
       ``,
     );
+    // 進不去才是最需要完整記錄的時候：把當時的畫面整個記下來，
+    // 才有辦法看出「到底停在哪一頁、那些沒有標籤的欄位是什麼」。
+    lines.push(...(await describePage(session.context.pages().at(-1) ?? page, '卡住時的畫面')));
     log.warn(`進不去查詢畫面：${opened.detail}`);
     return writeProbeFile(lines);
   }
+  // 單位清單是進頁面後才由伺服器載入的，不等就記錄會得到一個「0 個選項」的空下拉
+  // （2026-08-18 第一次探測就是這樣，等於白跑）。
+  const loaded = await waitForOptions(opened.frame, SITE.flow.querySelectors.unit);
+  log.info(loaded ? '單位清單已載入' : '等不到單位清單載入（下面記到的選項可能是空的）');
   lines.push(...(await describePage(session.context.pages().at(-1) ?? page, '帳號子系統權限：查詢畫面')));
 
   if (options.unit && options.name) {

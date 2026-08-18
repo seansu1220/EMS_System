@@ -63,7 +63,19 @@ function queryPage(params) {
     return '';
   };
 
-  /** 這個欄位旁邊看得到的文字（依序：label → 同列前一格 → 前面的兄弟節點）。 */
+  /**
+   * 這個欄位旁邊看得到的文字。
+   *
+   * 依序試七種版面寫法——實跑（2026-08-18）發現目標系統**不是**老式表格排版，
+   * 只認 `td` 的話三個查詢欄位全部回報「沒有標籤」，等於誰都找不到：
+   *   1. `label[for=id]`
+   *   2. 包住欄位的 `<label>`
+   *   3. 同一格（td/th）的前一格 → 老式表格排版
+   *   4. 同一格內的文字（「姓名：<input>」）
+   *   5. 前面的兄弟節點
+   *   6. **同一個容器裡的 label／文字**（`<div><label>姓名</label><input></div>`）
+   *   7. **往上兩層容器的前一個容器**（`<div class=col>姓名</div><div class=col><input></div>`）
+   */
   const nearbyTextOf = (element) => {
     if (element.id) {
       const label = document.querySelector('label[for="' + CSS.escape(element.id) + '"]');
@@ -74,7 +86,7 @@ function queryPage(params) {
 
     const cell = element.closest ? element.closest('td, th') : null;
     if (cell) {
-      // 政府系統多半是表格排版：標籤在左邊那一格。
+      // 政府系統的老式表格排版：標籤在左邊那一格。
       let previous = cell.previousElementSibling;
       while (previous) {
         const text = clean(previous.textContent);
@@ -91,8 +103,36 @@ function queryPage(params) {
       if (text) return text;
       sibling = sibling.previousSibling;
     }
+
+    // 現代版面：往上找容器，看看同一個容器裡（或前一個容器裡）寫著什麼。
+    let container = element.parentElement;
+    for (let depth = 0; container && depth < 3; depth += 1) {
+      const ownLabel = container.querySelector('label, .control-label, .field-label, legend');
+      if (ownLabel && !ownLabel.contains(element)) {
+        const text = clean(ownLabel.textContent);
+        if (text) return text;
+      }
+      let previousBox = container.previousElementSibling;
+      while (previousBox) {
+        // 前一個容器若本身也含輸入欄，那是另一個欄位，不是這個欄位的標籤。
+        if (!previousBox.querySelector('input, select, textarea')) {
+          const text = clean(previousBox.textContent);
+          if (text) return text;
+        }
+        previousBox = previousBox.previousElementSibling;
+      }
+      container = container.parentElement;
+    }
     return '';
   };
+
+  /** 欄位自己身上的提示文字（沒有標籤時，placeholder 往往就是唯一的線索）。 */
+  const selfHintOf = (element) =>
+    clean(
+      [element.getAttribute('placeholder'), element.getAttribute('title'), element.getAttribute('aria-label')]
+        .filter(Boolean)
+        .join(' '),
+    );
 
   /** 所有可輸入的欄位（隱藏欄不算）。 */
   const inputElements = () =>
@@ -105,9 +145,33 @@ function queryPage(params) {
     tag: element.tagName.toLowerCase(),
     type: (element.getAttribute('type') || '').toLowerCase(),
     nearbyText: nearbyTextOf(element),
+    // id／name／提示文字：標籤認不出來時，這些是判斷「這一欄到底是什麼」的線索。
+    id: element.id || '',
+    name: element.name || '',
+    hint: selfHintOf(element),
     matchedBy: matchedBy || '',
     visible: isVisible(element),
   });
+
+  /**
+   * 這個欄位是不是「候選字說的那一欄」。
+   *
+   * 比對三個地方：旁邊的文字、欄位自己的提示（placeholder 等）、以及 id／name。
+   * 標籤認不出來的版面上，`id="txtName"` 往往是唯一分得出欄位的東西。
+   */
+  const fieldMatchesLabel = (element, candidate, exact, maxLabelLength) => {
+    const nearby = nearbyTextOf(element).replace(/[：:＊*]/g, '').trim();
+    if (nearby && nearby.length <= maxLabelLength && matches(nearby, candidate, exact)) return true;
+    const hint = selfHintOf(element);
+    if (hint && matches(hint, candidate, exact)) return true;
+    // id／name 是英文代碼，只在「非完全相符」那一輪比對，且要求候選字本身是英數
+    // （中文候選拿去比對 id 沒有意義，只會誤中）。
+    if (!exact && /^[A-Za-z0-9_]+$/.test(candidate)) {
+      const code = (element.id + ' ' + (element.name || '')).toLowerCase();
+      if (code && matches(code, candidate.toLowerCase(), false)) return true;
+    }
+    return false;
+  };
 
   /** 元素上「看得到的文字」：優先自己的文字，其次 value / title / alt。 */
   const textOf = (element) => {
@@ -184,9 +248,7 @@ function queryPage(params) {
         const hit = fields.find((element) => {
           if (params.onlyVisible !== false && !isVisible(element)) return false;
           if (params.tag && element.tagName.toLowerCase() !== params.tag) return false;
-          const nearby = nearbyTextOf(element).replace(/[：:＊*]/g, '').trim();
-          if (!nearby || nearby.length > maxLabelLength) return false;
-          return matches(nearby, candidate, exact);
+          return fieldMatchesLabel(element, candidate, exact, maxLabelLength);
         });
         if (hit) return describeField(hit, candidate);
       }
@@ -204,9 +266,7 @@ function queryPage(params) {
         const hit = fields.find((element) => {
           if (!isVisible(element)) return false;
           if (params.tag && element.tagName.toLowerCase() !== params.tag) return false;
-          const nearby = nearbyTextOf(element).replace(/[：:＊*]/g, '').trim();
-          if (!nearby || nearby.length > maxLabelLength) return false;
-          return matches(nearby, candidate, exact);
+          return fieldMatchesLabel(element, candidate, exact, maxLabelLength);
         });
         if (!hit) continue;
         hit.focus();
@@ -253,6 +313,9 @@ function queryPage(params) {
       .map((element) => ({
         selector: selectorOf(element),
         nearbyText: nearbyTextOf(element),
+        id: element.id || '',
+        name: element.name || '',
+        hint: selfHintOf(element),
         visible: isVisible(element),
         optionCount: element.options.length,
         // 選項名稱屬表單結構（單位清單、角色清單），可安全記錄；仍遮蔽長數字。
@@ -297,13 +360,36 @@ function queryPage(params) {
   };
 
   if (mode === 'selectOption') {
+    const labels = params.labels || [];
     const element = params.selector
       ? document.querySelector(params.selector)
       : Array.prototype.slice
           .call(document.querySelectorAll('select'))
-          .find((candidate) => isVisible(candidate) && matches(nearbyTextOf(candidate), (params.labels || [''])[0], false));
+          .find(
+            (candidate) =>
+              isVisible(candidate) && labels.some((label) => fieldMatchesLabel(candidate, label, false, 30)),
+          );
     if (!element) return { ok: false, reason: '找不到下拉選單', ambiguous: [] };
     return chooseOption(element, params.texts);
+  }
+
+  if (mode === 'selectAnywhere') {
+    // 「選項裡有這個字的那個下拉」——用在不知道欄位叫什麼、但知道要選什麼的時候
+    // （登入頁的縣市別就是這樣：整頁不會有第二個下拉含「桃園市」）。
+    const selects = Array.prototype.slice.call(document.querySelectorAll('select')).filter(isVisible);
+    for (const element of selects) {
+      const result = chooseOption(element, params.texts);
+      if (result.ok) return { ...result, selector: selectorOf(element) };
+    }
+    return {
+      ok: false,
+      reason: selects.length === 0 ? '這一頁沒有看得見的下拉選單' : '每個下拉都找不到相符的選項',
+      ambiguous: selects
+        .slice(0, 5)
+        .flatMap((element) =>
+          Array.prototype.slice.call(element.options).slice(0, 8).map((option) => clean(option.textContent)),
+        ),
+    };
   }
 
   if (mode === 'rowSelectOption') {
@@ -383,6 +469,15 @@ function queryPage(params) {
       if (bodyRows.length > best) best = bodyRows.length;
     }
     return best;
+  }
+
+  if (mode === 'matchText') {
+    // 只回傳比對到的那一小段（例如筆數的數字），**不回傳整頁文字**——
+    // 這一頁的表格裡是人事資料，整頁文字屬個資，不能帶出來。
+    const body = document.body ? document.body.innerText : '';
+    const found = body.match(new RegExp(params.pattern));
+    if (!found) return '';
+    return found[1] != null ? found[1] : found[0];
   }
 
   if (mode === 'hasText') {
@@ -519,6 +614,18 @@ export async function selectOptionByText(frame, selector, textCandidates, labels
 }
 
 /**
+ * 在整頁的下拉裡找出「有這個選項」的那一個並選它。
+ *
+ * 用在**知道要選什麼、但不知道欄位叫什麼**的場合——登入頁的縣市別就是這樣：
+ * 那一欄沒有可靠的標籤，但整頁不會有第二個下拉含「桃園市」。
+ *
+ * @returns {Promise<{ok:boolean, chosen?:string, selector?:string, reason?:string, ambiguous?:string[]}>}
+ */
+export async function selectOptionAnywhere(frame, textCandidates) {
+  return frame.evaluate(queryPage, { mode: 'selectAnywhere', texts: textCandidates });
+}
+
+/**
  * 在「含指定項目的那一列」的下拉選單裡選出角色。
  *
  * 對應的是「MCI大量傷病患救護管理系統 旁邊的那個下拉」這種版面：
@@ -544,6 +651,22 @@ export async function rowAction(frame, options) {
 /** 目前畫面上最大的表格有幾列資料（只數列數，不取內容）。 */
 export async function countDataRows(frame) {
   return frame.evaluate(queryPage, { mode: 'dataRowCount' });
+}
+
+/**
+ * 用樣式比對畫面文字，回傳命中的那一小段（有括號群組就回傳第一組）。
+ *
+ * 給「顯示第 1 至 10 項結果，共 26 項」這種筆數文字用：**系統自己講的筆數**
+ * 比數畫面上有幾個按鈕可靠（按鈕會被分頁切掉）。
+ *
+ * ⚠ 只回傳命中的片段，不回傳整頁文字（那一頁的表格內容是個資）。
+ *
+ * @param {RegExp|string} pattern
+ * @returns {Promise<string>} 沒命中時為空字串
+ */
+export async function matchText(frame, pattern) {
+  const source = pattern instanceof RegExp ? pattern.source : String(pattern);
+  return frame.evaluate(queryPage, { mode: 'matchText', pattern: source });
 }
 
 /**

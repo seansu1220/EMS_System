@@ -23,6 +23,7 @@ import {
   findLoginFields,
   hasText,
   listClickableTexts,
+  listFields,
   listSelects,
   rowAction,
   selectOptionByText,
@@ -88,6 +89,30 @@ const PERMISSION_FIXTURE = `
   </tr>
 </table>
 <input type="button" value="確定">`;
+
+/**
+ * 仿照**現代版面**的查詢頁（div 排版，不是表格）。
+ *
+ * 2026-08-18 第一次實跑目標系統時，三個查詢欄位全部被判成「沒有標籤」，
+ * 因為當時只認得老式表格排版。這張假頁面就是照那次的教訓造的：
+ * 標籤在前一個容器、在同一個容器、或根本只有 placeholder。
+ */
+const MODERN_FIXTURE = `
+<div class="row">
+  <div class="col-2"><label>單位</label></div>
+  <div class="col-4">
+    <select id="unitSel">
+      <option value="">請選擇</option>
+      <option value="1">測試甲分隊</option>
+      <option value="2">測試乙分隊</option>
+    </select>
+  </div>
+</div>
+<div class="form-group"><label>姓名</label><input type="text" id="nameInput"></div>
+<div class="form-group"><label>帳號關鍵字</label><input type="text" id="kwInput" value="殘留值"></div>
+<div class="form-group"><label>帳號</label><input type="text" id="acctInput" value="不該被動到"></div>
+<div class="form-group"><input type="text" id="phoneInput" placeholder="請輸入聯絡電話"></div>
+<button type="button">搜尋</button>`;
 
 /** 仿照登入頁：帳號、密碼、驗證碼三欄，欄位 id 取名方式與政府系統相近。 */
 const LOGIN_FIXTURE = `
@@ -244,6 +269,53 @@ test('找不到那一列時明講找不到，不會退而求其次點別的', { 
   const result = await rowAction(frame, { rowTexts: ['這一頁沒有的系統'], dryRun: true });
   assert.equal(result.ok, false);
   assert.equal(result.rowCount, 0);
+});
+
+test('現代版面：標籤在前一個容器裡也找得到（單位下拉）', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  const found = await findField(frame, SITE.flow.unitLabels, { tag: 'select' });
+  assert.equal(found.selector, '#unitSel');
+});
+
+test('現代版面：標籤是同一個容器裡的 label 也找得到（姓名）', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  const found = await findField(frame, SITE.flow.nameLabels, { tag: 'input' });
+  assert.equal(found.selector, '#nameInput');
+});
+
+test('現代版面：「帳號關鍵字」仍然不會誤中「帳號」', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  assert.equal((await findField(frame, SITE.flow.accountKeywordLabels, { tag: 'input' })).selector, '#kwInput');
+  assert.equal((await findField(frame, ['帳號'], { tag: 'input' })).selector, '#acctInput');
+});
+
+test('現代版面：整套填值只動該動的兩欄', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  await setField(frame, SITE.flow.nameLabels, '測試甲', { tag: 'input' });
+  await setField(frame, SITE.flow.accountKeywordLabels, '', { tag: 'input' });
+  assert.equal(await frame.inputValue('#nameInput'), '測試甲');
+  assert.equal(await frame.inputValue('#kwInput'), '');
+  assert.equal(await frame.inputValue('#acctInput'), '不該被動到');
+});
+
+test('現代版面：沒有標籤時用 placeholder 認欄位', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  const found = await findField(frame, ['聯絡電話'], { tag: 'input' });
+  assert.equal(found.selector, '#phoneInput');
+});
+
+test('沒有給選擇器時，現代版面的單位下拉也選得到', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  const result = await selectOptionByText(frame, '', ['測試甲分隊'], SITE.flow.unitLabels);
+  assert.equal(result.ok, true);
+  assert.equal(await frame.inputValue('#unitSel'), '1');
+});
+
+test('排查清單會帶出 id 與 placeholder（標籤認不出來時的唯一線索）', { skip }, async () => {
+  const frame = await load(MODERN_FIXTURE);
+  const fields = await listFields(frame);
+  const phone = fields.find((field) => field.id === 'phoneInput');
+  assert.equal(phone.hint, '請輸入聯絡電話');
 });
 
 test('認得出登入頁的帳號、密碼、驗證碼與登入鈕', { skip }, async () => {
