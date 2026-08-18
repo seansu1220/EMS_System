@@ -12,6 +12,8 @@
     "test:rules": "node scripts/run-rules-test.mjs",
     "tool:ems": "node tools/ems-report/index.mjs",
     "tool:ems:test": "node --test tools/ems-report/*.test.mjs",
+    "tool:mci": "node tools/mci-perm/index.mjs",
+    "tool:mci:test": "node --test tools/mci-perm/*.test.mjs",
     "deploy": "npm run build && firebase deploy"
   },
   "dependencies": {
