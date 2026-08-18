@@ -430,9 +430,12 @@ function queryPage(params) {
     );
     const actions = candidates.filter((element) => {
       if (!isVisible(element)) return false;
-      if (!params.actionTexts || params.actionTexts.length === 0) return true;
       const tag = element.tagName.toLowerCase();
       const type = (element.getAttribute('type') || '').toLowerCase();
+      // 勾選框與單選鈕**點下去會切換狀態**：已經勾好的權限會被取消。
+      // 這個判斷必須排在「沒指定文字就全收」之前，否則等於沒生效。
+      if (params.skipToggles && (type === 'checkbox' || type === 'radio')) return false;
+      if (!params.actionTexts || params.actionTexts.length === 0) return true;
       // 下拉、勾選框、單選鈕沒有自己的文字，只要在那一列就算候選。
       if (tag === 'select' || type === 'checkbox' || type === 'radio') return true;
       return params.actionTexts.some((candidate) => matches(textOf(element), candidate, false));
@@ -640,7 +643,9 @@ export async function selectOptionInRow(frame, rowTexts, textCandidates) {
 /**
  * 在「含指定文字的那一列」裡按下動作按鈕。
  * @param {{rowTexts:string[], actionTexts?:string[], actionIndex?:number,
- *   requireUnique?:boolean, dryRun?:boolean}} options
+ *   requireUnique?:boolean, dryRun?:boolean, skipToggles?:boolean}} options
+ *   `skipToggles`＝不要把勾選框／單選鈕當成候選（點下去會切換狀態，
+ *   可能把已經勾好的權限取消掉）
  * @returns {Promise<{ok:boolean, reason?:string, rowCount:number, actionCount?:number,
  *   actionText?:string, actionTag?:string, actionType?:string, actionSelector?:string}>}
  */

@@ -30,6 +30,7 @@ import {
   selectOptionInRow,
   setField,
 } from './domFind.mjs';
+import { readSubsystemState } from './grantFlow.mjs';
 
 /**
  * 仿照這類政府系統的查詢頁：老式表格排版、標籤寫在隔壁儲存格、
@@ -73,17 +74,16 @@ const PERMISSION_FIXTURE = `
 <table id="subsystems">
   <tr><th>子系統</th><th>角色</th></tr>
   <tr>
-    <td>EMS 緊急救護管理系統</td>
-    <td><select><option value="">請選擇</option><option value="e1">EMS001 分隊使用者</option></select></td>
+    <td><input type="checkbox" id="ATM" name="subSystem[]">ATM 救護技術員管理系統</td>
+    <td><select id="ATMselect"><option value="">請選擇權限</option><option value="a1">ATM001 縣市管理人員</option></select></td>
   </tr>
   <tr>
-    <td>MCI大量傷病患救護管理系統</td>
+    <td><input type="checkbox" id="MCI" name="subSystem[]">MCI 大量傷病患救護管理系統</td>
     <td>
-      <select>
-        <option value="">請選擇</option>
-        <option value="m1">MCI001 分隊使用者</option>
+      <select id="MCIselect">
+        <option value="">請選擇權限</option>
+        <option value="m1">MCI001 署端使用者</option>
         <option value="m2">MCI002 縣市端使用者</option>
-        <option value="m3">MCI003 醫院端使用者</option>
       </select>
     </td>
   </tr>
@@ -247,7 +247,7 @@ test('MCI 那一列的下拉選得到 MCI002，且不會動到別的系統那一
   assert.equal(result.ok, true);
   assert.equal(result.chosen, 'MCI002 縣市端使用者');
   const values = await frame.$$eval('select', (selects) => selects.map((select) => select.value));
-  assert.deepEqual(values, ['', 'm2']); // 第一列（EMS）完全沒被動到
+  assert.deepEqual(values, ['', 'm2']); // 第一列（ATM）完全沒被動到
 });
 
 test('角色名稱中間有沒有空格都比對得到', { skip }, async () => {
@@ -260,6 +260,20 @@ test('角色名稱中間有沒有空格都比對得到', { skip }, async () => {
 test('MCI 那一列裡找得到可以操作的東西（供改版時退回按鈕流程）', { skip }, async () => {
   const frame = await load(PERMISSION_FIXTURE);
   const result = await rowAction(frame, { rowTexts: ['MCI大量傷病患'], actionTexts: [], dryRun: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.actionType, 'checkbox'); // 那一列的第一個確實是勾選框
+});
+
+test('skipToggles 時不會把勾選框當成要按的東西', { skip }, async () => {
+  // 點勾選框會**切換**狀態：已經勾好的權限會被取消掉，
+  // 所以後備路徑一律跳過它，只找下拉或按鈕。
+  const frame = await load(PERMISSION_FIXTURE);
+  const result = await rowAction(frame, {
+    rowTexts: ['MCI大量傷病患'],
+    actionTexts: [],
+    skipToggles: true,
+    dryRun: true,
+  });
   assert.equal(result.ok, true);
   assert.equal(result.actionTag, 'select');
 });
@@ -316,6 +330,30 @@ test('排查清單會帶出 id 與 placeholder（標籤認不出來時的唯一�
   const fields = await listFields(frame);
   const phone = fields.find((field) => field.id === 'phoneInput');
   assert.equal(phone.hint, '請輸入聯絡電話');
+});
+
+test('讀得出現況：已勾選且角色就是 MCI002 → 本來就有了', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.check('#MCI');
+  await frame.selectOption('#MCIselect', 'm2');
+  const state = await readSubsystemState(frame, 'MCI');
+  assert.equal(state.alreadyGranted, true);
+  assert.equal(state.role, 'MCI002 縣市端使用者');
+});
+
+test('角色是別的權限時不算「本來就有」', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.check('#MCI');
+  await frame.selectOption('#MCIselect', 'm1');
+  assert.equal((await readSubsystemState(frame, 'MCI')).alreadyGranted, false);
+});
+
+test('角色對但勾選框沒勾，也不算「本來就有」', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.selectOption('#MCIselect', 'm2');
+  const state = await readSubsystemState(frame, 'MCI');
+  assert.equal(state.checked, false);
+  assert.equal(state.alreadyGranted, false);
 });
 
 test('認得出登入頁的帳號、密碼、驗證碼與登入鈕', { skip }, async () => {

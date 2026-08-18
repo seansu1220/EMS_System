@@ -44,6 +44,8 @@ export const OUTCOME = {
   notFound: '查無此人',
   /** 查詢結果超過 1 筆，沒有把握是哪一個，停手。 */
   multiple: '查到不只一人',
+  /** 本來就已經是 MCI002 了，什麼都不用做。 */
+  alreadyGranted: '本來就有了',
   /** 中途出錯。 */
   failed: '失敗',
 };
@@ -424,18 +426,28 @@ async function chooseRole(session) {
       onSomeFrame(activePage(session), async (frame) => {
         const roleSelector = `#${code}select`;
         if (!(await hasSelector(frame, roleSelector))) return null;
+
+        // **先看原本是什麼**，再動手。順序反過來的話，選完就再也答不出
+        // 「這個人本來有沒有權限」——而那正是承辦人看名單時最想知道的一件事。
+        const before = await readSubsystemState(frame, code);
+        if (before.alreadyGranted) return { frame, before, alreadyGranted: true };
+
         const result = await selectOptionByText(frame, roleSelector, roleTexts);
-        return result.ok ? { result, frame } : null;
+        return result.ok ? { result, frame, before } : null;
       }),
     page,
     3,
     800,
   );
   if (byId) {
-    const { result, frame } = byId.value;
-    log.info(`  角色：${result.chosen}（${code}select）`);
+    const { result, frame, before, alreadyGranted } = byId.value;
+    if (alreadyGranted) {
+      log.info(`  這個人本來就有「${before.role}」，不動它`);
+      return { ok: true, chosen: before.role, alreadyGranted: true, before };
+    }
+    log.info(`  角色：${result.chosen}（${code}select，原本是「${before.role || '沒有選'}」）`);
     const checkbox = await ensureSubsystemChecked(frame, code);
-    return { ok: true, chosen: result.chosen, checkbox };
+    return { ok: true, chosen: result.chosen, checkbox, before };
   }
 
   // 寫法 1：那一列就有下拉（id 變了時的後備）。
@@ -455,7 +467,9 @@ async function chooseRole(session) {
 
   // 寫法 2：先按那一列的按鈕，再從跳出來的清單點角色。
   const buttonClicked = await onSomeFrame(activePage(session), async (frame) => {
-    const result = await rowAction(frame, { rowTexts, actionTexts: [] });
+    // skipToggles：這一列的第一個可按元素其實是勾選框，點下去會把
+    // 已經勾好的權限取消掉（2026-08-18 由測試抓到）。
+    const result = await rowAction(frame, { rowTexts, actionTexts: [], skipToggles: true });
     return result.ok ? result : null;
   });
   if (buttonClicked) {
@@ -478,6 +492,30 @@ async function chooseRole(session) {
     detail: `找不到「${SITE.flow.subsystemText}」旁邊可以選角色的地方`,
     candidates: selects.length ? selects.slice(0, 40) : await describeScreen(activePage(session)),
   };
+}
+
+/**
+ * 讀出這個子系統**目前**的權限狀態（動手之前的樣子）。
+ *
+ * @returns {Promise<{checked:boolean, role:string, alreadyGranted:boolean}>}
+ *   `alreadyGranted`＝勾選框已勾、而且角色就是我們要設的那一個
+ */
+export async function readSubsystemState(frame, code) {
+  const roleSelector = `#${code}select`;
+  const checkboxSelector = `#${code}`;
+  const role = await frame
+    .$eval(roleSelector, (element) => {
+      const chosen = element.selectedOptions[0];
+      return chosen ? chosen.textContent.replace(/\s+/g, ' ').trim() : '';
+    })
+    .catch(() => '');
+  const checked = (await hasSelector(frame, checkboxSelector))
+    ? await frame.isChecked(checkboxSelector).catch(() => false)
+    : false;
+  const wanted = [SITE.flow.roleText, ...SITE.flow.roleHints];
+  const squeeze = (text) => text.replace(/[\s　]/g, '');
+  const roleMatches = wanted.some((candidate) => squeeze(role).includes(squeeze(candidate)));
+  return { checked, role, alreadyGranted: checked && roleMatches };
 }
 
 /**
@@ -556,6 +594,15 @@ export async function grantOne(session, entry, options = {}) {
   const role = await chooseRole(session);
   if (!role.ok) return { ...base, outcome: OUTCOME.failed, ...role };
 
+  if (role.alreadyGranted) {
+    return {
+      ...base,
+      outcome: OUTCOME.alreadyGranted,
+      step: '步驟6 檢查現況',
+      detail: `這個人本來就有「${role.chosen}」，沒有動任何東西`,
+    };
+  }
+
   if (!options.execute) {
     return {
       ...base,
@@ -563,7 +610,8 @@ export async function grantOne(session, entry, options = {}) {
       step: '步驟6 已選好角色，停在「確定」之前',
       detail:
         `已選「${role.chosen}」${role.checkbox ? `（${role.checkbox}）` : ''}` +
-        '但沒有按確定（試跑）。確認無誤後加上 --execute 才會真的開通',
+        `${role.before?.role ? `，原本是「${role.before.role}」` : ''}` +
+        '，但沒有按確定（試跑）。確認無誤後加上 --execute 才會真的開通',
     };
   }
 
@@ -592,7 +640,9 @@ export async function grantOne(session, entry, options = {}) {
     ...base,
     outcome: OUTCOME.granted,
     step: '完成',
-    detail: `已設定「${role.chosen}」${role.checkbox ? `（${role.checkbox}）` : ''}並按下確定`,
+    detail:
+      `已設定「${role.chosen}」${role.checkbox ? `（${role.checkbox}）` : ''}` +
+      `${role.before?.role ? `，原本是「${role.before.role}」` : ''}並按下確定`,
   };
 }
 

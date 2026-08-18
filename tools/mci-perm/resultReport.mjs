@@ -30,9 +30,9 @@ export function summarize(results) {
   for (const result of results) {
     byOutcome[result.outcome] = (byOutcome[result.outcome] ?? 0) + 1;
   }
-  const needsAttention = results.filter(
-    (result) => result.outcome !== OUTCOME.granted && result.outcome !== OUTCOME.dryRun,
-  );
+  // 「本來就有了」也算做完——那是好消息，不是待辦。
+  const done = [OUTCOME.granted, OUTCOME.dryRun, OUTCOME.alreadyGranted];
+  const needsAttention = results.filter((result) => !done.includes(result.outcome));
   return { total: results.length, byOutcome, needsAttention };
 }
 
