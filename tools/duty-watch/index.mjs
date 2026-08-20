@@ -156,7 +156,8 @@ function buildDeps(unlock, mci) {
     fetchPendingUnlocks: () => (unlock ? fetchPendingRequests(unlock.queue) : Promise.resolve([])),
     processUnlocks: (requests) => processBatch(unlock.session, unlock.queue, requests),
     processRoster: async (entries, { execute }) => {
-      const results = await grantAll(mci.session, entries, { execute });
+      // 值班監看一定回讀驗證：沒人盯著畫面，更不能「以為開好了其實沒有」。
+      const results = await grantAll(mci.session, entries, { execute, verify: true });
       printSummary(results);
       const filePath = await writeResultReport(results, { execute });
       log.ok(`結果清單：${filePath}`);

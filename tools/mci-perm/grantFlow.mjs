@@ -20,6 +20,8 @@
 import { SITE, TIMING } from './config.mjs';
 import {
   clickMatch,
+  readSubsystemDom,
+  setVisibleCheckbox,
   findClickables,
   findField,
   hasText,
@@ -344,6 +346,10 @@ async function submitSearch(session, frame, entry) {
   const accountResult = await fillByIdOrLabel(frame, selectors.accountKeyword, SITE.flow.accountKeywordLabels, '');
   log.info(accountResult.ok ? '  帳號關鍵字：已清成空白' : '  帳號關鍵字：這個畫面沒有這一欄，略過');
 
+  // 回讀實際填進去的值：查不到人時，這一行就分得出是「真的沒這個人」
+  // 還是「條件根本沒填進去」（姓名一律遮蔽）。
+  await logAppliedConditions(frame, selectors);
+
   const searched = await clickAnywhere(page, SITE.flow.searchTexts);
   if (!searched) {
     return {
@@ -355,6 +361,27 @@ async function submitSearch(session, frame, entry) {
   }
   await page.waitForTimeout(TIMING.querySettleMs);
   return { ok: true };
+}
+
+/** 把「畫面上現在真正填著什麼」寫進紀錄（姓名遮蔽）。 */
+async function logAppliedConditions(frame, selectors) {
+  const readValue = async (selector) =>
+    frame
+      .$eval(selector, (element) => {
+        if (element.tagName.toLowerCase() === 'select') {
+          const chosen = element.selectedOptions[0];
+          return chosen ? chosen.textContent.replace(/\s+/g, ' ').trim() : '';
+        }
+        return element.value;
+      })
+      .catch(() => '(讀不到)');
+
+  const unit = await readValue(selectors.unit);
+  const name = await readValue(selectors.name);
+  const account = await readValue(selectors.accountKeyword);
+  log.info(
+    `  送出的條件：單位「${unit}」／姓名「${maskName(name)}」／帳號關鍵字「${account || '(空白)'}」`,
+  );
 }
 
 /**
@@ -372,13 +399,12 @@ async function countMatchedPeople(session) {
   // 系統自己會寫「顯示第 1 至 10 項結果，共 N 項」——優先讀這個。
   // 數畫面上的「設定」按鈕會被分頁誤導：一頁只顯示 10 筆，
   // 查到 26 個人也只會看到 10 個按鈕，那就變成「以為只有 10 個」。
-  for (const frame of page.frames()) {
-    const text = await matchText(frame, SITE.resultCountPattern).catch(() => '');
-    if (text) {
-      const total = Number.parseInt(text.replace(/,/g, ''), 10);
-      if (Number.isFinite(total)) return { total, countedBy: '系統顯示的筆數' };
-    }
-  }
+  //
+  // ⚠ 但**不能讀了就算**：這個數字在表格重新載入時會先變成 0 再跳到正確值。
+  // 2026-08-20 實際踩到——同樣的查詢條件，前一次讀到 1 筆、後一次讀到「0 筆」
+  // 而畫面上明明有資料，於是回報「查無此人」。所以要等它穩定下來。
+  const stable = await readStableCount(page);
+  if (stable !== null) return { total: stable, countedBy: '系統顯示的筆數' };
 
   // 讀不到筆數文字（系統改版）時，退回數按鈕。
   let total = 0;
@@ -387,6 +413,44 @@ async function countMatchedPeople(session) {
     total += hits.length;
   }
   return { total, countedBy: '畫面上的設定按鈕數' };
+}
+
+/**
+ * 讀出「共 N 項」，並等它**連續幾次都一樣**才採信。
+ *
+ * 為什麼要等穩定：這個數字在表格重新載入時會先掉成 0 再跳到正確值。
+ * 只讀一次的話，剛好讀到中間態就會把「有這個人」判成「查無此人」，
+ * 而那會讓一位同仁的權限被默默漏掉（2026-08-20 實際發生過）。
+ *
+ * @returns {Promise<number|null>} 讀不到筆數文字時回傳 null（呼叫端改用數按鈕）
+ */
+export async function readStableCount(page, timeoutMs = TIMING.pageReadyTimeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = null;
+  let sameSince = 0;
+
+  while (Date.now() < deadline) {
+    let current = null;
+    for (const frame of page.frames()) {
+      const text = await matchText(frame, SITE.resultCountPattern).catch(() => '');
+      if (!text) continue;
+      const parsed = Number.parseInt(text.replace(/,/g, ''), 10);
+      if (Number.isFinite(parsed)) {
+        current = parsed;
+        break;
+      }
+    }
+    if (current === null) return null; // 這一頁沒有筆數文字（系統改版）
+
+    if (current === previous) {
+      if (Date.now() - sameSince >= TIMING.countStableMs) return current;
+    } else {
+      previous = current;
+      sameSince = Date.now();
+    }
+    await page.waitForTimeout(TIMING.pollIntervalMs / 2);
+  }
+  return previous; // 等不到完全穩定就用最後看到的值，總比沒有好
 }
 
 /** 等畫面上的「載入中」消失（等不到就算了，後面的判斷自己會擋）。 */
@@ -501,21 +565,25 @@ async function chooseRole(session) {
  *   `alreadyGranted`＝勾選框已勾、而且角色就是我們要設的那一個
  */
 export async function readSubsystemState(frame, code) {
-  const roleSelector = `#${code}select`;
-  const checkboxSelector = `#${code}`;
-  const role = await frame
-    .$eval(roleSelector, (element) => {
-      const chosen = element.selectedOptions[0];
-      return chosen ? chosen.textContent.replace(/\s+/g, ' ').trim() : '';
-    })
-    .catch(() => '');
-  const checked = (await hasSelector(frame, checkboxSelector))
-    ? await frame.isChecked(checkboxSelector).catch(() => false)
-    : false;
+  const dom = await readSubsystemDom(frame, `#${code}`, `#${code}select`).catch(() => null);
+  if (!dom) return { checked: false, role: '', alreadyGranted: false, duplicated: false };
+
+  const role = dom.role.text;
+  const checked = dom.checkbox.checked === true;
   const wanted = [SITE.flow.roleText, ...SITE.flow.roleHints];
-  const squeeze = (text) => text.replace(/[\s　]/g, '');
+  const squeeze = (text) => String(text ?? '').replace(/[\s　]/g, '');
   const roleMatches = wanted.some((candidate) => squeeze(role).includes(squeeze(candidate)));
-  return { checked, role, alreadyGranted: checked && roleMatches };
+
+  // 同一個 id 出現不只一次，代表這一頁藏了好幾組表單——
+  // 這正是 2026-08-20 那次「選了卻沒存進去」的原因，值得寫進紀錄。
+  const duplicated = dom.checkbox.total > 1 || dom.role.total > 1;
+  if (duplicated) {
+    log.info(
+      `  注意：#${code} 在這一頁有 ${dom.checkbox.total} 個（看得見 ${dom.checkbox.visibleCount} 個）、` +
+        `#${code}select 有 ${dom.role.total} 個（看得見 ${dom.role.visibleCount} 個）`,
+    );
+  }
+  return { checked, role, alreadyGranted: checked && roleMatches, duplicated, dom };
 }
 
 /**
@@ -528,16 +596,64 @@ export async function readSubsystemState(frame, code) {
  * @returns {Promise<string>} 給人看的狀態說明
  */
 async function ensureSubsystemChecked(frame, code) {
-  const selector = `#${code}`;
-  if (!(await hasSelector(frame, selector))) return '沒有勾選框';
-  const checked = await frame.isChecked(selector).catch(() => null);
-  if (checked === null) return '勾選框讀不到狀態';
-  if (checked) return '勾選框本來就已勾選';
-  const done = await frame
-    .check(selector)
-    .then(() => true)
-    .catch(() => false);
-  return done ? '已補勾選框' : '勾選框點不動';
+  const result = await setVisibleCheckbox(frame, `#${code}`, true).catch(() => null);
+  if (!result) return '勾選框讀不到狀態';
+  if (!result.ok) return result.reason;
+  return result.checked ? '勾選框已勾起來' : '勾選框點了仍未勾起來';
+}
+
+/**
+ * 步驟 1～5：進查詢頁 → 查這個人 → 確認只有一位 → 點「設定」。
+ *
+ * 開通與**回讀驗證**都要走這一段，因此抽出來共用：
+ * 驗證時若走另一份實作，兩邊對「查到幾個人」的判斷可能不一致，
+ * 那會讓驗證結果變得不可信。
+ *
+ * @returns {Promise<{ok: true, frame: import('playwright-core').Frame}
+ *   | {ok: false, result: object, detail: string}>}
+ */
+async function locatePerson(session, entry) {
+  const fail = (result) => ({ ok: false, result, detail: result.detail });
+
+  const opened = await openAccountPermissionPage(session);
+  if (!opened.ok) return fail({ outcome: OUTCOME.failed, ...opened });
+
+  const searched = await submitSearch(session, opened.frame, entry);
+  if (!searched.ok) return fail({ outcome: OUTCOME.failed, ...searched });
+
+  const { total, countedBy } = await countMatchedPeople(session);
+  log.info(`  查詢結果：${total} 筆（依${countedBy}）`);
+  if (total === 0) {
+    const message = await hasText(activePage(session).mainFrame(), SITE.errorMarkers).catch(() => '');
+    return fail({
+      outcome: OUTCOME.notFound,
+      step: '步驟4 看查詢結果',
+      detail: message
+        ? `查詢結果 0 筆（畫面訊息：${message}）`
+        : '查詢結果 0 筆——單位或姓名可能與系統裡的寫法不同',
+    });
+  }
+  if (total > 1) {
+    return fail({
+      outcome: OUTCOME.multiple,
+      step: '步驟4 看查詢結果',
+      detail: `查到 ${total} 個人（依${countedBy}），無法確定是哪一位，這一筆跳過不處理（請自行到系統確認）`,
+    });
+  }
+
+  const settingClicked = await clickAnywhere(activePage(session), SITE.flow.rowActionTexts, { exact: true });
+  if (!settingClicked) {
+    return fail({
+      outcome: OUTCOME.failed,
+      step: '步驟5 點那一列的「設定」',
+      detail: '查到一個人，但按不到「設定」',
+      candidates: await describeScreen(activePage(session)),
+    });
+  }
+  await activePage(session).waitForTimeout(TIMING.retryIntervalMs);
+
+  const frame = (await findQueryPageFrame(session)) ?? activePage(session).mainFrame();
+  return { ok: true, frame };
 }
 
 /**
@@ -551,45 +667,8 @@ async function ensureSubsystemChecked(frame, code) {
 export async function grantOne(session, entry, options = {}) {
   const base = { unit: entry.unit, name: entry.name };
 
-  const opened = await openAccountPermissionPage(session);
-  if (!opened.ok) return { ...base, outcome: OUTCOME.failed, ...opened };
-
-  const searched = await submitSearch(session, opened.frame, entry);
-  if (!searched.ok) return { ...base, outcome: OUTCOME.failed, ...searched };
-
-  const { total, countedBy } = await countMatchedPeople(session);
-  log.info(`  查詢結果：${total} 筆（依${countedBy}）`);
-  if (total === 0) {
-    const message = await hasText(activePage(session).mainFrame(), SITE.errorMarkers).catch(() => '');
-    return {
-      ...base,
-      outcome: OUTCOME.notFound,
-      step: '步驟4 看查詢結果',
-      detail: message
-        ? `查詢結果 0 筆（畫面訊息：${message}）`
-        : '查詢結果 0 筆——單位或姓名可能與系統裡的寫法不同',
-    };
-  }
-  if (total > 1) {
-    return {
-      ...base,
-      outcome: OUTCOME.multiple,
-      step: '步驟4 看查詢結果',
-      detail: `查到 ${total} 個人（依${countedBy}），無法確定是哪一位，這一筆跳過不處理（請自行到系統確認）`,
-    };
-  }
-
-  const settingClicked = await clickAnywhere(activePage(session), SITE.flow.rowActionTexts, { exact: true });
-  if (!settingClicked) {
-    return {
-      ...base,
-      outcome: OUTCOME.failed,
-      step: '步驟5 點那一列的「設定」',
-      detail: '查到一個人，但按不到「設定」',
-      candidates: await describeScreen(activePage(session)),
-    };
-  }
-  await activePage(session).waitForTimeout(TIMING.retryIntervalMs);
+  const located = await locatePerson(session, entry);
+  if (!located.ok) return { ...base, ...located.result };
 
   const role = await chooseRole(session);
   if (!role.ok) return { ...base, outcome: OUTCOME.failed, ...role };
@@ -615,17 +694,22 @@ export async function grantOne(session, entry, options = {}) {
     };
   }
 
-  const confirmed = await clickAnywhere(activePage(session), SITE.flow.confirmTexts);
-  if (!confirmed) {
+  const confirmed = await pressConfirm(session);
+  if (!confirmed.ok) {
     return {
       ...base,
       outcome: OUTCOME.failed,
       step: '步驟6 按確定',
-      detail: '角色已選好，但找不到「確定」按鈕（權限沒有存進去）',
+      detail: '角色已選好，但一顆送出的按鈕都按不到（權限沒有存進去）',
       candidates: await describeScreen(activePage(session)),
     };
   }
-  await activePage(session).waitForTimeout(TIMING.querySettleMs);
+  log.info(`  按下：${confirmed.pressed.join(' → ')}`);
+  if (!confirmed.savedPressed) {
+    // 實測這一頁只有一顆送出鍵（文字就是「確定」）。這裡不預先斷言成敗——
+    // 有沒有真的存進去，一律以下面的回讀查證為準。
+    log.info('  這個畫面只有一顆送出鍵；是否真的存進去以回頭查證為準');
+  }
 
   const errorText = await hasText(activePage(session).mainFrame(), SITE.errorMarkers).catch(() => '');
   if (errorText) {
@@ -636,13 +720,99 @@ export async function grantOne(session, entry, options = {}) {
       detail: `按了確定，但畫面出現訊息：${errorText}`,
     };
   }
+
+  const done =
+    `已設定「${role.chosen}」${role.checkbox ? `（${role.checkbox}）` : ''}` +
+    `${role.before?.role ? `，原本是「${role.before.role}」` : ''}` +
+    `並依序按下「${confirmed.pressed.join('」→「')}」` +
+    `${confirmed.dialogMessage ? `（系統確認視窗：「${confirmed.dialogMessage}」）` : ''}`;
+
+  if (options.verify === false) {
+    return { ...base, outcome: OUTCOME.granted, step: '完成（未回讀驗證）', detail: done };
+  }
+
+  // 按了按鈕不等於存進去了。**回頭再查一次**才算數——
+  // 這一步是 2026-08-20 補的：那次回報「已開通」，但確認視窗被自動按掉，
+  // 實際上什麼都沒存（見 TOOLS_SPEC 6.17）。
+  const verified = await verifyGranted(session, entry);
+  if (verified.ok) {
+    return { ...base, outcome: OUTCOME.granted, step: '完成（已回讀確認）', detail: `${done}；回頭查證：${verified.detail}` };
+  }
   return {
     ...base,
-    outcome: OUTCOME.granted,
-    step: '完成',
-    detail:
-      `已設定「${role.chosen}」${role.checkbox ? `（${role.checkbox}）` : ''}` +
-      `${role.before?.role ? `，原本是「${role.before.role}」` : ''}並按下確定`,
+    outcome: OUTCOME.failed,
+    step: '步驟7 回讀驗證',
+    detail: `${done}，但回頭查證發現${verified.detail}——請自己到系統確認`,
+  };
+}
+
+/**
+ * 按下「確定」，並**接手系統跳出的確認視窗**。
+ *
+ * ⚠ Playwright 預設會把瀏覽器的 confirm／alert **自動按取消**。
+ * 不自己接手的話，畫面看起來按了確定、程式也回報成功，
+ * 實際上什麼都沒存（救護系統那邊 2026-08-05 踩過同一個坑，見 `unlock.mjs`）。
+ *
+ * @returns {Promise<{ok: boolean, dialogMessage: string}>}
+ */
+export async function pressConfirm(session) {
+  const page = activePage(session);
+  let dialogMessage = '';
+  const onDialog = async (dialog) => {
+    // 訊息可能帶姓名或帳號，只留前 80 字並遮蔽長數字。
+    dialogMessage = dialog.message().replace(/\d{5,}/g, '#####').replace(/\s+/g, ' ').trim().slice(0, 80);
+    log.info(`  系統跳出確認視窗：「${dialogMessage}」→ 按下確定`);
+    await dialog.accept().catch(() => {});
+  };
+  page.on('dialog', onDialog);
+
+  const pressed = [];
+  try {
+    // 第一顆：權限視窗裡的「確定」（把選擇套用到畫面）。
+    const inDialog = await clickAnywhere(page, SITE.flow.confirmTexts, { exact: true });
+    if (inDialog) {
+      pressed.push(inDialog.value.text);
+      await page.waitForTimeout(TIMING.querySettleMs);
+    }
+
+    // 第二顆：某些畫面在權限視窗之外還有一顆送出鍵。
+    // **實測這一頁沒有**（送出鍵就是上面那顆「確定」），所以只找一次就好，
+    // 找不到不是問題——真正的成敗由後面的回讀查證決定。
+    const finalConfirm = await clickAnywhere(activePage(session), SITE.flow.finalConfirmTexts, { exact: true });
+    if (finalConfirm) {
+      pressed.push(finalConfirm.value.text);
+      await activePage(session).waitForTimeout(TIMING.querySettleMs);
+    }
+  } finally {
+    page.off('dialog', onDialog);
+  }
+
+  if (pressed.length === 0) return { ok: false, dialogMessage, pressed };
+  // 只按到第一顆就等於沒存，講明白，別讓人以為做完了。
+  const savedPressed = pressed.some((text) =>
+    SITE.flow.finalConfirmTexts.some((candidate) => text.replace(/\s/g, '') === candidate),
+  );
+  return { ok: true, dialogMessage, pressed, savedPressed };
+}
+
+/**
+ * 回讀驗證：重新查一次這個人，看權限是不是真的變成 MCI002。
+ *
+ * 慢一點沒關係——「以為開好了其實沒有」比多花十秒嚴重得多。
+ * 不想等的話可以用 `--no-verify` 關掉。
+ *
+ * @returns {Promise<{ok: boolean, detail: string}>}
+ */
+async function verifyGranted(session, entry) {
+  const located = await locatePerson(session, entry);
+  if (!located.ok) return { ok: false, detail: `查不回這個人（${located.detail}）` };
+
+  const state = await readSubsystemState(located.frame, SITE.flow.subsystemCode).catch(() => null);
+  if (!state) return { ok: false, detail: '讀不到權限現況' };
+  if (state.alreadyGranted) return { ok: true, detail: `確實是「${state.role}」` };
+  return {
+    ok: false,
+    detail: `權限仍是「${state.role || '沒有選'}」${state.checked ? '' : '、而且勾選框沒有勾起來'}（沒有存進去）`,
   };
 }
 

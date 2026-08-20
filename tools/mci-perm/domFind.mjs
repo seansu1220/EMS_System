@@ -361,16 +361,62 @@ function queryPage(params) {
 
   if (mode === 'selectOption') {
     const labels = params.labels || [];
-    const element = params.selector
-      ? document.querySelector(params.selector)
-      : Array.prototype.slice
-          .call(document.querySelectorAll('select'))
-          .find(
-            (candidate) =>
-              isVisible(candidate) && labels.some((label) => fieldMatchesLabel(candidate, label, false, 30)),
-          );
-    if (!element) return { ok: false, reason: '找不到下拉選單', ambiguous: [] };
-    return chooseOption(element, params.texts);
+    let element = null;
+    let sameSelector = 0;
+    if (params.selector) {
+      // ⚠ **一定要挑看得見的那一個**：這一頁同時藏著「新增」與「編輯」兩整組表單，
+      // 同一個 id 可能出現不只一次。`querySelector` 只會給第一個，
+      // 那往往是隱藏的那一組——選了也不會存進去（2026-08-20 實際發生）。
+      const all = Array.prototype.slice.call(document.querySelectorAll(params.selector));
+      sameSelector = all.length;
+      element = all.filter(isVisible)[0] || null;
+      if (!element && all.length > 0) {
+        return {
+          ok: false,
+          reason: '找到了但整組都看不見（可能還沒點開設定畫面）',
+          ambiguous: [],
+          sameSelector,
+        };
+      }
+    } else {
+      element = Array.prototype.slice
+        .call(document.querySelectorAll('select'))
+        .find(
+          (candidate) =>
+            isVisible(candidate) && labels.some((label) => fieldMatchesLabel(candidate, label, false, 30)),
+        );
+    }
+    if (!element) return { ok: false, reason: '找不到下拉選單', ambiguous: [], sameSelector };
+    return { ...chooseOption(element, params.texts), sameSelector };
+  }
+
+  if (mode === 'subsystemState') {
+    // 讀某個子系統**畫面上那一組**的勾選框與角色下拉。
+    const pick = (selector) => {
+      const all = Array.prototype.slice.call(document.querySelectorAll(selector));
+      const visible = all.filter(isVisible);
+      return { total: all.length, visibleCount: visible.length, element: visible[0] || null };
+    };
+    const box = pick(params.checkboxSelector);
+    const role = pick(params.selectSelector);
+    return {
+      checkbox: { total: box.total, visibleCount: box.visibleCount, checked: box.element ? box.element.checked : null },
+      role: {
+        total: role.total,
+        visibleCount: role.visibleCount,
+        text: role.element && role.element.selectedOptions[0] ? clean(role.element.selectedOptions[0].textContent) : '',
+      },
+    };
+  }
+
+  if (mode === 'setVisibleCheckbox') {
+    const all = Array.prototype.slice.call(document.querySelectorAll(params.selector));
+    const element = all.filter(isVisible)[0];
+    if (!element) return { ok: false, reason: '看不到這個勾選框', total: all.length };
+    if (element.checked !== params.checked) {
+      element.click(); // 用 click 而不是設 checked：系統多半掛了 onclick 要跑
+    }
+    return { ok: true, checked: element.checked, total: all.length };
   }
 
   if (mode === 'selectAnywhere') {
@@ -477,10 +523,26 @@ function queryPage(params) {
   if (mode === 'matchText') {
     // 只回傳比對到的那一小段（例如筆數的數字），**不回傳整頁文字**——
     // 這一頁的表格裡是人事資料，整頁文字屬個資，不能帶出來。
-    const body = document.body ? document.body.innerText : '';
-    const found = body.match(new RegExp(params.pattern));
-    if (!found) return '';
-    return found[1] != null ? found[1] : found[0];
+    const pattern = new RegExp(params.pattern);
+
+    // ⚠ 預設只看**畫面上真的看得到**的最內層元素：這一頁同時藏著好幾組
+    // 表單與表格，整頁文字比對會讀到隱藏區塊的筆數（讀到「共 0 項」而
+    // 畫面上明明有資料，於是把人判成「查無此人」）。
+    const candidates = Array.prototype.slice.call(
+      document.querySelectorAll('div, span, p, td, li, label, small, b, strong'),
+    );
+    for (const element of candidates) {
+      if (!isVisible(element)) continue;
+      // 只取最內層：外層容器的文字是一大片，命中的位置無從判斷。
+      if (element.querySelector('div, span, p, td, li, label, small, b, strong')) continue;
+      const found = clean(element.textContent).match(pattern);
+      if (found) return found[1] != null ? found[1] : found[0];
+    }
+
+    // 都找不到才退回整頁文字（版面沒有用這些標籤時的後備）。
+    const body = document.body ? clean(document.body.innerText) : '';
+    const fallback = body.match(pattern);
+    return fallback ? (fallback[1] != null ? fallback[1] : fallback[0]) : '';
   }
 
   if (mode === 'hasText') {
@@ -614,6 +676,29 @@ export async function listSelects(frame, options = {}) {
  */
 export async function selectOptionByText(frame, selector, textCandidates, labels = []) {
   return frame.evaluate(queryPage, { mode: 'selectOption', selector, texts: textCandidates, labels });
+}
+
+/**
+ * 讀某個子系統「畫面上那一組」的勾選框與角色下拉。
+ *
+ * ⚠ 回傳的 `total` 是**同一個 id 在頁面上出現幾次**。大於 1 就代表這一頁
+ * 藏了不只一組表單，任何用 `querySelector` 的操作都可能打在看不見的那一組上。
+ *
+ * @returns {Promise<{checkbox:{total:number,visibleCount:number,checked:boolean|null},
+ *   role:{total:number,visibleCount:number,text:string}}>}
+ */
+export async function readSubsystemDom(frame, checkboxSelector, selectSelector) {
+  return frame.evaluate(queryPage, { mode: 'subsystemState', checkboxSelector, selectSelector });
+}
+
+/**
+ * 把「畫面上看得到的」那個勾選框設成指定狀態（已經是就不動）。
+ *
+ * 用 `click()` 而不是直接設 `checked`：這類系統多半在 onclick 掛了處理，
+ * 直接改屬性等於繞過它，畫面看起來對、送出去卻不對。
+ */
+export async function setVisibleCheckbox(frame, selector, checked) {
+  return frame.evaluate(queryPage, { mode: 'setVisibleCheckbox', selector, checked });
 }
 
 /**

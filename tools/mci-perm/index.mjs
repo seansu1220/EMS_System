@@ -10,6 +10,7 @@
  *   npm run tool:mci -- grant --file=名單.xlsx    從檔案讀名單（也吃 .csv／.txt）
  *   npm run tool:mci -- grant --unit=大溪分隊      整份名單都用這個單位（名單只要寫姓名）
  *   npm run tool:mci -- grant --limit=3          只處理前 3 位（先確認流程正確再跑整份）
+ *   npm run tool:mci -- grant --execute --no-verify  開通後不回頭查證（快一點，但不建議）
  *   npm run tool:mci -- probe                    探測頁面結構（開發／改版卡住時用）
  *   npm run tool:mci -- probe --unit=X --name=Y  連結果畫面與權限畫面一起探測（不會按確定）
  *
@@ -62,6 +63,8 @@ export function parseArgs(args) {
   return {
     command: /** @type {'grant'|'probe'} */ (command),
     execute: args.includes('--execute'),
+    /** 開通後回頭再查一次，確認真的存進去了（預設開啟）。 */
+    verify: !args.includes('--no-verify'),
     freshLogin: args.includes('--fresh-login'),
     file: valueOf('file'),
     unit: valueOf('unit'),
@@ -164,7 +167,7 @@ async function runGrant(options) {
 
   const session = await startSession({ freshLogin: options.freshLogin });
   try {
-    const results = await grantAll(session, entries, { execute: options.execute });
+    const results = await grantAll(session, entries, { execute: options.execute, verify: options.verify });
     printSummary(results);
     const filePath = await writeResultReport(results, { execute: options.execute });
     log.ok(`結果清單：${filePath}`);
