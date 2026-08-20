@@ -70,7 +70,8 @@ function timestamp(date = new Date()) {
  *   因此只落在 `out/result/`，不可外流、不可上傳。
  *
  * @param {import('./grantFlow.mjs').GrantResult[]} results
- * @param {{execute?: boolean, now?: Date}} [options]
+ * @param {{execute?: boolean, now?: Date,
+ *   problems?: import('./roster.mjs').RosterProblem[]}} [options]
  * @returns {Promise<string>} 產出的檔案路徑
  */
 export async function writeResultReport(results, options = {}) {
@@ -93,6 +94,18 @@ export async function writeResultReport(results, options = {}) {
         `| ${index + 1} | ${result.unit} | ${result.name} | ${result.outcome} | ${result.detail} |`,
     ),
   ];
+
+  const problems = options.problems ?? [];
+  if (problems.length > 0) {
+    lines.push(
+      ``,
+      `## 名單裡跳過的 ${problems.length} 列`,
+      ``,
+      `這幾列缺欄位，程式沒有處理。要補做的話，先在 Excel 裡補齊再跑一次。`,
+      ``,
+      ...problems.map((problem) => `- 第 ${problem.lineNumber} 列：${problem.reason}`),
+    );
+  }
 
   if (summary.needsAttention.length > 0) {
     lines.push(

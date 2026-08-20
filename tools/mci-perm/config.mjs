@@ -20,6 +20,13 @@ export const PATHS = {
   probeDir: path.join(TOOL_DIR, 'out', 'probe'),
   /** 執行結果清單（成功／失敗逐筆）。 */
   resultDir: path.join(TOOL_DIR, 'out', 'result'),
+  /**
+   * 開通進度（做過的人記下來，下次接著跑）。
+   *
+   * ⚠ 含姓名，且**不會自動清掉**——跑到一半的名單清掉就等於要重跑十小時。
+   *   整份重做請用 `--restart`（會捨棄舊進度）。
+   */
+  progressDir: path.join(TOOL_DIR, 'out', 'progress'),
   /** 登入狀態（等同憑證，已 gitignore）。 */
   authDir: path.join(TOOL_DIR, '.auth'),
 };

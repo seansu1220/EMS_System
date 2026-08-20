@@ -170,9 +170,13 @@ async function handleUnlocks(state, deps, options) {
  */
 async function handleRoster(state, deps, options, batch) {
   const { log } = deps;
-  const parsed = deps.parseRoster(batch);
-  for (const problem of parsed.problems) {
-    log.warn(`　第 ${problem.lineNumber} 行沒辦法處理：${problem.reason}`);
+  // 可能是「把檔案拖進視窗」，那要讀檔，所以這一步是非同步的。
+  const parsed = await deps.parseRoster(batch);
+  if (parsed.problems.length > 0) {
+    log.warn(`　有 ${parsed.problems.length} 列沒辦法處理（會跳過），前幾筆：`);
+    for (const problem of parsed.problems.slice(0, 10)) {
+      log.warn(`　　第 ${problem.lineNumber} 列：${problem.reason}`);
+    }
   }
   if (parsed.entries.length === 0) {
     log.warn('　這一批沒有可以處理的人，略過。');
@@ -264,7 +268,8 @@ function announceStart(sides, options, deps) {
     log.info(`${sides.unlockSide.name}：每 ${WATCH.pollMs / 1000} 秒查一次有沒有新的解鎖工單。`);
   }
   if (sides.mciSide) {
-    log.info(`${sides.mciSide.name}：直接把名單貼進這個視窗（一行一位：單位,姓名）。`);
+    log.info(`${sides.mciSide.name}：直接把名單貼進這個視窗（一行一位：單位,姓名），`);
+    log.info('　或把 Excel 檔拖進這個視窗。');
     log.info('　貼完後在空白行按一次 Enter 就會開始處理。右鍵即為貼上。');
   }
   log.info(`每 ${WATCH.heartbeatMs / 60000} 分鐘各戳一次系統維持登入；掉線時會在畫面上請你重打驗證碼。`);

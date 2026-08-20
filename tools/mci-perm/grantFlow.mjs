@@ -830,8 +830,24 @@ async function verifyGranted(session, entry) {
 export async function grantAll(session, entries, options = {}) {
   /** @type {GrantResult[]} */
   const results = [];
+  const startedAt = Date.now();
+  /** 上一位是不是失敗了（失敗後才值得多花一次登入檢查）。 */
+  let lastFailed = false;
+
   for (const [index, entry] of entries.entries()) {
     log.step(`[${index + 1}/${entries.length}] ${entry.unit}　${maskName(entry.name)}`);
+
+    // 名單很長時登入可能被踢。**不必每一位都檢查**——持續操作本來就不容易被踢，
+    // 而每次檢查都要掃一遍畫面。只在「剛失敗過」或每 20 位時確認一次就夠。
+    if (options.ensureSignedIn && (lastFailed || index % 20 === 0)) {
+      const state = await options.ensureSignedIn();
+      if (state === '等不到') {
+        const pending = entries.length - index;
+        log.warn(`還沒重新登入，剩下的 ${pending} 位先停在這裡（進度已保存，下次接著跑）`);
+        break;
+      }
+    }
+
     let result;
     try {
       result = await grantOne(session, entry, options);
@@ -845,14 +861,65 @@ export async function grantAll(session, entries, options = {}) {
       };
     }
     results.push(result);
+
+    const succeeded =
+      result.outcome === OUTCOME.granted ||
+      result.outcome === OUTCOME.dryRun ||
+      result.outcome === OUTCOME.alreadyGranted;
+    lastFailed = !succeeded;
+
+    // 做完一位就記一次：中途關掉視窗，前面做完的才不會白跑。
+    if (options.onProgress) {
+      await options.onProgress(entry, result).catch((error) => {
+        log.warn(`進度沒記起來（不影響已完成的設定）：${error instanceof Error ? error.message : error}`);
+      });
+    }
+
     const line = `${result.outcome}｜${result.detail}`;
-    if (result.outcome === OUTCOME.granted || result.outcome === OUTCOME.dryRun) log.ok(line);
+    if (succeeded) log.ok(line);
     else log.warn(line);
     if (result.candidates?.length) {
       log.info(`  畫面上看得到的：${result.candidates.slice(0, 15).join('、')}`);
     }
+
+    reportProgress(results, index + 1, entries.length, startedAt);
+
     // 不要打得比人快太多：連續操作太密集容易被系統當成攻擊而擋下來。
     if (index < entries.length - 1) await activePage(session).waitForTimeout(TIMING.betweenPeopleMs);
   }
   return results;
+}
+
+/** 把毫秒說成人話。 */
+function describeDuration(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return '不到 1 分鐘';
+  if (minutes < 60) return `${minutes} 分鐘`;
+  return `${Math.floor(minutes / 60)} 小時 ${minutes % 60} 分`;
+}
+
+/**
+ * 印一行進度：跑到哪、成績如何、還要多久。
+ *
+ * 名單長達 1890 位時，「還要多久」是使用者最需要的一個數字
+ * ——他得決定今天是要顧著跑完，還是先關掉明天接著跑。
+ */
+function reportProgress(results, done, total, startedAt) {
+  const counts = {};
+  for (const result of results) counts[result.outcome] = (counts[result.outcome] ?? 0) + 1;
+  const troubled = results.filter(
+    (result) =>
+      result.outcome !== OUTCOME.granted &&
+      result.outcome !== OUTCOME.dryRun &&
+      result.outcome !== OUTCOME.alreadyGranted,
+  ).length;
+
+  const elapsed = Date.now() - startedAt;
+  const remaining = done > 0 ? Math.round((elapsed / done) * (total - done)) : 0;
+  const percent = Math.round((done / total) * 100);
+  log.info(
+    `  ── 進度 ${done}/${total}（${percent}%）｜` +
+      `已跑 ${describeDuration(elapsed)}｜預估還要 ${describeDuration(remaining)}｜` +
+      `要接手的 ${troubled} 位`,
+  );
 }

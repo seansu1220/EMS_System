@@ -11,6 +11,10 @@
  *   npm run tool:mci -- grant --unit=大溪分隊      整份名單都用這個單位（名單只要寫姓名）
  *   npm run tool:mci -- grant --limit=3          只處理前 3 位（先確認流程正確再跑整份）
  *   npm run tool:mci -- grant --execute --no-verify  開通後不回頭查證（快一點，但不建議）
+ *   npm run tool:mci -- grant --execute --restart    捨棄上次進度，整份從頭跑
+ *
+ * ⚠ 名單很長時（實際跑過 1890 位、約 10 小時）**會自動接續**：
+ *   做完的人記在 out/progress/，下次跑同一份名單直接從斷點繼續。
  *   npm run tool:mci -- probe                    探測頁面結構（開發／改版卡住時用）
  *   npm run tool:mci -- probe --unit=X --name=Y  連結果畫面與權限畫面一起探測（不會按確定）
  *
@@ -18,17 +22,22 @@
  *
  * ⚠ 這個工具會**改動別人的系統權限**，因此預設是試跑；要真的設定必須明確加 --execute。
  */
+import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PATHS } from './config.mjs';
 import { grantAll } from './grantFlow.mjs';
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
 import { runProbe } from './probe.mjs';
-import { parseRoster, readRosterFile } from './roster.mjs';
-import { loadSettings, startSession } from './session.mjs';
+import { readRosterFile, resolveRosterInput } from './roster.mjs';
+import { appendProgress, countByOutcome, loadProgress, progressFileFor, splitByProgress } from './progress.mjs';
+import { ensureSignedIn, loadSettings, startSession } from './session.mjs';
 import { printSummary, pruneOldResults, writeResultReport } from './resultReport.mjs';
 
 const COMMANDS = ['grant', 'probe'];
+
+/** 終端機最多先列幾筆問題列（其餘寫進結果檔，免得洗掉畫面）。 */
+const PROBLEM_PREVIEW = 10;
 
 /**
  * @typedef {Object} CliOptions
@@ -66,6 +75,8 @@ export function parseArgs(args) {
     /** 開通後回頭再查一次，確認真的存進去了（預設開啟）。 */
     verify: !args.includes('--no-verify'),
     freshLogin: args.includes('--fresh-login'),
+    /** 捨棄上次的進度，整份從頭跑。 */
+    restart: args.includes('--restart'),
     file: valueOf('file'),
     unit: valueOf('unit'),
     name: valueOf('name'),
@@ -85,6 +96,7 @@ async function promptRosterLines() {
   log.info('全部貼完後，在「空白的那一行」再按一次 Enter，才會開始執行。');
   log.info('只寫姓名也可以，但要先用 --unit=單位 指定，或在 .env 設 MCI_DEFAULT_UNIT。');
   log.info('貼不上去時：在黑色視窗內按「滑鼠右鍵」就是貼上（Ctrl+V 常被輸入法吃掉）。');
+  log.info('也可以直接把 Excel 檔「拖進這個視窗」再按 Enter，它會讀那個檔。');
   /** @type {string[]} */
   const collected = [];
   // 一次貼上多行時，多出來的行會在兩次 prompt 之間到達，必須先開緩衝才不會漏。
@@ -108,7 +120,8 @@ async function promptRosterLines() {
 /**
  * 取得這次要處理的名單。
  * @param {CliOptions} options
- * @returns {Promise<import('./roster.mjs').RosterEntry[]>}
+ * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[],
+ *   problems: import('./roster.mjs').RosterProblem[]}>}
  */
 async function resolveRoster(options) {
   const settings = loadSettings();
@@ -117,7 +130,8 @@ async function resolveRoster(options) {
 
   const result = options.file
     ? await readRosterFile(options.file, parseOptions)
-    : parseRoster(await promptRosterLines(), parseOptions);
+    : await resolveRosterInput(await promptRosterLines(), parseOptions);
+  if (result.sourceFile) log.ok(`讀取名單檔：${result.sourceFile}`);
 
   if (options.unit) {
     // --unit 是明確指令，蓋過名單裡寫的單位。
@@ -126,16 +140,24 @@ async function resolveRoster(options) {
 
   log.step(`名單共 ${result.entries.length} 位`);
   if (result.duplicateCount > 0) log.info(`（有 ${result.duplicateCount} 筆重複，已併成一筆）`);
-  for (const problem of result.problems) {
-    log.warn(`第 ${problem.lineNumber} 行沒辦法處理：${problem.reason}`);
+  if (result.problems.length > 0) {
+    // 名單長的時候問題列可能有幾十筆，全印會把畫面洗掉。
+    // 這裡只給前幾筆讓人知道是什麼狀況，完整清單寫進結果檔。
+    log.warn(`有 ${result.problems.length} 列沒辦法處理（會跳過），前幾筆：`);
+    for (const problem of result.problems.slice(0, PROBLEM_PREVIEW)) {
+      log.warn(`  第 ${problem.lineNumber} 列：${problem.reason}`);
+    }
+    if (result.problems.length > PROBLEM_PREVIEW) {
+      log.info(`  …其餘 ${result.problems.length - PROBLEM_PREVIEW} 列都列在最後的結果清單裡`);
+    }
   }
   if (result.entries.length === 0) throw new Error('名單裡沒有任何可以處理的人');
 
   if (options.limit > 0 && result.entries.length > options.limit) {
     log.info(`依 --limit=${options.limit} 只處理前 ${options.limit} 位`);
-    return result.entries.slice(0, options.limit);
+    return { entries: result.entries.slice(0, options.limit), problems: result.problems };
   }
-  return result.entries;
+  return { entries: result.entries, problems: result.problems };
 }
 
 /**
@@ -156,7 +178,28 @@ async function confirmExecute(entries) {
 
 /** 執行 grant 指令。 */
 async function runGrant(options) {
-  const entries = await resolveRoster(options);
+  const { entries: all, problems } = await resolveRoster(options);
+
+  // 接著上次跑：做完的人跳過，沒做完的（含上次失敗的）再試一次。
+  const progressFile = progressFileFor(options.file);
+  if (options.restart) {
+    await fs.rm(progressFile, { force: true }).catch(() => {});
+    log.info('依 --restart 捨棄上次的進度，這次整份從頭跑');
+  }
+  const progress = await loadProgress(progressFile);
+  const { todo, skipped } = splitByProgress(all, progress);
+  if (skipped.length > 0) {
+    const counts = countByOutcome(progress);
+    log.step(`接續上次的進度：已完成 ${skipped.length} 位，這次要做 ${todo.length} 位`);
+    log.info(`（上次的結果：${Object.entries(counts).map(([key, value]) => `${key} ${value}`).join('、')}）`);
+    log.info(`進度檔：${progressFile}`);
+  }
+  const entries = todo;
+  if (entries.length === 0) {
+    log.ok('這份名單已經全部做完了，沒有要處理的人。');
+    log.info('要整份重做請加 --restart。');
+    return;
+  }
 
   if (options.execute) {
     if (!(await confirmExecute(entries))) return;
@@ -167,11 +210,19 @@ async function runGrant(options) {
 
   const session = await startSession({ freshLogin: options.freshLogin });
   try {
-    const results = await grantAll(session, entries, { execute: options.execute, verify: options.verify });
+    const results = await grantAll(session, entries, {
+      execute: options.execute,
+      verify: options.verify,
+      // 做完一位就記一次，中途關掉視窗前面做完的才不會白跑。
+      onProgress: options.execute ? (entry, result) => appendProgress(progressFile, entry, result) : undefined,
+      // 掉線時在同一個視窗等本人重登（名單很長時一定會遇到）。
+      ensureSignedIn: () => ensureSignedIn(session),
+    });
     printSummary(results);
-    const filePath = await writeResultReport(results, { execute: options.execute });
+    const filePath = await writeResultReport(results, { execute: options.execute, problems });
     log.ok(`結果清單：${filePath}`);
     log.info('（該檔含姓名，只供核對與補做，請勿外傳）');
+    if (options.execute) log.info(`進度已存到：${progressFile}（下次跑同一份名單會接著做）`);
     await pruneOldResults();
   } finally {
     await session.close();

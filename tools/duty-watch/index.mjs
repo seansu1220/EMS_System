@@ -44,7 +44,7 @@ import {
   loadSettings as loadMciSettings,
 } from '../mci-perm/session.mjs';
 import { backToMainMenu, grantAll, openAccountPermissionPage } from '../mci-perm/grantFlow.mjs';
-import { parseRoster } from '../mci-perm/roster.mjs';
+import { resolveRosterInput } from '../mci-perm/roster.mjs';
 import { printSummary, pruneOldResults, writeResultReport } from '../mci-perm/resultReport.mjs';
 
 import { PATHS, WATCH } from './config.mjs';
@@ -152,7 +152,7 @@ function buildDeps(unlock, mci) {
     sleep,
     now: () => Date.now(),
     takeRosterLines: () => takeBufferedLines(),
-    parseRoster: (lines) => parseRoster(lines, { defaultUnit }),
+    parseRoster: (lines) => resolveRosterInput(lines, { defaultUnit }),
     fetchPendingUnlocks: () => (unlock ? fetchPendingRequests(unlock.queue) : Promise.resolve([])),
     processUnlocks: (requests) => processBatch(unlock.session, unlock.queue, requests),
     processRoster: async (entries, { execute }) => {
