@@ -106,3 +106,28 @@ test('Excel：報表上方的說明列不會被當成資料', () => {
   ]);
   assert.deepEqual(result.entries.map((entry) => entry.name), ['測試甲']);
 });
+
+test('貼上時，標題列說「姓名在前」就照著解析', () => {
+  // 使用者的 Excel 是 A 欄姓名、B 欄單位；連標題一起貼上就問得出來。
+  const result = parseRoster(['姓名	單位', '測試甲	大溪分隊', '測試乙	中壢分隊']);
+  assert.deepEqual(
+    result.entries.map((entry) => `${entry.unit}/${entry.name}`),
+    ['大溪分隊/測試甲', '中壢分隊/測試乙'],
+  );
+});
+
+test('標題列說「單位在前」時維持原本的解析', () => {
+  const result = parseRoster(['單位,姓名', '大溪分隊,測試甲']);
+  assert.deepEqual(result.entries.map((entry) => `${entry.unit}/${entry.name}`), ['大溪分隊/測試甲']);
+});
+
+test('沒有標題列時仍照預設「單位在前」', () => {
+  const result = parseRoster(['大溪分隊,測試甲']);
+  assert.equal(result.entries[0].unit, '大溪分隊');
+});
+
+test('標題寫成「姓名／部門」也認得出欄序', () => {
+  const result = parseRoster(['姓名,部門', '測試甲,大溪分隊']);
+  assert.equal(result.entries[0].unit, '大溪分隊');
+  assert.equal(result.entries[0].name, '測試甲');
+});

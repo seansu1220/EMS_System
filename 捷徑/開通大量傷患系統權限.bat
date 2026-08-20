@@ -45,6 +45,12 @@ echo.
 echo ============================================
 echo   MCI Permission Grant (DRY RUN)
 echo   ----------------------------------------
+echo   EASIEST: drag your Excel file onto this
+echo   shortcut - it reads the list from the file.
+echo   (Columns are found by the header row, so
+echo    "name" and "unit" can be in any order.)
+echo.
+echo   Or paste it here instead:
 echo   1. Paste the name list. One person per line,
 echo      "unit,name". Pasting two columns copied
 echo      from Excel is fine. Cannot paste with
@@ -62,7 +68,13 @@ echo   KEEP THIS WINDOW OPEN until it finishes.
 echo ============================================
 echo.
 
-call npm run tool:mci -- grant %*
+if not "%~1"=="" (
+  echo Name list file: %~nx1
+  echo.
+  call npm run tool:mci -- grant --file="%~1"
+) else (
+  call npm run tool:mci -- grant %*
+)
 
 echo.
 echo Press any key to close this window.

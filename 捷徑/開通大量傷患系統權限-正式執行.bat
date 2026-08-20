@@ -46,6 +46,12 @@ echo   ----------------------------------------
 echo   THIS REALLY CHANGES PERMISSIONS.
 echo   Run the DRY RUN shortcut first.
 echo.
+echo   EASIEST: drag your Excel file onto this
+echo   shortcut - it reads the list from the file.
+echo   (Columns are found by the header row, so
+echo    "name" and "unit" can be in any order.)
+echo.
+echo   Or paste it here instead:
 echo   1. Paste the name list ("unit,name" per line).
 echo      RIGHT-CLICK in this window pastes.
 echo   2. Press Enter on an EMPTY line.
@@ -60,7 +66,13 @@ echo   KEEP THIS WINDOW OPEN until it finishes.
 echo ============================================
 echo.
 
-call npm run tool:mci -- grant --execute %*
+if not "%~1"=="" (
+  echo Name list file: %~nx1
+  echo.
+  call npm run tool:mci -- grant --execute --file="%~1"
+) else (
+  call npm run tool:mci -- grant --execute %*
+)
 
 echo.
 echo Press any key to close this window.
