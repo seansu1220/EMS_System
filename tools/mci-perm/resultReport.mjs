@@ -78,7 +78,7 @@ export async function writeResultReport(results, options = {}) {
   const summary = summarize(results);
   const now = options.now ?? new Date();
   const lines = [
-    `# 大量傷患系統權限開通結果`,
+    `# 大量傷患系統權限${options.action === '取消' ? '取消' : '開通'}結果`,
     ``,
     `- 執行時間：${now.toLocaleString('zh-TW')}`,
     `- 模式：${options.execute ? '正式執行（有按確定）' : '試跑（沒有按確定，系統沒有被改動）'}`,
@@ -119,7 +119,10 @@ export async function writeResultReport(results, options = {}) {
   }
 
   await fs.mkdir(PATHS.resultDir, { recursive: true });
-  const filePath = path.join(PATHS.resultDir, `開通結果-${timestamp(now)}.md`);
+  const filePath = path.join(
+    PATHS.resultDir,
+    `${options.action === '取消' ? '取消結果' : '開通結果'}-${timestamp(now)}.md`,
+  );
   await fs.writeFile(filePath, lines.join('\n'), 'utf8');
   return filePath;
 }

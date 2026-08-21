@@ -14,7 +14,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
-import { OUTCOME } from './grantFlow.mjs';
+import { OUTCOME, SETTLED_OUTCOMES } from './grantFlow.mjs';
 
 /**
  * @typedef {Object} ProgressRecord
@@ -44,7 +44,9 @@ export function entryKey(entry) {
  */
 export function isDone(record) {
   if (!record) return false;
-  return record.outcome === OUTCOME.granted || record.outcome === OUTCOME.alreadyGranted;
+  // 試跑不算做完（沒有真的動到系統）。
+  if (record.outcome === OUTCOME.dryRun) return false;
+  return SETTLED_OUTCOMES.includes(record.outcome);
 }
 
 /**
@@ -56,6 +58,37 @@ export function isDone(record) {
 export function progressFileFor(sourceLabel) {
   const base = sourceLabel ? path.basename(sourceLabel).replace(/[\\/:*?"<>|]/g, '_') : '貼上的名單';
   return path.join(PATHS.progressDir, `${base}.jsonl`);
+}
+
+/**
+ * 撤銷用的進度檔位置。
+ *
+ * 刻意**與開通的進度檔分開**：那一份是「昨天開了誰」的唯一憑據，
+ * 撤銷的紀錄寫進去會把它蓋掉，之後就再也分不出誰本來就有權限。
+ *
+ * @param {string} sourceFile 開通時用的進度檔
+ */
+export function revokeProgressFileFor(sourceFile) {
+  return path.join(PATHS.progressDir, `撤銷-${path.basename(sourceFile)}`);
+}
+
+/**
+ * 從進度檔挑出某一種結果的人。
+ *
+ * 撤銷就是靠這個挑出「這次新開通的」——**本來就有權限的不會在裡面**。
+ *
+ * @param {Map<string, ProgressRecord>} progress
+ * @param {string} outcome
+ * @returns {import('./roster.mjs').RosterEntry[]}
+ */
+export function entriesWithOutcome(progress, outcome) {
+  const entries = [];
+  for (const record of progress.values()) {
+    if (record.outcome !== outcome) continue;
+    if (!record.unit || !record.name) continue;
+    entries.push({ unit: record.unit, name: record.name, lineNumber: 0 });
+  }
+  return entries;
 }
 
 /**

@@ -29,6 +29,8 @@ import {
   selectOptionByText,
   selectOptionInRow,
   setField,
+  readSubsystemDom,
+  setVisibleCheckbox,
 } from './domFind.mjs';
 import { readSubsystemState } from './grantFlow.mjs';
 
@@ -390,4 +392,37 @@ test('下拉選項列得出來（單位打錯時要靠這個提示正確寫法�
 test('認得出畫面上的錯誤訊息字樣', { skip }, async () => {
   await page.setContent('<div>查無資料</div>');
   assert.equal(await hasText(page.mainFrame(), SITE.errorMarkers), '查無資料');
+});
+
+test('取消勾選：只動畫面上看得到的那一個', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.check('#MCI');
+  const result = await setVisibleCheckbox(frame, '#MCI', false);
+  assert.equal(result.ok, true);
+  assert.equal(result.checked, false);
+  assert.equal(await frame.isChecked('#MCI'), false);
+});
+
+test('本來就沒勾的不會被反而勾起來', { skip }, async () => {
+  // 撤銷時對「本來就沒有權限」的人呼叫，絕不能幫他勾上去。
+  const frame = await load(PERMISSION_FIXTURE);
+  const result = await setVisibleCheckbox(frame, '#MCI', false);
+  assert.equal(result.checked, false);
+  assert.equal(await frame.isChecked('#MCI'), false);
+});
+
+test('取消 MCI 不會動到別的子系統', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.check('#MCI');
+  await frame.check('#ATM');
+  await setVisibleCheckbox(frame, '#MCI', false);
+  assert.equal(await frame.isChecked('#ATM'), true, '隔壁子系統的權限不該被碰');
+});
+
+test('讀得出勾選框的現況（撤銷前要先看）', { skip }, async () => {
+  const frame = await load(PERMISSION_FIXTURE);
+  await frame.check('#MCI');
+  const dom = await readSubsystemDom(frame, '#MCI', '#MCIselect');
+  assert.equal(dom.checkbox.checked, true);
+  assert.equal(dom.checkbox.visibleCount, 1);
 });

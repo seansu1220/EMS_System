@@ -48,6 +48,10 @@ export const OUTCOME = {
   multiple: '查到不只一人',
   /** 本來就已經是 MCI002 了，什麼都不用做。 */
   alreadyGranted: '本來就有了',
+  /** 撤銷：已經把勾選取消掉了。 */
+  revoked: '已取消',
+  /** 撤銷：本來就沒有勾，不用動。 */
+  alreadyRevoked: '本來就沒有',
   /** 中途出錯。 */
   failed: '失敗',
 };
@@ -817,6 +821,95 @@ async function verifyGranted(session, entry) {
 }
 
 /**
+ * 取消一位人員的 MCI 權限：把子系統前面的勾選**取消**，再按確定。
+ *
+ * ⚠ 這是把權限**拿掉**，比開通更該小心，因此：
+ *   - 只動勾選框，不去改角色下拉（使用者 2026-08-21 指定的作法）
+ *   - **本來就沒勾的一律不碰**——那些多半是「本來就沒有權限」的人
+ *   - 按完確定一樣**回頭查一次**，確認真的取消掉了才回報成功
+ *
+ * @param {import('./session.mjs').PermSession} session
+ * @param {import('./roster.mjs').RosterEntry} entry
+ * @param {{execute?: boolean, verify?: boolean}} [options]
+ * @returns {Promise<GrantResult>}
+ */
+export async function revokeOne(session, entry, options = {}) {
+  const base = { unit: entry.unit, name: entry.name };
+  const code = SITE.flow.subsystemCode;
+
+  const located = await locatePerson(session, entry);
+  if (!located.ok) return { ...base, ...located.result };
+
+  const before = await readSubsystemState(located.frame, code);
+  if (!before.checked) {
+    return {
+      ...base,
+      outcome: OUTCOME.alreadyRevoked,
+      step: '檢查現況',
+      detail: `現在就沒有勾選 ${code}（角色顯示「${before.role || '沒有選'}」），沒有動它`,
+    };
+  }
+  log.info(`  目前：已勾選、角色「${before.role || '沒有選'}」→ 取消勾選`);
+
+  if (!options.execute) {
+    return {
+      ...base,
+      outcome: OUTCOME.dryRun,
+      step: '停在取消之前',
+      detail: `目前已勾選（角色「${before.role || '沒有選'}」）；試跑不會取消，加 --execute 才會`,
+    };
+  }
+
+  const unchecked = await setVisibleCheckbox(located.frame, `#${code}`, false).catch(() => null);
+  if (!unchecked?.ok || unchecked.checked) {
+    return {
+      ...base,
+      outcome: OUTCOME.failed,
+      step: '取消勾選',
+      detail: unchecked?.reason ?? '勾選框點不動，權限沒有被取消',
+    };
+  }
+
+  const confirmed = await pressConfirm(session);
+  if (!confirmed.ok) {
+    return {
+      ...base,
+      outcome: OUTCOME.failed,
+      step: '按確定',
+      detail: '勾選已取消，但一顆送出的按鈕都按不到（等於沒有取消）',
+      candidates: await describeScreen(activePage(session)),
+    };
+  }
+  log.info(`  按下：${confirmed.pressed.join(' → ')}`);
+
+  const done = `已取消勾選（原本是「${before.role || '沒有選'}」）並按下「${confirmed.pressed.join('」→「')}」`;
+  if (options.verify === false) {
+    return { ...base, outcome: OUTCOME.revoked, step: '完成（未回讀驗證）', detail: done };
+  }
+
+  // 一樣回頭查一次：按了按鈕不等於真的存進去（見 TOOLS_SPEC 6.16）。
+  const again = await locatePerson(session, entry);
+  if (!again.ok) {
+    return {
+      ...base,
+      outcome: OUTCOME.failed,
+      step: '回讀驗證',
+      detail: `${done}，但回頭查不回這個人（${again.detail}）——請自己到系統確認`,
+    };
+  }
+  const after = await readSubsystemState(again.frame, code);
+  if (!after.checked) {
+    return { ...base, outcome: OUTCOME.revoked, step: '完成（已回讀確認）', detail: `${done}；回頭查證：確實已取消勾選` };
+  }
+  return {
+    ...base,
+    outcome: OUTCOME.failed,
+    step: '回讀驗證',
+    detail: `${done}，但回頭查證發現仍然勾著（角色「${after.role}」，沒有取消成功）——請自己到系統確認`,
+  };
+}
+
+/**
  * 依名單逐一處理。
  *
  * 一位失敗不影響其他人：結果全部收下來，最後一起列出，
@@ -828,6 +921,29 @@ async function verifyGranted(session, entry) {
  * @returns {Promise<GrantResult[]>}
  */
 export async function grantAll(session, entries, options = {}) {
+  return runBatch(session, entries, options, grantOne);
+}
+
+/**
+ * 依名單逐一**取消**權限。
+ * @param {import('./session.mjs').PermSession} session
+ * @param {import('./roster.mjs').RosterEntry[]} entries
+ * @param {{execute?: boolean, verify?: boolean}} [options]
+ * @returns {Promise<GrantResult[]>}
+ */
+export async function revokeAll(session, entries, options = {}) {
+  return runBatch(session, entries, options, revokeOne);
+}
+
+/**
+ * 逐一處理一整批人（開通與撤銷共用同一個迴圈）。
+ *
+ * 一位失敗不影響其他人：結果全部收下來，最後一起列出，
+ * 這樣使用者跑一次就知道哪些人要自己補做，不必盯著看。
+ *
+ * @param {(session: object, entry: object, options: object) => Promise<GrantResult>} handleOne
+ */
+async function runBatch(session, entries, options, handleOne) {
   /** @type {GrantResult[]} */
   const results = [];
   const startedAt = Date.now();
@@ -850,7 +966,7 @@ export async function grantAll(session, entries, options = {}) {
 
     let result;
     try {
-      result = await grantOne(session, entry, options);
+      result = await handleOne(session, entry, options);
     } catch (error) {
       result = {
         unit: entry.unit,
@@ -862,10 +978,7 @@ export async function grantAll(session, entries, options = {}) {
     }
     results.push(result);
 
-    const succeeded =
-      result.outcome === OUTCOME.granted ||
-      result.outcome === OUTCOME.dryRun ||
-      result.outcome === OUTCOME.alreadyGranted;
+    const succeeded = SETTLED_OUTCOMES.includes(result.outcome);
     lastFailed = !succeeded;
 
     // 做完一位就記一次：中途關掉視窗，前面做完的才不會白跑。
@@ -890,6 +1003,15 @@ export async function grantAll(session, entries, options = {}) {
   return results;
 }
 
+/** 「這一位已經處理完，不必再試」的結果。 */
+export const SETTLED_OUTCOMES = [
+  OUTCOME.granted,
+  OUTCOME.dryRun,
+  OUTCOME.alreadyGranted,
+  OUTCOME.revoked,
+  OUTCOME.alreadyRevoked,
+];
+
 /** 把毫秒說成人話。 */
 function describeDuration(ms) {
   const minutes = Math.round(ms / 60000);
@@ -907,12 +1029,7 @@ function describeDuration(ms) {
 function reportProgress(results, done, total, startedAt) {
   const counts = {};
   for (const result of results) counts[result.outcome] = (counts[result.outcome] ?? 0) + 1;
-  const troubled = results.filter(
-    (result) =>
-      result.outcome !== OUTCOME.granted &&
-      result.outcome !== OUTCOME.dryRun &&
-      result.outcome !== OUTCOME.alreadyGranted,
-  ).length;
+  const troubled = results.filter((result) => !SETTLED_OUTCOMES.includes(result.outcome)).length;
 
   const elapsed = Date.now() - startedAt;
   const remaining = done > 0 ? Math.round((elapsed / done) * (total - done)) : 0;

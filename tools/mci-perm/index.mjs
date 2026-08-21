@@ -15,6 +15,8 @@
  *
  * ⚠ 名單很長時（實際跑過 1890 位、約 10 小時）**會自動接續**：
  *   做完的人記在 out/progress/，下次跑同一份名單直接從斷點繼續。
+ *   npm run tool:mci -- revoke                   試跑：列出「這次新開通的」有誰，不動手
+ *   npm run tool:mci -- revoke --execute         真的把那些人的 MCI 勾選取消掉
  *   npm run tool:mci -- probe                    探測頁面結構（開發／改版卡住時用）
  *   npm run tool:mci -- probe --unit=X --name=Y  連結果畫面與權限畫面一起探測（不會按確定）
  *
@@ -26,15 +28,23 @@ import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PATHS } from './config.mjs';
-import { grantAll } from './grantFlow.mjs';
+import { OUTCOME, grantAll, revokeAll } from './grantFlow.mjs';
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
 import { runProbe } from './probe.mjs';
 import { readRosterFile, resolveRosterInput } from './roster.mjs';
-import { appendProgress, countByOutcome, loadProgress, progressFileFor, splitByProgress } from './progress.mjs';
+import {
+  appendProgress,
+  countByOutcome,
+  entriesWithOutcome,
+  loadProgress,
+  progressFileFor,
+  revokeProgressFileFor,
+  splitByProgress,
+} from './progress.mjs';
 import { ensureSignedIn, loadSettings, startSession } from './session.mjs';
 import { printSummary, pruneOldResults, writeResultReport } from './resultReport.mjs';
 
-const COMMANDS = ['grant', 'probe'];
+const COMMANDS = ['grant', 'revoke', 'probe'];
 
 /** 終端機最多先列幾筆問題列（其餘寫進結果檔，免得洗掉畫面）。 */
 const PROBLEM_PREVIEW = 10;
@@ -78,6 +88,8 @@ export function parseArgs(args) {
     /** 捨棄上次的進度，整份從頭跑。 */
     restart: args.includes('--restart'),
     file: valueOf('file'),
+    /** 撤銷時要依據哪一份開通進度檔（留空＝依 --file 推出來的那份）。 */
+    progress: valueOf('progress'),
     unit: valueOf('unit'),
     name: valueOf('name'),
     limit,
@@ -229,6 +241,76 @@ async function runGrant(options) {
   }
 }
 
+/**
+ * 執行 revoke 指令：把「這一次新開通的」權限收回來。
+ *
+ * ⚠ 名單來源是**開通時的進度檔**，只取結果為「已開通」的那些人。
+ *   「本來就有了」的不在裡面，因此**不會被動到**——這正是使用者要的：
+ *   本來有權限的留著，只還原這次新開的。
+ */
+async function runRevoke(options) {
+  const sourceFile = options.progress || progressFileFor(options.file);
+  const source = await loadProgress(sourceFile);
+  if (source.size === 0) {
+    throw new Error(
+      `找不到開通紀錄：${sourceFile}
+` +
+        '（撤銷是依據開通時留下的進度檔決定「誰是這次新開的」，沒有它就無從分辨）',
+    );
+  }
+
+  const counts = countByOutcome(source);
+  const newlyGranted = entriesWithOutcome(source, OUTCOME.granted);
+  const untouched = counts[OUTCOME.alreadyGranted] ?? 0;
+  log.step(`開通紀錄：${sourceFile}`);
+  log.info(`這次新開通的：${newlyGranted.length} 位　←　要取消的就是這些`);
+  log.info(`本來就有權限的：${untouched} 位　←　完全不會動到`);
+
+  // 撤銷自己記一份進度（不寫回開通的那一份，否則就分不出誰本來就有權限了）。
+  const revokeFile = revokeProgressFileFor(sourceFile);
+  if (options.restart) {
+    await fs.rm(revokeFile, { force: true }).catch(() => {});
+    log.info('依 --restart 捨棄上次的撤銷進度');
+  }
+  const done = await loadProgress(revokeFile);
+  const { todo, skipped } = splitByProgress(newlyGranted, done);
+  if (skipped.length > 0) log.info(`已經取消過的 ${skipped.length} 位跳過，這次要做 ${todo.length} 位`);
+  if (todo.length === 0) {
+    log.ok('沒有要取消的人（都做完了）。');
+    return;
+  }
+
+  if (options.execute) {
+    log.warn(`即將把 ${todo.length} 位的「MCI 大量傷病患救護管理系統」勾選取消掉，這會真的寫進系統。`);
+    log.info(`（本來就有權限的 ${untouched} 位不在這份名單裡，不會被動到）`);
+    const answer = await prompt('  yes/no: ');
+    if (!['y', 'yes'].includes(String(answer ?? '').toLowerCase())) {
+      log.info('已取消，系統沒有被改動。');
+      return;
+    }
+  } else {
+    log.step('試跑模式：只會看每個人現在的狀態，不會取消任何權限');
+    log.info('確認無誤後再加上 --execute 才會真的取消。');
+  }
+
+  const session = await startSession({ freshLogin: options.freshLogin });
+  try {
+    const results = await revokeAll(session, todo, {
+      execute: options.execute,
+      verify: options.verify,
+      onProgress: options.execute ? (entry, result) => appendProgress(revokeFile, entry, result) : undefined,
+      ensureSignedIn: () => ensureSignedIn(session),
+    });
+    printSummary(results);
+    const filePath = await writeResultReport(results, { execute: options.execute, action: '取消' });
+    log.ok(`結果清單：${filePath}`);
+    if (options.execute) log.info(`撤銷進度：${revokeFile}（下次跑會接著做）`);
+    await pruneOldResults();
+  } finally {
+    await session.close();
+  }
+}
+
 /** 執行 probe 指令。 */
 async function runProbeCommand(options) {
   const session = await startSession({ freshLogin: options.freshLogin });
@@ -244,6 +326,7 @@ async function main() {
   log.step(`開通大量傷患系統權限｜指令：${options.command}`);
 
   if (options.command === 'probe') await runProbeCommand(options);
+  else if (options.command === 'revoke') await runRevoke(options);
   else await runGrant(options);
 }
 
