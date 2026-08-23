@@ -13,8 +13,14 @@ import path from 'node:path';
 /**
  * @typedef {Object} RosterEntry
  * @property {string} unit 單位（會拿去比對下拉選單，用「包含」比對）
- * @property {string} name 姓名
+ * @property {string} name 姓名。**從系統畫面掃來的名單裡，這是遮蔽過的顯示文字**
+ *   （`許O軒`）——那就是承辦人在系統上看得到的東西，進度檔與結果清單都用它
  * @property {number} lineNumber 來源的第幾行／第幾列（1 起算，出問題時指得出是哪一筆）
+ * @property {string} [unitValue] 單位下拉的 value（掃描時抄回來的，選單位最精準）
+ * @property {string} [searchName] 要填進「姓名」欄的字。姓名被遮蔽時只有沒被遮到的
+ *   那一段能查（見 `unitSweep.splitMaskedName`）；沒有這一欄就用 `name`
+ * @property {string} [rowText] 姓名遮蔽時，用來在查詢結果裡認出「是哪一列」的顯示文字
+ *   （見 `grantFlow.locatePerson`）。空字串代表姓名沒被遮，走「查到剛好一筆」那條路
  */
 
 /**

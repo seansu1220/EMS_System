@@ -18,12 +18,13 @@
  * ⚠ 個資原則：本模組會取出**姓名**（不取姓名以外的任何欄位）。
  *   姓名只留在記憶體與 `out/` 底下的名單／結果檔，寫進 log 前一律經過 `maskName`。
  */
-import { SITE, TIMING, UNIT_SWEEP } from './config.mjs';
-import { clickMatch, findClickables, listOptions, readResultColumn } from './domFind.mjs';
+import { SITE, UNIT_SWEEP } from './config.mjs';
+import { listOptions } from './domFind.mjs';
 import {
   activePage,
-  onSomeFrame,
+  goToNextPage,
   openAccountPermissionPage,
+  readResultNames,
   readStableCount,
   submitSearch,
   waitWhileLoading,
@@ -171,59 +172,51 @@ export async function readUnitOptions(frame) {
 }
 
 /**
- * 讀目前這一頁結果表格的「姓名」欄。
+ * 把「畫面上顯示的姓名」拆成「可以拿去查的字」與「原樣」。
  *
- * 用 `onSomeFrame` 是因為結果表不一定跟查詢表單在同一個 frame
- *（這個系統的版面在不同畫面之間會換）。
+ * ⚠ 這是 2026-08-23 首次實跑換來的：這個系統的查詢結果**不顯示完整姓名**，
+ *   而是遮成 `許O軒`。把它當姓名去查一定是 0 筆——那次 239 位全滅。
  *
- * @returns {Promise<{ok:boolean, values:string[], headers:string[], reason?:string}>}
+ * 作法是取**開頭沒被遮到的那一段**（幾乎都是姓氏）當查詢關鍵字，
+ * 之後再從結果表格認出「顯示文字一模一樣」的那一列。開頭第一個字一定沒被遮
+ * ——實跑 239 筆的四種樣式（`字O字`／`字O`／`字字OOO字字`／`字字字OOOOOO字字字`）
+ * 都是如此。
+ *
+ * @param {string} displayName 畫面上看到的姓名
+ * @param {string[]} [maskChars] 哪些字元算遮蔽符號
+ * @returns {{searchName: string, masked: boolean}}
+ *   `masked` 為 false 時代表這個名字沒被遮，可以直接當姓名查
  */
-async function readNameColumn(session) {
-  /** 讀不到時，把「這個 frame 看到了哪些欄位標題」留下來當排查線索。 */
-  let diagnosis = null;
+export function splitMaskedName(displayName, maskChars = SITE.flow.maskedNameChars) {
+  const text = String(displayName ?? '').trim();
+  const isMask = (char) => (maskChars ?? []).includes(char);
+  if (!text || ![...text].some(isMask)) return { searchName: text, masked: false };
 
-  for (const frame of activePage(session).frames()) {
-    const result = await readResultColumn(frame, SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts).catch(
-      () => null,
-    );
-    if (result?.ok) return result;
-    if (result && !diagnosis) diagnosis = result;
+  let head = '';
+  for (const char of text) {
+    if (isMask(char)) break;
+    head += char;
   }
-  return {
-    ok: false,
-    values: [],
-    headers: diagnosis?.headers ?? [],
-    reason: diagnosis?.reason ?? '讀不到查詢結果表格',
-  };
+  // 整個名字都被遮掉時沒有東西可查，退回用原字串（後續會如實回報查不到）。
+  return { searchName: head || text, masked: true };
 }
 
 /**
- * 按「下一頁」，並確認表格**真的換頁了**。
+ * 補上舊名單缺的 `searchName`／`rowText`。
  *
- * ⚠ 最後一頁的「下一頁」按鈕仍然點得下去，只是畫面不會變。
- *   所以不能「點到了就當成翻頁成功」——那會讓同一頁被重複讀，
- *   而重複的姓名會蓋掉「還沒讀到的人」的位置，整個單位就漏了。
- *   判定方式是「第一列的姓名變了」。
+ * 2026-08-23 之前掃出來的名單只有 `name`（而且那是**遮蔽過的**姓名），
+ * 直接拿去跑會整份「查無此人」。與其要使用者重掃十分鐘，不如讀回來時補算
+ * ——這兩個欄位本來就是從 `name` 推出來的，不需要重新連線。
  *
- * @param {string} firstNameBefore 翻頁前第一列的姓名
- * @returns {Promise<boolean>} 有沒有真的翻到下一頁
+ * @param {import('./roster.mjs').RosterEntry[]} entries
+ * @returns {import('./roster.mjs').RosterEntry[]}
  */
-async function goToNextPage(session, firstNameBefore) {
-  const page = activePage(session);
-  const clicked = await onSomeFrame(page, async (frame) => {
-    const hits = await findClickables(frame, SITE.flow.nextPageTexts, { exact: true });
-    if (hits.length === 0) return null;
-    return (await clickMatch(frame, SITE.flow.nextPageTexts, 0, { exact: true })) ? hits : null;
+export function withSearchNames(entries) {
+  return (entries ?? []).map((entry) => {
+    if (entry?.searchName) return entry;
+    const { searchName, masked } = splitMaskedName(entry?.name);
+    return { ...entry, searchName, rowText: masked ? entry.name : '' };
   });
-  if (!clicked) return false;
-
-  const deadline = Date.now() + TIMING.pageTurnTimeoutMs;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(TIMING.pollIntervalMs);
-    const column = await readNameColumn(session);
-    if (column.ok && column.values[0] && column.values[0] !== firstNameBefore) return true;
-  }
-  return false;
 }
 
 /**
@@ -255,14 +248,22 @@ export async function collectUnitRoster(session, unitOption) {
   const names = [];
   const seen = new Set();
 
+  let loggedHeaders = false;
   for (let pageIndex = 0; pageIndex < UNIT_SWEEP.maxPagesPerUnit; pageIndex += 1) {
-    const column = await readNameColumn(session);
+    const column = await readResultNames(session);
     if (!column.ok) {
       // 第一頁就讀不到＝這個單位整個沒掃到，要讓呼叫端知道並跳過。
       // 已經讀到幾頁才失敗的話，寧可用已讀到的部分，也要如實說有問題。
       const detail = `${column.reason}${column.headers.length ? `（看到的欄位標題：${column.headers.join('、')}）` : ''}`;
       if (names.length === 0) return { ok: false, names, total, reason: detail };
       return { ok: false, names, total, reason: `第 ${pageIndex + 1} 頁${detail}` };
+    }
+    // 欄位標題屬表單結構、可安全記錄。成功時也留一行：系統改版時，
+    // 這一行就是判斷「表格變成什麼樣子」的第一手線索（2026-08-23 那次
+    // 就是因為只有失敗才記，才看不出姓名欄其實是遮蔽過的）。
+    if (!loggedHeaders && column.headers.length > 0) {
+      log.info(`    結果表格欄位：${column.headers.filter(Boolean).join('｜')}`);
+      loggedHeaders = true;
     }
 
     const firstOnPage = column.values[0] ?? '';
@@ -303,7 +304,19 @@ export async function sweepAllUnits(session, targets) {
     const result = await collectUnitRoster(session, unitOption);
 
     for (const name of result.names) {
-      entries.push({ unit: unitOption.text, unitValue: unitOption.value, name, lineNumber: 0 });
+      const { searchName, masked } = splitMaskedName(name);
+      entries.push({
+        unit: unitOption.text,
+        unitValue: unitOption.value,
+        // 名字是**畫面上顯示的樣子**（可能被遮成 `許O軒`）。進度檔與結果清單都用它，
+        // 因為那就是承辦人在系統上看得到的東西。
+        name,
+        // 拿去填「姓名」欄的字：遮蔽時只有沒被遮到的那一段能查。
+        searchName,
+        // 遮蔽時要靠「顯示文字」在結果表格裡認出是哪一列（見 grantFlow.locatePerson）。
+        rowText: masked ? name : '',
+        lineNumber: 0,
+      });
     }
 
     if (!result.ok) {
@@ -319,6 +332,11 @@ export async function sweepAllUnits(session, targets) {
       // 只印前幾位（已遮蔽）讓人看得出真的抓到人，不把整個單位洗到畫面上。
       if (result.names.length > 0) {
         log.info(`  例如：${result.names.slice(0, 3).map(maskName).join('、')}…`);
+        // 系統本身就把姓名遮起來時要講明白：那決定了後面「怎麼查這個人」。
+        const sample = splitMaskedName(result.names[0]);
+        if (sample.masked) {
+          log.info(`  （系統顯示的姓名是遮蔽過的，之後會用「${sample.searchName}…」這樣的字查，再認出那一列）`);
+        }
       }
     }
 

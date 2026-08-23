@@ -17,7 +17,7 @@
  *
  * ⚠ 個資原則：姓名只在填入欄位時使用，寫進 log 前一律經過 maskName。
  */
-import { SITE, TIMING } from './config.mjs';
+import { SITE, TIMING, UNIT_SWEEP } from './config.mjs';
 import {
   clickMatch,
   readSubsystemDom,
@@ -29,6 +29,7 @@ import {
   listClickableTexts,
   listFields,
   listSelects,
+  readResultColumn,
   rowAction,
   selectOptionByText,
   selectOptionInRow,
@@ -489,6 +490,65 @@ export async function readStableCount(page, timeoutMs = TIMING.pageReadyTimeoutM
   return previous; // 等不到完全穩定就用最後看到的值，總比沒有好
 }
 
+/**
+ * 讀目前這一頁結果表格的「姓名」欄。
+ *
+ * 逐個 frame 試，是因為結果表不一定跟查詢表單在同一個 frame
+ *（這個系統的版面在不同畫面之間會換）。
+ *
+ * 放在這裡而不是 `unitSweep.mjs`：掃名單要用它、逐位處理時「認出是哪一列」
+ * 也要用它，而 `unitSweep` 本來就 import 這個檔（反過來會變成循環相依）。
+ *
+ * @returns {Promise<{ok:boolean, values:string[], headers:string[], reason?:string}>}
+ */
+export async function readResultNames(session) {
+  /** 讀不到時，把「這個 frame 看到了哪些欄位標題」留下來當排查線索。 */
+  let diagnosis = null;
+
+  for (const frame of activePage(session).frames()) {
+    const result = await readResultColumn(frame, SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts).catch(
+      () => null,
+    );
+    if (result?.ok) return result;
+    if (result && !diagnosis) diagnosis = result;
+  }
+  return {
+    ok: false,
+    values: [],
+    headers: diagnosis?.headers ?? [],
+    reason: diagnosis?.reason ?? '讀不到查詢結果表格',
+  };
+}
+
+/**
+ * 按「下一頁」，並確認表格**真的換頁了**。
+ *
+ * ⚠ 最後一頁的「下一頁」按鈕仍然點得下去，只是畫面不會變。
+ *   所以不能「點到了就當成翻頁成功」——那會讓同一頁被重複讀，
+ *   而重複的姓名會蓋掉「還沒讀到的人」的位置，整個單位就漏了。
+ *   判定方式是「第一列的姓名變了」。
+ *
+ * @param {string} firstNameBefore 翻頁前第一列的姓名
+ * @returns {Promise<boolean>} 有沒有真的翻到下一頁
+ */
+export async function goToNextPage(session, firstNameBefore) {
+  const page = activePage(session);
+  const clicked = await onSomeFrame(page, async (frame) => {
+    const hits = await findClickables(frame, SITE.flow.nextPageTexts, { exact: true });
+    if (hits.length === 0) return null;
+    return (await clickMatch(frame, SITE.flow.nextPageTexts, 0, { exact: true })) ? hits : null;
+  });
+  if (!clicked) return false;
+
+  const deadline = Date.now() + TIMING.pageTurnTimeoutMs;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(TIMING.pollIntervalMs);
+    const column = await readResultNames(session);
+    if (column.ok && column.values[0] && column.values[0] !== firstNameBefore) return true;
+  }
+  return false;
+}
+
 /** 等畫面上的「載入中」消失（等不到就算了，後面的判斷自己會擋）。 */
 export async function waitWhileLoading(page, timeoutMs = TIMING.pageReadyTimeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -639,11 +699,61 @@ async function ensureSubsystemChecked(frame, code) {
 }
 
 /**
- * 步驟 1～5：進查詢頁 → 查這個人 → 確認只有一位 → 點「設定」。
+ * 在查詢結果裡找到「顯示成這個名字的那一列」，按下它的「設定」。
+ *
+ * 給**從系統畫面掃來的名單**用（見 unitSweep.mjs）。那些名單上的姓名是系統
+ * 遮蔽過的（`許O軒`），拿去查一定是 0 筆，所以改成：用**沒被遮蔽的那幾個字**
+ * （姓氏）去查，再從結果裡認出「顯示文字一模一樣」的那一列。
+ *
+ * 認列而不是「剛好查到一筆」：姓氏一定會命中好幾個人。
+ *
+ * @param {string} rowText 那一列上顯示的姓名（含遮蔽符號）
+ * @returns {Promise<{ok: boolean, reason?: string, pages: number}>}
+ */
+async function clickRowByDisplayName(session, rowText) {
+  for (let pageIndex = 0; pageIndex < UNIT_SWEEP.maxPagesPerUnit; pageIndex += 1) {
+    const found = await onSomeFrame(activePage(session), async (frame) => {
+      const result = await rowAction(frame, {
+        rowTexts: [rowText],
+        actionTexts: SITE.flow.rowActionTexts,
+        // 同一個遮蔽後的名字在同一個單位出現兩次時**絕不亂點**——
+        // 那種情況連人看畫面也分不出是哪一位。
+        requireUnique: true,
+        // 那一列若還有勾選框，預設規則會讓它排在「設定」前面而被點到。
+        skipToggles: true,
+        requireActionText: true,
+      });
+      // 這一頁沒有那一列是正常的（要翻下一頁），不算失敗。
+      if (!result.ok && result.rowCount === 0) return null;
+      return result;
+    });
+
+    if (found?.value?.ok) return { ok: true, pages: pageIndex + 1 };
+    if (found?.value) {
+      return { ok: false, reason: found.value.reason, pages: pageIndex + 1, ambiguous: true };
+    }
+
+    const column = await readResultNames(session);
+    if (!column.ok || column.values.length === 0) {
+      return { ok: false, reason: '讀不到結果表格，沒辦法認出是哪一列', pages: pageIndex + 1 };
+    }
+    if (!(await goToNextPage(session, column.values[0]))) {
+      return { ok: false, reason: '翻完所有頁都沒有這一列', pages: pageIndex + 1 };
+    }
+  }
+  return { ok: false, reason: '翻了太多頁還是沒找到', pages: UNIT_SWEEP.maxPagesPerUnit };
+}
+
+/**
+ * 步驟 1～5：進查詢頁 → 查這個人 → 確認是哪一位 → 點「設定」。
  *
  * 開通與**回讀驗證**都要走這一段，因此抽出來共用：
  * 驗證時若走另一份實作，兩邊對「查到幾個人」的判斷可能不一致，
  * 那會讓驗證結果變得不可信。
+ *
+ * 「確認是哪一位」有兩種走法：
+ *   - 一般名單（使用者自己給的**真實姓名**）：查到剛好 1 筆才動手
+ *   - 掃來的名單（姓名是系統**遮蔽過的**）：用姓氏查，再認出顯示文字相同的那一列
  *
  * @returns {Promise<{ok: true, frame: import('playwright-core').Frame}
  *   | {ok: false, result: object, detail: string}>}
@@ -654,7 +764,9 @@ async function locatePerson(session, entry) {
   const opened = await openAccountPermissionPage(session);
   if (!opened.ok) return fail({ outcome: OUTCOME.failed, ...opened });
 
-  const searched = await submitSearch(session, opened.frame, entry);
+  // 姓名遮蔽時 searchName 是「沒被遮到的那幾個字」；一般名單沒有這一欄，用姓名本身。
+  const searchName = entry.searchName || entry.name;
+  const searched = await submitSearch(session, opened.frame, { ...entry, name: searchName });
   if (!searched.ok) return fail({ outcome: OUTCOME.failed, ...searched });
 
   const { total, countedBy } = await countMatchedPeople(session);
@@ -666,25 +778,39 @@ async function locatePerson(session, entry) {
       step: '步驟4 看查詢結果',
       detail: message
         ? `查詢結果 0 筆（畫面訊息：${message}）`
-        : '查詢結果 0 筆——單位或姓名可能與系統裡的寫法不同',
-    });
-  }
-  if (total > 1) {
-    return fail({
-      outcome: OUTCOME.multiple,
-      step: '步驟4 看查詢結果',
-      detail: `查到 ${total} 個人（依${countedBy}），無法確定是哪一位，這一筆跳過不處理（請自行到系統確認）`,
+        : `以「${maskName(searchName)}」查詢結果 0 筆——單位或姓名可能與系統裡的寫法不同`,
     });
   }
 
-  const settingClicked = await clickAnywhere(activePage(session), SITE.flow.rowActionTexts, { exact: true });
-  if (!settingClicked) {
-    return fail({
-      outcome: OUTCOME.failed,
-      step: '步驟5 點那一列的「設定」',
-      detail: '查到一個人，但按不到「設定」',
-      candidates: await describeScreen(activePage(session)),
-    });
+  if (entry.rowText) {
+    // 掃來的名單：查到幾筆都正常（姓氏會命中好幾個人），要認的是「那一列」。
+    const picked = await clickRowByDisplayName(session, entry.rowText);
+    if (!picked.ok) {
+      return fail({
+        outcome: picked.ambiguous ? OUTCOME.multiple : OUTCOME.notFound,
+        step: '步驟4 在查詢結果裡認出那一列',
+        detail:
+          `以「${maskName(searchName)}」查到 ${total} 筆（依${countedBy}），` +
+          `但${picked.reason}（找了 ${picked.pages} 頁）`,
+      });
+    }
+  } else {
+    if (total > 1) {
+      return fail({
+        outcome: OUTCOME.multiple,
+        step: '步驟4 看查詢結果',
+        detail: `查到 ${total} 個人（依${countedBy}），無法確定是哪一位，這一筆跳過不處理（請自行到系統確認）`,
+      });
+    }
+    const settingClicked = await clickAnywhere(activePage(session), SITE.flow.rowActionTexts, { exact: true });
+    if (!settingClicked) {
+      return fail({
+        outcome: OUTCOME.failed,
+        step: '步驟5 點那一列的「設定」',
+        detail: '查到一個人，但按不到「設定」',
+        candidates: await describeScreen(activePage(session)),
+      });
+    }
   }
   await activePage(session).waitForTimeout(TIMING.retryIntervalMs);
 

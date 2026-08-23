@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEntriesByUnit, filterUnits, pickUnits, splitUnits } from './unitSweep.mjs';
+import { filterEntriesByUnit, filterUnits, pickUnits, splitMaskedName, splitUnits, withSearchNames } from './unitSweep.mjs';
 
 /** 仿照真實下拉：第一個是「請選擇」（沒有 value），其餘是科室與分隊。 */
 const OPTIONS = [
@@ -122,6 +122,60 @@ test('「請選擇」不會被挑進來', () => {
   const { targets, missing } = pickUnits(SQUAD_OPTIONS, ['請選擇']);
   assert.equal(targets.length, 0);
   assert.deepEqual(missing, ['請選擇'], '連「請選擇」都算找不到，會讓呼叫端停手');
+});
+
+// ── 系統顯示的姓名是遮蔽過的（2026-08-23 實跑 239 位全滅換來的） ──────────
+
+test('三個字、中間被遮：拿姓氏去查', () => {
+  // 這是實跑 239 筆裡的 232 筆，也是那次全部被判成「查無此人」的原因：
+  // 「許O軒」拿去查一定是 0 筆。
+  assert.deepEqual(splitMaskedName('許O軒'), { searchName: '許', masked: true });
+});
+
+test('兩個字、只剩姓氏', () => {
+  assert.deepEqual(splitMaskedName('王O'), { searchName: '王', masked: true });
+});
+
+test('長名字被遮掉中間一大段：開頭沒被遮的整段都拿去查', () => {
+  // 實跑遇到的 `字字字OOOOOO字字字`。開頭留的字愈多，查詢範圍就愈窄。
+  const result = splitMaskedName('阿布斯OOOOOO巴那');
+  assert.equal(result.searchName, '阿布斯');
+  assert.equal(result.masked, true);
+});
+
+test('沒有遮蔽符號的名字照原樣用，並標成沒被遮', () => {
+  // masked 為 false 時走原本「查到剛好一筆」那條路，不必認列。
+  assert.deepEqual(splitMaskedName('王小明'), { searchName: '王小明', masked: false });
+});
+
+test('全形○、〇、＊也算遮蔽符號', () => {
+  assert.equal(splitMaskedName('陳○明').searchName, '陳');
+  assert.equal(splitMaskedName('陳〇明').searchName, '陳');
+  assert.equal(splitMaskedName('陳＊明').searchName, '陳');
+});
+
+test('空白與 undefined 不會炸掉', () => {
+  assert.deepEqual(splitMaskedName(''), { searchName: '', masked: false });
+  assert.deepEqual(splitMaskedName(undefined), { searchName: '', masked: false });
+});
+
+test('舊名單讀回來會自動補上「要拿什麼去查」', () => {
+  // 不補的話，2026-08-23 之前掃出來的名單再跑一次還是整份查無此人。
+  const [entry] = withSearchNames([{ unit: '特搜大隊', name: '許O軒', lineNumber: 0 }]);
+  assert.equal(entry.searchName, '許');
+  assert.equal(entry.rowText, '許O軒', '要靠顯示文字認出是哪一列');
+  assert.equal(entry.name, '許O軒', '進度檔與結果清單仍用畫面上看得到的樣子');
+});
+
+test('已經有 searchName 的不會被覆寫', () => {
+  const [entry] = withSearchNames([{ unit: '特搜大隊', name: '許O軒', searchName: '許', rowText: '許O軒' }]);
+  assert.equal(entry.searchName, '許');
+});
+
+test('沒被遮的名字補完之後不會走「認列」那條路', () => {
+  const [entry] = withSearchNames([{ unit: '特搜大隊', name: '王小明', lineNumber: 0 }]);
+  assert.equal(entry.searchName, '王小明');
+  assert.equal(entry.rowText, '', '沒被遮就沿用原本「查到剛好一筆」的判斷');
 });
 
 test('沿用舊名單時，--unit 也要篩得掉別的單位的人', () => {

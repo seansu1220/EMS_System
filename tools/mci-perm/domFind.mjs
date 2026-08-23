@@ -481,6 +481,12 @@ function queryPage(params) {
       // 勾選框與單選鈕**點下去會切換狀態**：已經勾好的權限會被取消。
       // 這個判斷必須排在「沒指定文字就全收」之前，否則等於沒生效。
       if (params.skipToggles && (type === 'checkbox' || type === 'radio')) return false;
+      // 只認「文字對得上」的元素。查詢結果那一列若還有勾選框或下拉，
+      // 下面那條「沒有文字的元素只要在那一列就算候選」會讓它排在按鈕前面，
+      // 於是點到的是勾選框而不是「設定」。
+      if (params.requireActionText) {
+        return (params.actionTexts || []).some((candidate) => matches(textOf(element), candidate, false));
+      }
       if (!params.actionTexts || params.actionTexts.length === 0) return true;
       // 下拉、勾選框、單選鈕沒有自己的文字，只要在那一列就算候選。
       if (tag === 'select' || type === 'checkbox' || type === 'radio') return true;
@@ -810,9 +816,12 @@ export async function selectOptionInRow(frame, rowTexts, textCandidates) {
 /**
  * 在「含指定文字的那一列」裡按下動作按鈕。
  * @param {{rowTexts:string[], actionTexts?:string[], actionIndex?:number,
- *   requireUnique?:boolean, dryRun?:boolean, skipToggles?:boolean}} options
+ *   requireUnique?:boolean, dryRun?:boolean, skipToggles?:boolean,
+ *   requireActionText?:boolean}} options
  *   `skipToggles`＝不要把勾選框／單選鈕當成候選（點下去會切換狀態，
- *   可能把已經勾好的權限取消掉）
+ *   可能把已經勾好的權限取消掉）；
+ *   `requireActionText`＝只認文字對得上的元素（那一列若還有勾選框或下拉，
+ *   預設規則會讓它們排在按鈕前面而被點到）
  * @returns {Promise<{ok:boolean, reason?:string, rowCount:number, actionCount?:number,
  *   actionText?:string, actionTag?:string, actionType?:string, actionSelector?:string}>}
  */

@@ -105,6 +105,30 @@ const UNIT_LIST_FIXTURE = `
 </table>
 <div id="pager"><a href="#">上一頁</a><a href="#">下一頁</a></div>`;
 
+/**
+ * 仿照**姓名被遮蔽**的查詢結果（2026-08-23 實跑才發現的真實樣子）。
+ *
+ * 誘餌：每一列前面都有一個勾選框（沒有文字，預設規則會讓它排在「設定」前面），
+ * 而且刻意放了兩位遮蔽後同名的人（`林O華`）——那種情況連人也分不出是誰。
+ */
+const MASKED_LIST_FIXTURE = `
+<table id="result">
+  <tr><th></th><th>帳號</th><th>姓名</th><th>單位</th><th>功能</th></tr>
+  <tr>
+    <td><input type="checkbox" id="pick1"></td><td>test01</td><td>許O軒</td><td>特搜大隊</td>
+    <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='許O軒'"></td>
+  </tr>
+  <tr>
+    <td><input type="checkbox" id="pick2"></td><td>test02</td><td>林O華</td><td>特搜大隊</td>
+    <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='林O華(1)'"></td>
+  </tr>
+  <tr>
+    <td><input type="checkbox" id="pick3"></td><td>test03</td><td>林O華</td><td>特搜大隊</td>
+    <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='林O華(2)'"></td>
+  </tr>
+</table>
+<div id="clicked">(還沒點)</div>`;
+
 /** 仿照權限設定畫面：好幾個子系統各自一列，每列旁邊都有一個一模一樣的角色下拉。 */
 const PERMISSION_FIXTURE = `
 <table id="subsystems">
@@ -495,6 +519,61 @@ test('結果表格沒有「姓名」欄時如實回報，並帶回看到的欄�
   const column = await readResultColumn(page.mainFrame(), SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts);
   assert.equal(column.ok, false);
   assert.ok(column.headers.includes('帳號'), `實際看到的標題：${column.headers.join('｜')}`);
+});
+
+test('認得出「顯示成這個名字的那一列」，按下它的設定', { skip }, async () => {
+  // 系統顯示的姓名是遮蔽過的（許O軒），拿去查一定 0 筆，只能認那一列。
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    rowTexts: ['許O軒'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(await frame.textContent('#clicked'), '許O軒');
+});
+
+test('那一列的勾選框不會被誤點成「設定」', { skip }, async () => {
+  // 沒有 requireActionText 的話，沒有文字的勾選框會排在按鈕前面而被點到。
+  const frame = await load(MASKED_LIST_FIXTURE);
+  await rowAction(frame, {
+    rowTexts: ['許O軒'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(await frame.isChecked('#pick1'), false, '勾選框不該被動到');
+});
+
+test('同一個遮蔽後的名字出現兩次時寧可不點', { skip }, async () => {
+  // 那種情況連人看畫面也分不出是哪一位。
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    rowTexts: ['林O華'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /不只一列/);
+  assert.equal(await frame.textContent('#clicked'), '(還沒點)');
+});
+
+test('這一頁沒有那個人時回報 rowCount 0（呼叫端據此翻下一頁）', { skip }, async () => {
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    rowTexts: ['趙O雲'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.rowCount, 0);
 });
 
 test('「下一頁」用完全相符比對，不會誤按「上一頁」', { skip }, async () => {

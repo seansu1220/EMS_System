@@ -65,6 +65,7 @@ import {
   readUnitOptions,
   splitUnits,
   sweepAllUnits,
+  withSearchNames,
 } from './unitSweep.mjs';
 
 const COMMANDS = ['grant', 'grant-units', 'clear-all', 'probe'];
@@ -291,7 +292,10 @@ async function runGrant(options) {
  */
 async function resolveSweptRoster(session, options, rosterFile, plan) {
   if (!options.rescan) {
-    const cached = await loadRoster(rosterFile);
+    const loaded = await loadRoster(rosterFile);
+    // 舊版的名單只存了姓名（而且是遮蔽過的），補算「要拿什麼去查」再用，
+    // 免得為了兩個推得出來的欄位要人家重掃十分鐘。
+    const cached = { ...loaded, entries: withSearchNames(loaded.entries) };
     if (cached.entries.length > 0) {
       log.ok(`沿用上次掃到的名單：${cached.entries.length} 位（掃描時間 ${cached.savedAt}）`);
       // 這份名單是**上次掃的**，反映的是當時的設定與人事。改了 .env 的範圍
