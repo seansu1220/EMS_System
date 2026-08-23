@@ -61,24 +61,28 @@ export function progressFileFor(sourceLabel) {
 }
 
 /**
- * 「全面取消」的進度檔位置。
+ * 掃單位那類指令（全面取消、開通大隊權限）的進度檔位置。
  *
- * 刻意**與開通的進度檔分開**：兩件事的名單來源完全不同（開通是使用者給的名單，
- * 全面取消是掃全機關掃出來的），混在同一個檔案會互相蓋掉、也看不出誰是誰。
+ * 刻意**每一種各記一份**：它們的名單來源完全不同（貼上的名單／全機關／指定的大隊），
+ * 混在同一個檔案會互相蓋掉，也看不出誰是誰。
+ *
+ * @param {string} label 這件事的名字（同時也是檔名），例如「全面取消」
  */
-export function clearAllProgressFile() {
-  return path.join(PATHS.progressDir, '全面取消.jsonl');
+export function sweepProgressFile(label) {
+  return path.join(PATHS.progressDir, `${label}.jsonl`);
 }
 
 /**
- * 「全面取消」掃出來的名單快取。
+ * 掃出來的名單快取。
  *
  * 掃 76 個單位要十分鐘上下，而這件事**跑到一半被中斷是常態**（要跑好幾個小時）。
  * 存起來之後，續跑就直接接著做人，不必每次重掃一次。
  * 要重新掃（例如中間有人事異動）用 `--rescan`。
+ *
+ * @param {string} label 與 {@link sweepProgressFile} 用同一個
  */
-export function clearAllRosterFile() {
-  return path.join(PATHS.progressDir, '全面取消-名單.json');
+export function sweepRosterFile(label) {
+  return path.join(PATHS.progressDir, `${label}-名單.json`);
 }
 
 /**

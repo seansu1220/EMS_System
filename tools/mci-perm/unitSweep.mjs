@@ -18,7 +18,7 @@
  * ⚠ 個資原則：本模組會取出**姓名**（不取姓名以外的任何欄位）。
  *   姓名只留在記憶體與 `out/` 底下的名單／結果檔，寫進 log 前一律經過 `maskName`。
  */
-import { CLEAR_ALL, SITE, TIMING } from './config.mjs';
+import { SITE, TIMING, UNIT_SWEEP } from './config.mjs';
 import { clickMatch, findClickables, listOptions, readResultColumn } from './domFind.mjs';
 import {
   activePage,
@@ -84,6 +84,50 @@ export function splitUnits(options, keepUnits, placeholders = SITE.flow.unitPlac
     targets.push(option);
   }
   return { targets, kept, ignored };
+}
+
+/**
+ * 挑出名稱含指定關鍵字的單位（「開通大隊權限」用）。
+ *
+ * 與 {@link splitUnits} 相反：那個是「除了這幾個以外全部都要」，
+ * 這個是「只要這幾個」。
+ *
+ * ⚠ `missing` 是**寫法在下拉裡完全找不到**的關鍵字。呼叫端一律據此停手：
+ *   少開一個大隊是很難事後發現的錯（畫面上看起來一切正常，只是那個大隊沒開到），
+ *   寧可停下來讓人把名稱改對。
+ *
+ * @param {UnitOption[]} options 下拉裡的所有選項
+ * @param {string[]} wantedUnits 要處理的單位（**包含**比對，寫一部分也認得）
+ * @param {string[]} [placeholders] 「請選擇」這類不是單位的選項
+ * @returns {{targets: UnitOption[], matched: {wanted: string, units: string[]}[], missing: string[]}}
+ */
+export function pickUnits(options, wantedUnits, placeholders = SITE.flow.unitPlaceholderTexts) {
+  const usable = (options ?? []).filter((option) => {
+    const text = String(option?.text ?? '').trim();
+    if (!text || !option?.value) return false;
+    return !(placeholders ?? []).some((word) => squeeze(text) === squeeze(word));
+  });
+
+  /** @type {UnitOption[]} */
+  const targets = [];
+  /** @type {{wanted: string, units: string[]}[]} */
+  const matched = [];
+  /** @type {string[]} */
+  const missing = [];
+
+  for (const wanted of wantedUnits ?? []) {
+    const hits = usable.filter((option) => squeeze(option.text).includes(squeeze(wanted)));
+    if (hits.length === 0) {
+      missing.push(wanted);
+      continue;
+    }
+    matched.push({ wanted, units: hits.map((option) => option.text) });
+    // 兩個關鍵字命中同一個單位時只算一次（否則那個單位的人會被跑兩遍）。
+    for (const hit of hits) {
+      if (!targets.includes(hit)) targets.push(hit);
+    }
+  }
+  return { targets, matched, missing };
 }
 
 /**
@@ -211,7 +255,7 @@ export async function collectUnitRoster(session, unitOption) {
   const names = [];
   const seen = new Set();
 
-  for (let pageIndex = 0; pageIndex < CLEAR_ALL.maxPagesPerUnit; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < UNIT_SWEEP.maxPagesPerUnit; pageIndex += 1) {
     const column = await readNameColumn(session);
     if (!column.ok) {
       // 第一頁就讀不到＝這個單位整個沒掃到，要讓呼叫端知道並跳過。
@@ -278,7 +322,7 @@ export async function sweepAllUnits(session, targets) {
       }
     }
 
-    await activePage(session).waitForTimeout(CLEAR_ALL.betweenUnitsMs);
+    await activePage(session).waitForTimeout(UNIT_SWEEP.betweenUnitsMs);
   }
 
   return { entries, problems };

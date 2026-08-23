@@ -1,11 +1,11 @@
 @echo off
-cd /d "%~dp0.."
-title Clear ALL MCI Permissions (DRY RUN)
+cd /d "%~dp0..\.."
+title Grant MCI by Squad (DRY RUN)
 
 rem NOTE: keep this file pure ASCII. The console runs in a DBCS code page,
 rem where non-ASCII bytes swallow the following characters and break parsing.
 rem
-rem DRY RUN: it only LOOKS. Nothing is changed.
+rem DRY RUN: it walks the whole flow but never presses the confirm button.
 where npm >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Node.js / npm not found. Install from https://nodejs.org
@@ -26,18 +26,22 @@ if not exist "tools\mci-perm\.env" (
 
 echo.
 echo ==================================================
-echo   Clear ALL MCI Permissions - DRY RUN
+echo   Grant MCI by Squad - DRY RUN
 echo   ----------------------------------------------
 echo   NOTHING WILL BE CHANGED. This run only looks.
 echo.
-echo   Step 1: it walks every unit in the dropdown and
-echo           lists who is in it (about 10 minutes).
-echo   Step 2: for each person it opens the settings
-echo           page and reports the current state.
+echo   Scope: the 1st - 4th rescue squads and the
+echo   special search squad. Change the list with
+echo   MCI_GRANT_UNITS in tools\mci-perm\.env
+echo   (comma separated).
 echo.
-echo   The units kept untouched are set by
-echo   MCI_KEEP_UNITS in tools\mci-perm\.env
-echo   (default: the emergency medical service section).
+echo   Step 1: it lists everyone in those units.
+echo   Step 2: for each person it opens the settings
+echo           page and stops before the confirm.
+echo.
+echo   If a unit name is not found in the system, it
+echo   stops and prints the real unit list - nothing
+echo   is done. Better than silently missing a squad.
 echo.
 echo   1. A browser opens - type the CAPTCHA, sign in.
 echo   2. Leave it running. You can close the window
@@ -48,7 +52,7 @@ echo   Log:    tools\mci-perm\out\last-run.log
 echo ==================================================
 echo.
 
-call npm run tool:mci -- clear-all %*
+call npm run tool:mci -- grant-units %*
 
 echo.
 echo Press any key to close this window.

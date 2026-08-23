@@ -1,12 +1,11 @@
 @echo off
-cd /d "%~dp0.."
-title Clear ALL MCI Permissions (EXECUTE)
+cd /d "%~dp0..\.."
+title Grant MCI by Squad (EXECUTE)
 
 rem NOTE: keep this file pure ASCII. The console runs in a DBCS code page,
 rem where non-ASCII bytes swallow the following characters and break parsing.
 rem
-rem THIS REALLY REMOVES PERMISSIONS - FROM EVERYONE.
-rem Only the units listed in MCI_KEEP_UNITS are left alone.
+rem THIS REALLY GRANTS PERMISSIONS to everyone in the listed squads.
 where npm >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Node.js / npm not found. Install from https://nodejs.org
@@ -27,26 +26,28 @@ if not exist "tools\mci-perm\.env" (
 
 echo.
 echo ==================================================
-echo   Clear ALL MCI Permissions - EXECUTE
+echo   Grant MCI by Squad - EXECUTE
 echo   ----------------------------------------------
-echo   THIS REALLY REMOVES PERMISSIONS, FROM EVERYONE
-echo   IN EVERY UNIT. Run the DRY RUN shortcut first.
+echo   THIS REALLY GRANTS PERMISSIONS.
+echo   Run the DRY RUN shortcut first.
 echo.
-echo   Kept untouched: the units listed in
-echo   MCI_KEEP_UNITS in tools\mci-perm\.env
-echo   (default: the emergency medical service section).
-echo   If none of them is found in the system, the tool
-echo   stops and does nothing.
+echo   Scope: the 1st - 4th rescue squads and the
+echo   special search squad. Change the list with
+echo   MCI_GRANT_UNITS in tools\mci-perm\.env
+echo   (comma separated).
 echo.
-echo   Step 1: it walks every unit and lists who is in
-echo           it (about 10 minutes, read only).
+echo   Step 1: it lists everyone in those units.
 echo   Step 2: it asks you yes/no with the real number.
-echo   Step 3: for each person it unchecks "MCI", presses
-echo           confirm, then checks again that the
-echo           permission is really gone.
+echo   Step 3: for each person it sets the MCI role to
+echo           "MCI002", presses confirm, then checks
+echo           again that it was really saved.
 echo.
-echo   People who do not have the permission are skipped
+echo   People who already have MCI002 are skipped
 echo   without pressing anything.
+echo.
+echo   If a unit name is not found in the system, it
+echo   stops and prints the real unit list - nothing
+echo   is done. Better than silently missing a squad.
 echo.
 echo   1. A browser opens - type the CAPTCHA, sign in.
 echo   2. Type yes when it asks for confirmation.
@@ -58,7 +59,7 @@ echo   Log:    tools\mci-perm\out\last-run.log
 echo ==================================================
 echo.
 
-call npm run tool:mci -- clear-all --execute %*
+call npm run tool:mci -- grant-units --execute %*
 
 echo.
 echo Press any key to close this window.

@@ -1,12 +1,13 @@
 @echo off
-cd /d "%~dp0.."
-title MCI Permission Grant (EXECUTE)
+cd /d "%~dp0..\.."
+title MCI Permission Grant (DRY RUN)
 
 rem NOTE: keep this file pure ASCII. The console runs in a DBCS code page,
 rem where non-ASCII bytes swallow the following characters and break parsing.
 rem
-rem This shortcut REALLY grants the permission (presses the confirm button).
-rem The tool asks for a yes/no confirmation before it starts.
+rem This shortcut runs the DRY RUN mode: it walks the whole flow but never
+rem presses the final confirm button. Use "MCI permission grant (EXECUTE)"
+rem once the dry run looks right.
 where npm >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Node.js / npm not found.
@@ -17,6 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Install packages on first run, or when a new package was added
 if not exist "node_modules\playwright-core\" (
   echo Installing required packages, please wait a few minutes...
   echo.
@@ -41,24 +43,24 @@ if not exist "tools\mci-perm\.env" (
 
 echo.
 echo ============================================
-echo   MCI Permission Grant (EXECUTE)
+echo   MCI Permission Grant (DRY RUN)
 echo   ----------------------------------------
-echo   THIS REALLY CHANGES PERMISSIONS.
-echo   Run the DRY RUN shortcut first.
-echo.
 echo   EASIEST: drag your Excel file onto this
 echo   shortcut - it reads the list from the file.
 echo   (Columns are found by the header row, so
 echo    "name" and "unit" can be in any order.)
 echo.
 echo   Or paste it here instead:
-echo   1. Paste the name list ("unit,name" per line).
-echo      RIGHT-CLICK in this window pastes.
-echo   2. Press Enter on an EMPTY line.
-echo   3. Type yes to confirm.
-echo   4. A browser opens - type the CAPTCHA
+echo   1. Paste the name list. One person per line,
+echo      "unit,name". Pasting two columns copied
+echo      from Excel is fine. Cannot paste with
+echo      Ctrl+V? Just RIGHT-CLICK in this window.
+echo   2. Press Enter on an EMPTY line to start.
+echo   3. A browser opens - type the CAPTCHA
 echo      and sign in. The rest is automatic.
 echo.
+echo   DRY RUN: it stops right before the final
+echo   confirm button. Nothing is changed.
 echo   Result: tools\mci-perm\out\result\
 echo   Log:    tools\mci-perm\out\last-run.log
 echo.
@@ -69,9 +71,9 @@ echo.
 if not "%~1"=="" (
   echo Name list file: %~nx1
   echo.
-  call npm run tool:mci -- grant --execute --file="%~1"
+  call npm run tool:mci -- grant --file="%~1"
 ) else (
-  call npm run tool:mci -- grant --execute %*
+  call npm run tool:mci -- grant %*
 )
 
 echo.

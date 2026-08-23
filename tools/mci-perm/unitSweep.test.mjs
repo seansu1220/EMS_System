@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEntriesByUnit, filterUnits, splitUnits } from './unitSweep.mjs';
+import { filterEntriesByUnit, filterUnits, pickUnits, splitUnits } from './unitSweep.mjs';
 
 /** 仿照真實下拉：第一個是「請選擇」（沒有 value），其餘是科室與分隊。 */
 const OPTIONS = [
@@ -76,6 +76,52 @@ test('--unit 相符的不只一個時全部保留（由使用者自己看清單�
 test('--unit 留空時等於不過濾', () => {
   const { targets } = splitUnits(OPTIONS, ['緊急救護科']);
   assert.equal(filterUnits(targets, '').length, targets.length);
+});
+
+// ── 開通大隊權限：只挑指定的那幾個單位 ──────────────────────────────
+
+/** 仿照「大隊」在下拉裡的樣子（一併放了容易誤中的相似名稱）。 */
+const SQUAD_OPTIONS = [
+  { value: '', text: '請選擇' },
+  { value: 'S1', text: '第一救災救護大隊' },
+  { value: 'S2', text: '第二救災救護大隊' },
+  { value: 'T1', text: '特搜大隊' },
+  { value: 'X1', text: '緊急救護科' },
+];
+
+test('只挑得出指定的大隊，其餘一律不碰', () => {
+  const { targets, missing } = pickUnits(SQUAD_OPTIONS, ['第一救災救護大隊', '特搜大隊']);
+  assert.deepEqual(targets.map((option) => option.text), ['第一救災救護大隊', '特搜大隊']);
+  assert.deepEqual(missing, []);
+});
+
+test('有任何一個大隊找不到就要講出來（呼叫端據此停手）', () => {
+  // 少開一個大隊是很難事後發現的錯：畫面上一切正常，只是那個大隊沒開到。
+  const { missing, matched } = pickUnits(SQUAD_OPTIONS, ['第一救災救護大隊', '第九救災救護大隊']);
+  assert.deepEqual(missing, ['第九救災救護大隊']);
+  assert.deepEqual(matched.map((hit) => hit.wanted), ['第一救災救護大隊']);
+});
+
+test('一個關鍵字命中好幾個單位時全部收下', () => {
+  // 大隊底下的分隊若寫成「第一救災救護大隊○○分隊」，這樣才收得齊。
+  const nested = [
+    { value: 'S1', text: '第一救災救護大隊' },
+    { value: 'S1a', text: '第一救災救護大隊桃園分隊' },
+  ];
+  const { targets } = pickUnits(nested, ['第一救災救護大隊']);
+  assert.equal(targets.length, 2);
+});
+
+test('兩個關鍵字命中同一個單位時只算一次', () => {
+  // 不去重的話那個單位的人會被整批跑兩遍。
+  const { targets } = pickUnits(SQUAD_OPTIONS, ['特搜大隊', '特搜']);
+  assert.equal(targets.length, 1);
+});
+
+test('「請選擇」不會被挑進來', () => {
+  const { targets, missing } = pickUnits(SQUAD_OPTIONS, ['請選擇']);
+  assert.equal(targets.length, 0);
+  assert.deepEqual(missing, ['請選擇'], '連「請選擇」都算找不到，會讓呼叫端停手');
 });
 
 test('沿用舊名單時，--unit 也要篩得掉別的單位的人', () => {
