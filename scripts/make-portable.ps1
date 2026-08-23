@@ -293,6 +293,24 @@ New-Launcher -FileName '線上解鎖工單-自動監看.bat' `
     'To stop: close this window, or Ctrl+C.'
   )
 
+New-Launcher -FileName '線上解鎖工單-監看試跑.bat' `
+  -Title 'Unlock Queue Watcher (DRY RUN - STAYS OPEN)' `
+  -Command 'unlock-watch' `
+  -Notice @(
+    'Unlock Queue Watcher - DRY RUN',
+    '----------------------------------------',
+    'Signs in, keeps the sign-in alive, and',
+    'shows what it WOULD do. It never unlocks',
+    'anything and never writes to the web page.',
+    '',
+    'Run this FIRST on a new PC: it proves the',
+    'sign-in, the heartbeat and the network all',
+    'work, without touching any real data.',
+    '',
+    'Leave it running to see how long the',
+    'sign-in survives on this PC.'
+  )
+
 New-Launcher -FileName '解鎖救護紀錄表.bat' `
   -Title 'Unlock Ambulance Records (DRY RUN)' `
   -Command 'unlock' `

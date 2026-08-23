@@ -113,7 +113,7 @@
 
 | 檔案 | 內容 |
 | --- | --- |
-| `scripts/make-portable.ps1` | 套件清單加 `firebase`；新增 `New-Launcher`（產捷徑，寫檔前**斷言純 ASCII**）與 `Write-BatchFile`（統一 CRLF）；新增 `Initialize-PortableEnv`（產 `.env`，**帳密留白**、只帶 `VITE_FIREBASE_*`、已存在就不覆寫、UTF-8 無 BOM）；產出 6 支捷徑（線上工單／自動監看／解鎖試跑／正式解鎖／預警統計／設定帳密）；步驟改 `[n/5]` |
+| `scripts/make-portable.ps1` | 套件清單加 `firebase`；新增 `New-Launcher`（產捷徑，寫檔前**斷言純 ASCII**）與 `Write-BatchFile`（統一 CRLF）；新增 `Initialize-PortableEnv`（產 `.env`，**帳密留白**、只帶 `VITE_FIREBASE_*`、已存在就不覆寫、UTF-8 無 BOM）；產出 7 支捷徑（線上工單／自動監看／**監看試跑**／解鎖試跑／正式解鎖／預警統計／設定帳密）；步驟改 `[n/5]` |
 | `tools/ems-report/unlockQueue.mjs` | Firebase 設定不全時的錯誤訊息**印出該補在哪個絕對路徑**，不再一律講「專案根目錄」（在可攜版上那句是錯的）；補上註解說明兩處都讀的原因 |
 | `docs/TOOLS_SPEC.md` | 0.6 節改寫（捷徑表、`.env` 帶哪些鍵、ASCII＋CRLF 規則）；5.6／5.7 補可攜版指向；版本行 v1.26.1 |
 
@@ -132,6 +132,8 @@
 
 ### 實測（2026-08-23）
 - 打包全程跑通，產出 311MB，6 支 `.bat` 全部 **CRLF、零非 ASCII 位元組**，`.env` 無 BOM
+- 補上 `線上解鎖工單-監看試跑.bat`：換一台新電腦時要有辦法**先驗證登入／心跳／網路都通**
+  而不動任何資料，原本只產正式版等於逼人拿真工單去試
 - 用**可攜版自帶的 node**（v22.23.2）載入 `unlockQueue`／`session`／`report`／`xlsxNode`／`pdfText`
   全部成功 → `firebase`、`playwright-core`、`exceljs`、`xlsx`、`pdfjs-dist` 都解析得到
 - `index.mjs unlock-online` 在設定未填時**立刻停下且不開瀏覽器**，訊息指向正確的絕對路徑
