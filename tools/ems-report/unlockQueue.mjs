@@ -54,6 +54,7 @@ export function toQueueStatus(status) {
  *
  * - Firebase 專案設定取自**專案根目錄的 `.env`**（`VITE_FIREBASE_*`）。
  *   這些值本來就會被打包進公開的網頁檔案，不是機密，因此共用同一份免得兩邊不同步。
+ *   **可攜版沒有專案根目錄**，打包時會把這幾個鍵寫進工具自己的 `.env`，故兩處都讀。
  * - 登入用的帳密取自 `tools/ems-report/.env`（已 gitignore），
  *   必須是**一般使用者或管理員**帳號——解鎖專用帳號依安全規則無法回寫結果。
  *
@@ -79,7 +80,10 @@ function readQueueSettings() {
   if (missing.length > 0) {
     throw new Error(
       `讀不到 Firebase 設定（缺 ${missing.join('、')}）。`
-        + '請確認專案根目錄的 .env 已依 .env.example 填妥（就是網頁前端在用的那一份）。',
+        + '這幾個值不是機密（網頁前端本來就公開帶著），到 Firebase 主控台的'
+        + '「專案設定 → 你的應用程式」抄下來即可。要補在：\n'
+        + `  ${path.join(PATHS.toolDir, '.env')}\n`
+        + '（完整安裝則是專案根目錄的 .env，就是網頁前端在用的那一份）',
     );
   }
 

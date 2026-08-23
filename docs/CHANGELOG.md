@@ -4,6 +4,63 @@
 
 ---
 
+## 2026-08-23　v1.26.1 可攜版補到能跑線上解鎖工單（公務電腦裝不了 Node.js）
+
+### 問題描述
+使用者要在**公務電腦**上處理線上解鎖工單，但那台不允許安裝 Node.js。
+可攜版打包（`scripts/make-portable.ps1`）雖然早在 v1.13.0 就做了，
+但那是「線上工單」（v1.17）、「常駐監看」（v1.18）出現**之前**的東西，
+打包出來的東西根本跑不了工單。
+
+### 根本原因
+三個各自獨立的缺口，任何一個都足以讓工單在可攜版上失敗：
+
+1. **少了 `firebase` 套件**——打包清單只列 `playwright-core`／`pdfjs-dist`／`exceljs`／`xlsx`，
+   而 `unlockQueue.mjs` 要 `firebase/app`、`firebase/auth`、`firebase/firestore`。
+   一按下去就是找不到模組。
+2. **沒有工單的啟動捷徑**——只產出「解鎖試跑」與「救護預警統計」兩支，
+   沒有 `unlock-online`／`unlock-watch`／`unlock --execute`。
+3. **拿不到 Firebase 專案設定**——`readQueueSettings()` 讀的是
+   `PATHS.toolDir/../../.env`（＝專案根目錄）。可攜版**沒有專案根目錄**，
+   那個相對路徑會指到隨身碟外面去，於是 `VITE_FIREBASE_*` 永遠是空的。
+
+### 修改的檔案與內容
+
+| 檔案 | 內容 |
+| --- | --- |
+| `scripts/make-portable.ps1` | 套件清單加 `firebase`；新增 `New-Launcher`（產捷徑，寫檔前**斷言純 ASCII**）與 `Write-BatchFile`（統一 CRLF）；新增 `Initialize-PortableEnv`（產 `.env`，**帳密留白**、只帶 `VITE_FIREBASE_*`、已存在就不覆寫、UTF-8 無 BOM）；產出 6 支捷徑（線上工單／自動監看／解鎖試跑／正式解鎖／預警統計／設定帳密）；步驟改 `[n/5]` |
+| `tools/ems-report/unlockQueue.mjs` | Firebase 設定不全時的錯誤訊息**印出該補在哪個絕對路徑**，不再一律講「專案根目錄」（在可攜版上那句是錯的）；補上註解說明兩處都讀的原因 |
+| `docs/TOOLS_SPEC.md` | 0.6 節改寫（捷徑表、`.env` 帶哪些鍵、ASCII＋CRLF 規則）；5.6／5.7 補可攜版指向；版本行 v1.26.1 |
+
+### 為什麼 `VITE_FIREBASE_*` 可以帶、帳密不行
+那四個值是**網頁前端本來就公開打包進 JS 的**，不是機密，少了它連不上雲端信箱。
+`EMS_USERNAME`／`EMS_PASSWORD`／`EMS_WEB_*` 則一律留白，
+維持 0.6 原本的保證：**隨身碟遺失時被拿走的只有程式碼**。
+
+### 踩到的坑
+- `[Parameter(Mandatory)][string[]]` 會**拒絕陣列裡的空字串**，
+  而說明文字用空字串代表空一行 → 打包在最後一步炸掉。要補 `[AllowEmptyString()]`。
+- `.env` 不能有 BOM：Node 的 `loadEnvFile` 會把 BOM 併進第一個鍵名，
+  於是 `VITE_FIREBASE_API_KEY` 讀不到。改用 `UTF8Encoding($false)` 寫檔。
+- here-string 產出的 `.bat` 換行會跟著 `.ps1` 自己的換行走。統一在寫檔時正規化成 CRLF，
+  免得日後 `.ps1` 被存成 LF 就產出 cmd.exe 解析不可靠的批次檔。
+
+### 實測（2026-08-23）
+- 打包全程跑通，產出 311MB，6 支 `.bat` 全部 **CRLF、零非 ASCII 位元組**，`.env` 無 BOM
+- 用**可攜版自帶的 node**（v22.23.2）載入 `unlockQueue`／`session`／`report`／`xlsxNode`／`pdfText`
+  全部成功 → `firebase`、`playwright-core`、`exceljs`、`xlsx`、`pdfjs-dist` 都解析得到
+- `index.mjs unlock-online` 在設定未填時**立刻停下且不開瀏覽器**，訊息指向正確的絕對路徑
+- `unlockQueue.test.mjs` 7/7 通過；全套 301 個測試 300 通過
+  （`ekgSummary.test.mjs` 單獨跑 11/11 全過，合併跑時是 Node test runner 的 IPC 序列化偶發問題，非本次變更所致）
+
+### 已知限制
+- 本機這台**沒有專案根目錄的 `.env`**，因此打包時 `VITE_FIREBASE_*` 是空的並已明確警告。
+  要跑線上工單，得先把那四個值補進可攜版的 `.env`（Firebase 主控台 → 專案設定 → 你的應用程式）。
+- 可攜版仍**只涵蓋 `tools/ems-report`**；`mci-perm`（大量傷患權限）與 `duty-watch`（值班監看）
+  尚未納入（見 7.7）。
+
+---
+
 ## 2026-08-21　v1.26.0 新增撤銷：把「這次新開的」權限收回來
 
 ### 問題描述
