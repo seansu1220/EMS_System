@@ -785,6 +785,11 @@ async function locatePerson(session, entry) {
   if (entry.rowText) {
     // 掃來的名單：查到幾筆都正常（姓氏會命中好幾個人），要認的是「那一列」。
     const picked = await clickRowByDisplayName(session, entry.rowText);
+    if (picked.ok) {
+      // 這一行是「有沒有點到對的人」唯一的憑據：查到好幾筆時，
+      // 光看「查詢結果 N 筆」看不出程式挑了誰。姓名照舊遮蔽後才寫。
+      log.info(`  認到那一列：${maskName(entry.rowText)}（第 ${picked.pages} 頁，共 ${total} 筆裡）`);
+    }
     if (!picked.ok) {
       return fail({
         outcome: picked.ambiguous ? OUTCOME.multiple : OUTCOME.notFound,
