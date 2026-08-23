@@ -48,9 +48,9 @@ export const OUTCOME = {
   multiple: '查到不只一人',
   /** 本來就已經是 MCI002 了，什麼都不用做。 */
   alreadyGranted: '本來就有了',
-  /** 撤銷：已經把勾選取消掉了。 */
+  /** 取消：已經把勾選取消掉了。 */
   revoked: '已取消',
-  /** 撤銷：本來就沒有勾，不用動。 */
+  /** 取消：本來就沒有勾，不用動。 */
   alreadyRevoked: '本來就沒有',
   /** 中途出錯。 */
   failed: '失敗',
@@ -66,8 +66,13 @@ export const OUTCOME = {
  * @property {string[]} [candidates] 卡住時畫面上看得到的東西，供事後排查
  */
 
-/** 目前真正在操作的頁：點「設定」若開了新視窗，要跟著換過去。 */
-function activePage(session) {
+/**
+ * 目前真正在操作的頁：點「設定」若開了新視窗，要跟著換過去。
+ *
+ * 匯出給 `unitSweep.mjs` 用（掃描單位名單時也要認得「現在是哪一頁」）——
+ * 複製一份等於留兩套「哪一頁才是現在」的判斷，遲早會不一致。
+ */
+export function activePage(session) {
   const pages = session.context.pages().filter((page) => !page.isClosed());
   return pages[pages.length - 1] ?? session.page;
 }
@@ -83,7 +88,7 @@ function activePage(session) {
  * @param {(frame: import('playwright-core').Frame) => Promise<T|null|false>} action
  * @returns {Promise<{frame: import('playwright-core').Frame, value: T}|null>}
  */
-async function onSomeFrame(page, action) {
+export async function onSomeFrame(page, action) {
   for (const frame of page.frames()) {
     const value = await action(frame).catch(() => null);
     if (value) return { frame, value };
@@ -299,11 +304,38 @@ export async function openAccountPermissionPage(session) {
 }
 
 /**
+ * 選查詢條件的單位。
+ *
+ * 兩條路：
+ *   - `entry.unitValue`（掃描時從下拉直接抄回來的 value）→ **精準選中那一個**，
+ *     顯示名稱相同的兩個單位也分得開
+ *   - 只有 `entry.unit` 文字（使用者給的名單）→ 用文字比對，多筆相符時停手
+ *
+ * @returns {Promise<{ok:boolean, chosen?:string, reason?:string, ambiguous?:string[]}>}
+ */
+async function selectUnit(frame, unitSelector, entry) {
+  if (entry.unitValue) {
+    try {
+      await frame.selectOption(unitSelector, { value: entry.unitValue });
+      return { ok: true, chosen: entry.unit };
+    } catch {
+      // value 對不上（系統換了一批選項）就退回用文字找，不要整批停擺。
+    }
+  }
+  return selectOptionByText(frame, unitSelector, [entry.unit], SITE.flow.unitLabels);
+}
+
+/**
  * 步驟 3：填查詢條件（單位、姓名，帳號關鍵字清空）並送出搜尋。
  *
  * 帳號關鍵字**一定要清成空白**——使用者特別交代過：那一欄有殘留值就查不到人。
+ *
+ * 匯出給 `unitSweep.mjs`：掃「某個單位有哪些人」用的就是同一個查詢，
+ * 差別只在 `entry.name` 給空字串（＝不限姓名，列出整個單位）。
+ *
+ * @param {{unit: string, name: string, unitValue?: string}} entry
  */
-async function submitSearch(session, frame, entry) {
+export async function submitSearch(session, frame, entry) {
   const page = activePage(session);
   const selectors = SITE.flow.querySelectors;
 
@@ -323,7 +355,7 @@ async function submitSearch(session, frame, entry) {
   const unitSelector = (await hasSelector(frame, selectors.unit))
     ? selectors.unit
     : (await findField(frame, SITE.flow.unitLabels, { tag: 'select' }))?.selector ?? '';
-  const unitResult = await selectOptionByText(frame, unitSelector, [entry.unit], SITE.flow.unitLabels);
+  const unitResult = await selectUnit(frame, unitSelector, entry);
   if (!unitResult.ok) {
     return {
       ok: false,
@@ -458,7 +490,7 @@ export async function readStableCount(page, timeoutMs = TIMING.pageReadyTimeoutM
 }
 
 /** 等畫面上的「載入中」消失（等不到就算了，後面的判斷自己會擋）。 */
-async function waitWhileLoading(page, timeoutMs = TIMING.pageReadyTimeoutMs) {
+export async function waitWhileLoading(page, timeoutMs = TIMING.pageReadyTimeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     let loading = '';
@@ -823,9 +855,12 @@ async function verifyGranted(session, entry) {
 /**
  * 取消一位人員的 MCI 權限：把子系統前面的勾選**取消**，再按確定。
  *
+ * 名單來自 `unitSweep.mjs` 掃出來的「每個單位有哪些人」（見 index.mjs 的 `clear-all`）。
+ *
  * ⚠ 這是把權限**拿掉**，比開通更該小心，因此：
  *   - 只動勾選框，不去改角色下拉（使用者 2026-08-21 指定的作法）
- *   - **本來就沒勾的一律不碰**——那些多半是「本來就沒有權限」的人
+ *   - **本來就沒勾的一律不碰**——那些多半是「本來就沒有權限」的人，
+ *     回報「本來就沒有」就往下一位，一次確定都不用按
  *   - 按完確定一樣**回頭查一次**，確認真的取消掉了才回報成功
  *
  * @param {import('./session.mjs').PermSession} session
@@ -925,7 +960,7 @@ export async function grantAll(session, entries, options = {}) {
 }
 
 /**
- * 依名單逐一**取消**權限。
+ * 依名單逐一**取消**權限（「全面取消」用）。
  * @param {import('./session.mjs').PermSession} session
  * @param {import('./roster.mjs').RosterEntry[]} entries
  * @param {{execute?: boolean, verify?: boolean}} [options]
@@ -936,7 +971,7 @@ export async function revokeAll(session, entries, options = {}) {
 }
 
 /**
- * 逐一處理一整批人（開通與撤銷共用同一個迴圈）。
+ * 逐一處理一整批人（開通與取消共用同一個迴圈）。
  *
  * 一位失敗不影響其他人：結果全部收下來，最後一起列出，
  * 這樣使用者跑一次就知道哪些人要自己補做，不必盯著看。

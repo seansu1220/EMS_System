@@ -61,34 +61,55 @@ export function progressFileFor(sourceLabel) {
 }
 
 /**
- * 撤銷用的進度檔位置。
+ * 「全面取消」的進度檔位置。
  *
- * 刻意**與開通的進度檔分開**：那一份是「昨天開了誰」的唯一憑據，
- * 撤銷的紀錄寫進去會把它蓋掉，之後就再也分不出誰本來就有權限。
- *
- * @param {string} sourceFile 開通時用的進度檔
+ * 刻意**與開通的進度檔分開**：兩件事的名單來源完全不同（開通是使用者給的名單，
+ * 全面取消是掃全機關掃出來的），混在同一個檔案會互相蓋掉、也看不出誰是誰。
  */
-export function revokeProgressFileFor(sourceFile) {
-  return path.join(PATHS.progressDir, `撤銷-${path.basename(sourceFile)}`);
+export function clearAllProgressFile() {
+  return path.join(PATHS.progressDir, '全面取消.jsonl');
 }
 
 /**
- * 從進度檔挑出某一種結果的人。
+ * 「全面取消」掃出來的名單快取。
  *
- * 撤銷就是靠這個挑出「這次新開通的」——**本來就有權限的不會在裡面**。
- *
- * @param {Map<string, ProgressRecord>} progress
- * @param {string} outcome
- * @returns {import('./roster.mjs').RosterEntry[]}
+ * 掃 76 個單位要十分鐘上下，而這件事**跑到一半被中斷是常態**（要跑好幾個小時）。
+ * 存起來之後，續跑就直接接著做人，不必每次重掃一次。
+ * 要重新掃（例如中間有人事異動）用 `--rescan`。
  */
-export function entriesWithOutcome(progress, outcome) {
-  const entries = [];
-  for (const record of progress.values()) {
-    if (record.outcome !== outcome) continue;
-    if (!record.unit || !record.name) continue;
-    entries.push({ unit: record.unit, name: record.name, lineNumber: 0 });
+export function clearAllRosterFile() {
+  return path.join(PATHS.progressDir, '全面取消-名單.json');
+}
+
+/**
+ * 把掃出來的名單存起來。
+ *
+ * ⚠ 含姓名，只落在 `out/progress/`（`.gitignore` 已排除 `tools/**\/out/`）。
+ *
+ * @param {string} filePath
+ * @param {import('./roster.mjs').RosterEntry[]} entries
+ */
+export async function saveRoster(filePath, entries) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const payload = { savedAt: new Date().toISOString(), entries };
+  await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+/**
+ * 讀回上次掃出來的名單（沒有、或讀不懂就當成「還沒掃過」）。
+ *
+ * @param {string} filePath
+ * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[], savedAt: string}>}
+ */
+export async function loadRoster(filePath) {
+  try {
+    const payload = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+    return { entries, savedAt: String(payload?.savedAt ?? '') };
+  } catch {
+    // 沒有檔案＝第一次跑；壞掉的檔案重掃一次就好，不值得讓整個流程失敗。
+    return { entries: [], savedAt: '' };
   }
-  return entries;
 }
 
 /**

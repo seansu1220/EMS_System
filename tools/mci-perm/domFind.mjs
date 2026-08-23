@@ -507,6 +507,88 @@ function queryPage(params) {
     return described;
   }
 
+  if (mode === 'optionList') {
+    // 一個下拉裡有哪些選項（連 value 一起帶回來）。
+    // 「全面取消」要逐一選過每個單位，用 value 選比用文字選精準：
+    // 兩個單位顯示名稱萬一相同，用文字會判成「相符的不只一個」而卡住。
+    const all = Array.prototype.slice.call(document.querySelectorAll(params.selector));
+    const element = all.filter(isVisible)[0] || all[0];
+    if (!element || !element.options) return null;
+    return Array.prototype.slice.call(element.options).map((option, index) => ({
+      index,
+      value: option.value,
+      text: clean(option.textContent),
+    }));
+  }
+
+  if (mode === 'columnValues') {
+    // 查詢結果表格裡某一欄的內容。
+    //
+    // ⚠ 這是本檔**唯一會回傳資料列內容**的模式（其餘只回傳筆數）。
+    //   只給「全面取消」讀姓名欄用——不先知道一個單位裡有誰，就無從逐一取消。
+    //   呼叫端負責遮蔽後才輸出（見 logger 的 maskName）。
+    const wanted = params.headers || [];
+    const requireTexts = params.requireTexts || [];
+    const tables = Array.prototype.slice.call(document.querySelectorAll('table')).filter(isVisible);
+    const seenHeaders = [];
+
+    for (const table of tables) {
+      // 先確認這張是「查詢結果」那一張：它一定含有那一列的動作按鈕（「設定」）。
+      // 沒有這道關卡的話，查詢條件區本身也是一張表格，而且第一列剛好寫著
+      // 「單位　姓名」——會被誤認成標題列，讀出一堆不是人名的東西。
+      //
+      // ⚠ 不能只比對 `table.textContent`：這個系統的「設定」是
+      //   `<input type="button" value="設定">`，而 input 的 textContent 是空的。
+      //   要連 value／title 一起看（textOf 就是做這件事）。
+      if (requireTexts.length > 0) {
+        const buttons = Array.prototype.slice.call(
+          table.querySelectorAll('a, button, input[type="button"], input[type="submit"], input[type="image"], [onclick]'),
+        );
+        const hasAction =
+          buttons.some((element) => requireTexts.some((candidate) => matches(textOf(element), candidate, false))) ||
+          requireTexts.some((candidate) => matches(clean(table.textContent), candidate, false));
+        if (!hasAction) continue;
+      }
+
+      const rows = Array.prototype.slice.call(table.querySelectorAll('tr')).filter(isVisible);
+      const headerRow = rows.find((row) => row.querySelectorAll('th').length > 0) || rows[0];
+      if (!headerRow) continue;
+      const headerCells = Array.prototype.slice.call(headerRow.querySelectorAll('th, td'));
+      const headers = headerCells.map((cell) => clean(cell.textContent));
+      for (const header of headers) {
+        if (header && seenHeaders.indexOf(header) < 0) seenHeaders.push(header);
+      }
+
+      // 先找完全相同的欄位標題，再退而求其次找包含的
+      //（排序欄位有時會寫成「姓名 ▲」，那時只有包含比對認得出來）。
+      let columnIndex = -1;
+      for (const exact of [true, false]) {
+        for (const candidate of wanted) {
+          columnIndex = headers.findIndex((header) => header && matches(header, candidate, exact));
+          if (columnIndex >= 0) break;
+        }
+        if (columnIndex >= 0) break;
+      }
+      if (columnIndex < 0) continue;
+
+      const values = [];
+      for (const row of rows) {
+        if (row === headerRow) continue;
+        const cells = Array.prototype.slice.call(row.querySelectorAll('td'));
+        if (cells.length === 0) continue; // 標題列或分隔列
+        values.push(clean(cells[columnIndex] ? cells[columnIndex].textContent : ''));
+      }
+      return { ok: true, columnIndex, headers, values };
+    }
+
+    return {
+      ok: false,
+      reason: tables.length === 0 ? '這一頁沒有看得見的表格' : '找不到「標題列有這一欄」的結果表格',
+      headers: seenHeaders.slice(0, 20),
+      values: [],
+    };
+  }
+
   if (mode === 'dataRowCount') {
     // 查詢結果有幾列：只數列數，**不回傳任何一列的內容**（那是個資）。
     const tables = Array.prototype.slice.call(document.querySelectorAll('table')).filter(isVisible);
@@ -741,6 +823,34 @@ export async function rowAction(frame, options) {
 /** 目前畫面上最大的表格有幾列資料（只數列數，不取內容）。 */
 export async function countDataRows(frame) {
   return frame.evaluate(queryPage, { mode: 'dataRowCount' });
+}
+
+/**
+ * 列出一個下拉的所有選項（含 value）。
+ *
+ * 給「全面取消」逐一走過每個單位用：拿到 value 之後就能**精準選中那一個**，
+ * 不必再靠文字比對（顯示名稱相同的兩個單位會讓文字比對停手）。
+ *
+ * @param {string} selector
+ * @returns {Promise<{index:number, value:string, text:string}[]|null>} 沒有這個下拉時為 null
+ */
+export async function listOptions(frame, selector) {
+  return frame.evaluate(queryPage, { mode: 'optionList', selector });
+}
+
+/**
+ * 從查詢結果表格讀出某一欄的內容。
+ *
+ * ⚠ 這是本模組**唯一會取出資料列內容**的函式，只給「全面取消」讀姓名欄用：
+ *   不先知道一個單位裡有誰，就沒辦法逐一取消。取出的姓名只留在記憶體與
+ *   `out/` 底下的名單／結果檔，寫進 log 前一律先經過 `maskName`。
+ *
+ * @param {string[]} headerCandidates 欄位標題（由前往後比對，先完全相符再包含）
+ * @param {string[]} [requireTexts] 表格裡一定要有的字（用來認出「這張才是結果表」）
+ * @returns {Promise<{ok:boolean, columnIndex?:number, headers:string[], values:string[], reason?:string}>}
+ */
+export async function readResultColumn(frame, headerCandidates, requireTexts = []) {
+  return frame.evaluate(queryPage, { mode: 'columnValues', headers: headerCandidates, requireTexts });
 }
 
 /**

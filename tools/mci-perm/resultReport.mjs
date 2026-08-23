@@ -9,7 +9,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PATHS, RESULT_RETENTION_DAYS } from './config.mjs';
-import { OUTCOME } from './grantFlow.mjs';
+import { SETTLED_OUTCOMES } from './grantFlow.mjs';
 import { log, maskName } from './logger.mjs';
 
 /**
@@ -30,9 +30,10 @@ export function summarize(results) {
   for (const result of results) {
     byOutcome[result.outcome] = (byOutcome[result.outcome] ?? 0) + 1;
   }
-  // 「本來就有了」也算做完——那是好消息，不是待辦。
-  const done = [OUTCOME.granted, OUTCOME.dryRun, OUTCOME.alreadyGranted];
-  const needsAttention = results.filter((result) => !done.includes(result.outcome));
+  // 「本來就有了」「本來就沒有」也算做完——那是好消息，不是待辦。
+  // 直接用 grantFlow 的那一份清單，開通與取消才不會各有一套「算不算做完」的定義
+  //（少列一種結果，就會有一整批人被誤報成「需要你接手」）。
+  const needsAttention = results.filter((result) => !SETTLED_OUTCOMES.includes(result.outcome));
   return { total: results.length, byOutcome, needsAttention };
 }
 
@@ -70,8 +71,10 @@ function timestamp(date = new Date()) {
  *   因此只落在 `out/result/`，不可外流、不可上傳。
  *
  * @param {import('./grantFlow.mjs').GrantResult[]} results
- * @param {{execute?: boolean, now?: Date,
- *   problems?: import('./roster.mjs').RosterProblem[]}} [options]
+ * @param {{execute?: boolean, now?: Date, action?: string,
+ *   problems?: import('./roster.mjs').RosterProblem[],
+ *   unitProblems?: import('./unitSweep.mjs').UnitProblem[]}} [options]
+ *   `unitProblems`＝全面取消時「這個單位沒掃出來」的清單
  * @returns {Promise<string>} 產出的檔案路徑
  */
 export async function writeResultReport(results, options = {}) {
@@ -104,6 +107,19 @@ export async function writeResultReport(results, options = {}) {
       `這幾列缺欄位，程式沒有處理。要補做的話，先在 Excel 裡補齊再跑一次。`,
       ``,
       ...problems.map((problem) => `- 第 ${problem.lineNumber} 列：${problem.reason}`),
+    );
+  }
+
+  const unitProblems = options.unitProblems ?? [];
+  if (unitProblems.length > 0) {
+    lines.push(
+      ``,
+      `## 沒掃乾淨的 ${unitProblems.length} 個單位`,
+      ``,
+      `這幾個單位的人**沒有全部列進上面的名單**，因此也沒有全部處理到。`,
+      `請自己到系統確認，或排除原因之後再跑一次（會接續處理，已做完的不會重做）。`,
+      ``,
+      ...unitProblems.map((problem) => `- ${problem.unit}：${problem.reason}`),
     );
   }
 

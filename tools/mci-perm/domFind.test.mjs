@@ -24,7 +24,9 @@ import {
   hasText,
   listClickableTexts,
   listFields,
+  listOptions,
   listSelects,
+  readResultColumn,
   rowAction,
   selectOptionByText,
   selectOptionInRow,
@@ -70,6 +72,38 @@ const QUERY_FIXTURE = `
     <td><input type="button" value="設定"></td>
   </tr>
 </table>`;
+
+/**
+ * 仿照「查一整個單位」的結果畫面（全面取消要靠它掃出誰在這個單位）：
+ * 查詢條件區用真實的 id、結果表格有好幾列人、下面還有分頁按鈕。
+ *
+ * ⚠ 誘餌一：查詢條件區也是一張表格，第一列就寫著「單位　姓名」——
+ *   只認「標題列有姓名」的話會讀到它。
+ * ⚠ 誘餌二：分頁同時有「上一頁」與「下一頁」，用包含比對會按錯。
+ */
+const UNIT_LIST_FIXTURE = `
+<table id="cond">
+  <tr>
+    <td>單位</td>
+    <td>
+      <select id="searchDeptNotNfa">
+        <option value="">請選擇</option>
+        <option value="A1">緊急救護科</option>
+        <option value="B1">測試甲分隊</option>
+      </select>
+    </td>
+    <td>姓名</td><td><input type="text" id="searchNameNotNfa"></td>
+  </tr>
+  <tr><td colspan="4"><input type="button" value="搜尋"></td></tr>
+</table>
+<div>顯示第 1 至 3 項結果，共 3 項</div>
+<table id="result">
+  <tr><th>帳號</th><th>姓名</th><th>單位</th><th>功能</th></tr>
+  <tr><td>test01</td><td>測試甲</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+  <tr><td>test02</td><td>測試乙</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+  <tr><td>test03</td><td>測試丙</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+</table>
+<div id="pager"><a href="#">上一頁</a><a href="#">下一頁</a></div>`;
 
 /** 仿照權限設定畫面：好幾個子系統各自一列，每列旁邊都有一個一模一樣的角色下拉。 */
 const PERMISSION_FIXTURE = `
@@ -404,7 +438,7 @@ test('取消勾選：只動畫面上看得到的那一個', { skip }, async () =
 });
 
 test('本來就沒勾的不會被反而勾起來', { skip }, async () => {
-  // 撤銷時對「本來就沒有權限」的人呼叫，絕不能幫他勾上去。
+  // 全面取消時對「本來就沒有權限」的人呼叫，絕不能幫他勾上去。
   const frame = await load(PERMISSION_FIXTURE);
   const result = await setVisibleCheckbox(frame, '#MCI', false);
   assert.equal(result.checked, false);
@@ -419,10 +453,53 @@ test('取消 MCI 不會動到別的子系統', { skip }, async () => {
   assert.equal(await frame.isChecked('#ATM'), true, '隔壁子系統的權限不該被碰');
 });
 
-test('讀得出勾選框的現況（撤銷前要先看）', { skip }, async () => {
+test('讀得出勾選框的現況（取消之前要先看）', { skip }, async () => {
   const frame = await load(PERMISSION_FIXTURE);
   await frame.check('#MCI');
   const dom = await readSubsystemDom(frame, '#MCI', '#MCIselect');
   assert.equal(dom.checkbox.checked, true);
   assert.equal(dom.checkbox.visibleCount, 1);
+});
+
+// ── 全面取消：先掃出「一個單位裡有誰」──────────────────────────────
+
+test('列得出單位下拉的每一個選項（含 value）', { skip }, async () => {
+  const frame = await load(UNIT_LIST_FIXTURE);
+  const options = await listOptions(frame, '#searchDeptNotNfa');
+  assert.deepEqual(options.map((option) => option.text), ['請選擇', '緊急救護科', '測試甲分隊']);
+  assert.equal(options[0].value, '', '「請選擇」沒有 value，掃描時要略過');
+  assert.equal(options[2].value, 'B1');
+});
+
+test('讀得出結果表格「姓名」那一欄', { skip }, async () => {
+  const frame = await load(UNIT_LIST_FIXTURE);
+  const column = await readResultColumn(frame, SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts);
+  assert.equal(column.ok, true);
+  assert.deepEqual(column.values, ['測試甲', '測試乙', '測試丙']);
+});
+
+test('不會把查詢條件區誤當成結果表格', { skip }, async () => {
+  // 查詢條件區本身也是一張表格，而且第一列剛好寫著「單位　姓名」。
+  // 沒有「表格裡要有設定按鈕」這道關卡的話，會讀出一堆不是人名的東西。
+  const frame = await load(UNIT_LIST_FIXTURE);
+  const column = await readResultColumn(frame, SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts);
+  assert.ok(!column.values.some((value) => value.includes('搜尋')), `實際讀到：${column.values.join('｜')}`);
+});
+
+test('結果表格沒有「姓名」欄時如實回報，並帶回看到的欄位標題', { skip }, async () => {
+  await page.setContent(`
+    <table>
+      <tr><th>帳號</th><th>單位</th><th>功能</th></tr>
+      <tr><td>test01</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+    </table>`);
+  const column = await readResultColumn(page.mainFrame(), SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts);
+  assert.equal(column.ok, false);
+  assert.ok(column.headers.includes('帳號'), `實際看到的標題：${column.headers.join('｜')}`);
+});
+
+test('「下一頁」用完全相符比對，不會誤按「上一頁」', { skip }, async () => {
+  const frame = await load(UNIT_LIST_FIXTURE);
+  const hits = await findClickables(frame, SITE.flow.nextPageTexts, { exact: true });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].text, '下一頁');
 });
