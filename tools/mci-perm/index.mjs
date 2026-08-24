@@ -296,7 +296,14 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
     // 舊版的名單只存了姓名（而且是遮蔽過的），補算「要拿什麼去查」再用，
     // 免得為了兩個推得出來的欄位要人家重掃十分鐘。
     const cached = { ...loaded, entries: withSearchNames(loaded.entries) };
-    if (cached.entries.length > 0) {
+    // 帳號欄推不出來——它只存在於系統畫面上，只能重掃。
+    // 沒有帳號時，同單位遮蔽後撞名的兩位（兩個 `李O城`）會被併成一筆而且開不了，
+    // 所以寧可多花幾分鐘重掃，也不要沿用一份注定卡住的名單。
+    const missingAccounts = cached.entries.length > 0 && cached.entries.every((entry) => !entry.rowAccount);
+    if (missingAccounts) {
+      log.info('上次掃到的名單沒有帳號欄（舊版存的），同名的人會分不出來——這次自動重掃一次。');
+    }
+    if (cached.entries.length > 0 && !missingAccounts) {
       log.ok(`沿用上次掃到的名單：${cached.entries.length} 位（掃描時間 ${cached.savedAt}）`);
       // 這份名單是**上次掃的**，反映的是當時的設定與人事。改了 .env 的範圍
       // 卻沿用舊名單的話，畫面上講的範圍跟實際做的會對不起來。

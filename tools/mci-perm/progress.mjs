@@ -26,10 +26,23 @@ import { OUTCOME, SETTLED_OUTCOMES } from './grantFlow.mjs';
 /**
  * 一位人員在進度檔裡的識別。
  *
- * 用「單位＋姓名」而不是只用姓名：不同單位的同名者是兩個人，
- * 只看姓名會讓其中一位被誤認成做過了。
+ * 用「單位＋姓名＋帳號」而不是只用姓名：
+ *   - 不同單位的同名者是兩個人，只看姓名會讓其中一位被誤認成做過了；
+ *   - 姓名被系統遮蔽後，**同一個單位裡也會撞名**（兩位都顯示成 `李O城`，
+ *     2026-08-24 實跑踩到），這時只有帳號分得出是哪一位。
  */
 export function entryKey(entry) {
+  return `${entry.unit}｜${entry.name}｜${entry.rowAccount ?? ''}`;
+}
+
+/**
+ * 2026-08-24 以前的鍵（沒有帳號）。
+ *
+ * 只為了讀得懂舊進度檔：換了鍵的格式就等於整份重跑，而上一份大隊名單
+ * 跑完要 37 分鐘。用它查到的紀錄照樣算數——但**只在名單裡這個姓名唯一時**
+ * 才可以用（見 {@link splitByProgress}）。
+ */
+export function legacyEntryKey(entry) {
   return `${entry.unit}｜${entry.name}`;
 }
 
@@ -160,6 +173,7 @@ export async function appendProgress(filePath, entry, result) {
     key: entryKey(entry),
     unit: entry.unit,
     name: entry.name,
+    account: entry.rowAccount ?? '',
     outcome: result.outcome,
     detail: result.detail,
     at: new Date().toISOString(),
@@ -179,8 +193,21 @@ export async function appendProgress(filePath, entry, result) {
 export function splitByProgress(entries, progress) {
   const todo = [];
   const skipped = [];
+
+  // 舊格式的鍵不含帳號。名單裡「單位＋姓名」出現不只一次時**絕不能**拿它來查：
+  // 兩位同名者會共用同一筆舊紀錄，其中一位沒做過卻被當成做完了，於是默默漏開。
+  /** @type {Map<string, number>} */
+  const sameNameCounts = new Map();
   for (const entry of entries) {
-    const record = progress.get(entryKey(entry));
+    const legacy = legacyEntryKey(entry);
+    sameNameCounts.set(legacy, (sameNameCounts.get(legacy) ?? 0) + 1);
+  }
+
+  for (const entry of entries) {
+    const legacy = legacyEntryKey(entry);
+    const record =
+      progress.get(entryKey(entry)) ??
+      (sameNameCounts.get(legacy) === 1 ? progress.get(legacy) : undefined);
     if (isDone(record)) skipped.push({ entry, record });
     else todo.push(entry);
   }

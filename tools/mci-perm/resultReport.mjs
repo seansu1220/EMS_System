@@ -50,7 +50,9 @@ export function printSummary(results) {
   }
   log.warn(`以下 ${summary.needsAttention.length} 位需要你自己到系統確認：`);
   for (const result of summary.needsAttention) {
-    log.warn(`  ${result.unit}　${maskName(result.name)}｜${result.outcome}｜${result.detail}`);
+    // 帳號照原樣印（系統本來就遮過了）：姓名遮起來之後，那是你回系統時唯一找得到人的線索。
+    const account = result.account ? `（帳號 ${result.account}）` : '';
+    log.warn(`  ${result.unit}　${maskName(result.name)}${account}｜${result.outcome}｜${result.detail}`);
   }
   return summary;
 }
@@ -90,11 +92,12 @@ export async function writeResultReport(results, options = {}) {
     ``,
     `> ⚠ 本檔含姓名，屬個人資料：只供承辦人核對與補做，請勿外傳，也不要放進版控或雲端。`,
     ``,
-    `| # | 單位 | 姓名 | 結果 | 說明 |`,
-    `| --- | --- | --- | --- | --- |`,
+    `| # | 單位 | 姓名 | 帳號 | 結果 | 說明 |`,
+    `| --- | --- | --- | --- | --- | --- |`,
     ...results.map(
       (result, index) =>
-        `| ${index + 1} | ${result.unit} | ${result.name} | ${result.outcome} | ${result.detail} |`,
+        `| ${index + 1} | ${result.unit} | ${result.name} | ${result.account ?? ''} | ` +
+        `${result.outcome} | ${result.detail} |`,
     ),
   ];
 
@@ -129,7 +132,9 @@ export async function writeResultReport(results, options = {}) {
       `## 需要人工接手的`,
       ``,
       ...summary.needsAttention.map(
-        (result) => `- ${result.unit}　${result.name}：${result.outcome}（卡在${result.step}）— ${result.detail}`,
+        (result) =>
+          `- ${result.unit}　${result.name}${result.account ? `（帳號 ${result.account}）` : ''}：` +
+          `${result.outcome}（卡在${result.step}）— ${result.detail}`,
       ),
     );
   }

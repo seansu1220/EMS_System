@@ -11,7 +11,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { OUTCOME } from './grantFlow.mjs';
-import { appendProgress, countByOutcome, entryKey, isDone, loadProgress, splitByProgress } from './progress.mjs';
+import {
+  appendProgress,
+  countByOutcome,
+  entryKey,
+  isDone,
+  legacyEntryKey,
+  loadProgress,
+  splitByProgress,
+} from './progress.mjs';
 
 const 甲 = { unit: '大溪分隊', name: '測試甲', lineNumber: 2 };
 const 乙 = { unit: '中壢分隊', name: '測試乙', lineNumber: 3 };
@@ -42,6 +50,42 @@ test('依進度分成「要做的」與「已完成的」', () => {
   const progress = new Map([[entryKey(甲), { outcome: OUTCOME.granted }]]);
   const { todo, skipped } = splitByProgress([甲, 乙], progress);
   assert.deepEqual(todo.map((entry) => entry.name), ['測試乙']);
+  assert.equal(skipped.length, 1);
+});
+
+test('同一個單位裡遮蔽後同名、但帳號不同，是兩個人', () => {
+  // 2026-08-24 實跑踩到的：第二救災救護大隊有兩位都顯示成「李O城」。
+  // 鍵若不含帳號，其中一位會被當成另一位做過了而默默跳過。
+  const 前者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****621' };
+  const 後者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****564' };
+  assert.notEqual(entryKey(前者), entryKey(後者));
+});
+
+test('舊進度檔（沒有帳號的鍵）照樣算數，不必整份重跑', () => {
+  const 甲有帳號 = { ...甲, rowAccount: 'A1*****621' };
+  const progress = new Map([[legacyEntryKey(甲有帳號), { outcome: OUTCOME.granted }]]);
+  const { todo, skipped } = splitByProgress([甲有帳號, 乙], progress);
+  assert.deepEqual(todo.map((entry) => entry.name), ['測試乙']);
+  assert.equal(skipped.length, 1);
+});
+
+test('名單裡同名不只一位時，舊鍵一律不採用（寧可重做也不能漏做）', () => {
+  // 舊鍵不含帳號，兩位同名者會共用同一筆紀錄：
+  // 採用它就等於「另一位沒做過卻被當成做完了」，那是默默漏開權限。
+  const 前者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****621' };
+  const 後者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****564' };
+  const progress = new Map([[legacyEntryKey(前者), { outcome: OUTCOME.granted }]]);
+  const { todo, skipped } = splitByProgress([前者, 後者], progress);
+  assert.equal(todo.length, 2, '兩位都要再跑一次');
+  assert.equal(skipped.length, 0);
+});
+
+test('新鍵的紀錄優先於舊鍵', () => {
+  const 前者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****621' };
+  const 後者 = { unit: '第二救災救護大隊', name: '李O城', rowAccount: 'A1*****564' };
+  const progress = new Map([[entryKey(前者), { outcome: OUTCOME.granted }]]);
+  const { todo, skipped } = splitByProgress([前者, 後者], progress);
+  assert.deepEqual(todo.map((entry) => entry.rowAccount), ['A1*****564']);
   assert.equal(skipped.length, 1);
 });
 

@@ -61,6 +61,7 @@ export const OUTCOME = {
  * @typedef {Object} GrantResult
  * @property {string} unit
  * @property {string} name
+ * @property {string} [account] 那一列上顯示的帳號（遮過的）。同名時這是唯一分得出人的欄位
  * @property {string} outcome {@link OUTCOME} 之一
  * @property {string} step 走到（或卡在）哪一步
  * @property {string} detail 白話說明
@@ -499,22 +500,31 @@ export async function readStableCount(page, timeoutMs = TIMING.pageReadyTimeoutM
  * 放在這裡而不是 `unitSweep.mjs`：掃名單要用它、逐位處理時「認出是哪一列」
  * 也要用它，而 `unitSweep` 本來就 import 這個檔（反過來會變成循環相依）。
  *
- * @returns {Promise<{ok:boolean, values:string[], headers:string[], reason?:string}>}
+ * 帳號欄一起讀回來（`accounts`，位置與 `values` 一一對應）：姓名遮蔽後會撞名，
+ * 帳號是同一列上唯一還分得出人的欄位。這一頁沒有帳號欄時 `accounts` 全是空字串，
+ * 呼叫端就只能靠姓名認人（少一項依據，不會壞掉）。
+ *
+ * @returns {Promise<{ok:boolean, values:string[], accounts:string[],
+ *   headers:string[], reason?:string}>}
  */
 export async function readResultNames(session) {
   /** 讀不到時，把「這個 frame 看到了哪些欄位標題」留下來當排查線索。 */
   let diagnosis = null;
 
   for (const frame of activePage(session).frames()) {
-    const result = await readResultColumn(frame, SITE.flow.resultNameHeaders, SITE.flow.rowActionTexts).catch(
-      () => null,
-    );
-    if (result?.ok) return result;
+    const result = await readResultColumn(
+      frame,
+      SITE.flow.resultNameHeaders,
+      SITE.flow.rowActionTexts,
+      SITE.flow.resultAccountHeaders,
+    ).catch(() => null);
+    if (result?.ok) return { ...result, accounts: result.extras ?? [] };
     if (result && !diagnosis) diagnosis = result;
   }
   return {
     ok: false,
     values: [],
+    accounts: [],
     headers: diagnosis?.headers ?? [],
     reason: diagnosis?.reason ?? '讀不到查詢結果表格',
   };
@@ -703,45 +713,109 @@ async function ensureSubsystemChecked(frame, code) {
  *
  * 給**從系統畫面掃來的名單**用（見 unitSweep.mjs）。那些名單上的姓名是系統
  * 遮蔽過的（`許O軒`），拿去查一定是 0 筆，所以改成：用**沒被遮蔽的那幾個字**
- * （姓氏）去查，再從結果裡認出「顯示文字一模一樣」的那一列。
+ * （姓氏）去查，再從結果裡認出是哪一列。
  *
  * 認列而不是「剛好查到一筆」：姓氏一定會命中好幾個人。
  *
+ * 怎麼認，看**這一頁讀不讀得到帳號欄**：
+ *
+ *   - 讀得到，而且名單上也有帳號 → **只認「姓名格＋帳號格都完全相符」**。
+ *     同單位兩位都顯示成 `李O城` 時，這是唯一分得出來的辦法
+ *     （2026-08-24 實跑卡住的就是這一種）。
+ *     ⚠ 這時**絕不退回只比姓名**：帳號對不上代表「這一列不是他」，
+ *       退回去只會點到同名的另一位——那就是把權限開給錯的人。
+ *       對不上就當這一頁沒有他，翻下一頁；翻完都沒有就如實回報。
+ *   - 讀不到帳號（舊名單、或這一頁沒有帳號欄）→ 由緊到鬆試兩種：
+ *       1. **姓名格完全相符**：兩個字的名字遮成 `陳O` 靠這一關救回來。
+ *       2. **整列文字包含姓名**：認不出欄位時的最後退路，也是 2026-08-24
+ *          以前唯一的作法。⚠ 它會把 `陳O` 誤中成同單位的 `陳O宏`、`陳O婷`…
+ *          所以只在第 1 種一列都沒中時才輪到它。
+ *     愈鬆的認法只會多中不會少中，因此只要某一種中了不只一列，更鬆的一定也是
+ *     ——那時直接停手，不必再試。
+ *
  * @param {string} rowText 那一列上顯示的姓名（含遮蔽符號）
- * @returns {Promise<{ok: boolean, reason?: string, pages: number}>}
+ * @param {string} [rowAccount] 那一列上顯示的帳號（同樣是遮過的，例如 `A1*****621`）
+ * @returns {Promise<{ok: boolean, reason?: string, pages: number,
+ *   matchedBy?: string, ambiguous?: boolean}>}
  */
-async function clickRowByDisplayName(session, rowText) {
+async function clickRowByDisplayName(session, rowText, rowAccount) {
   for (let pageIndex = 0; pageIndex < UNIT_SWEEP.maxPagesPerUnit; pageIndex += 1) {
-    const found = await onSomeFrame(activePage(session), async (frame) => {
-      const result = await rowAction(frame, {
-        rowTexts: [rowText],
-        actionTexts: SITE.flow.rowActionTexts,
-        // 同一個遮蔽後的名字在同一個單位出現兩次時**絕不亂點**——
-        // 那種情況連人看畫面也分不出是哪一位。
-        requireUnique: true,
-        // 那一列若還有勾選框，預設規則會讓它排在「設定」前面而被點到。
-        skipToggles: true,
-        requireActionText: true,
-      });
-      // 這一頁沒有那一列是正常的（要翻下一頁），不算失敗。
-      if (!result.ok && result.rowCount === 0) return null;
-      return result;
-    });
+    // 先讀這一頁的姓名與帳號欄：既用來決定「這一頁能不能靠帳號認人」，
+    // 也是等一下翻頁時判斷「真的換頁了沒」的依據（同一份資料，讀一次就好）。
+    const column = await readResultNames(session);
+    const canUseAccount = Boolean(rowAccount) && column.ok && column.accounts.some(Boolean);
+    const attempts = canUseAccount
+      ? [{ cellTexts: [rowText, rowAccount], how: '姓名＋帳號' }]
+      : [
+          { cellTexts: [rowText], how: '姓名欄完全相符' },
+          { rowTexts: [rowText], how: '整列文字包含姓名' },
+        ];
 
-    if (found?.value?.ok) return { ok: true, pages: pageIndex + 1 };
-    if (found?.value) {
-      return { ok: false, reason: found.value.reason, pages: pageIndex + 1, ambiguous: true };
+    /** 這一頁「中了不只一列」的那一次——拿它來解釋為什麼卡住。 */
+    let tooMany = null;
+
+    for (const attempt of attempts) {
+      const found = await onSomeFrame(activePage(session), async (frame) => {
+        const result = await rowAction(frame, {
+          rowTexts: attempt.rowTexts ?? [],
+          cellTexts: attempt.cellTexts ?? [],
+          actionTexts: SITE.flow.rowActionTexts,
+          // 同一列認不出是誰時**絕不亂點**——點錯就是把權限開給別人。
+          requireUnique: true,
+          // 那一列若還有勾選框，預設規則會讓它排在「設定」前面而被點到。
+          skipToggles: true,
+          requireActionText: true,
+        });
+        // 這一頁沒有那一列是正常的（換下一種認法或翻下一頁），不算失敗。
+        if (!result.ok && result.rowCount === 0) return null;
+        return result;
+      });
+
+      if (found?.value?.ok) return { ok: true, pages: pageIndex + 1, matchedBy: attempt.how };
+      if (found?.value) {
+        // 中了不只一列。更鬆的認法只會中更多，再試下去沒有意義。
+        tooMany = { reason: found.value.reason, how: attempt.how, rowCount: found.value.rowCount };
+        break;
+      }
     }
 
-    const column = await readResultNames(session);
+    if (tooMany) {
+      return {
+        ok: false,
+        reason: `用「${tooMany.how}」認也${tooMany.reason}（${tooMany.rowCount} 列）`,
+        pages: pageIndex + 1,
+        ambiguous: true,
+      };
+    }
+
+    // 這一頁沒有他。讀不到表格就沒辦法翻頁，也沒辦法確認翻頁成功。
     if (!column.ok || column.values.length === 0) {
       return { ok: false, reason: '讀不到結果表格，沒辦法認出是哪一列', pages: pageIndex + 1 };
     }
     if (!(await goToNextPage(session, column.values[0]))) {
-      return { ok: false, reason: '翻完所有頁都沒有這一列', pages: pageIndex + 1 };
+      const why = canUseAccount ? '翻完所有頁都沒有姓名與帳號都相符的那一列' : '翻完所有頁都沒有這一列';
+      return { ok: false, reason: why, pages: pageIndex + 1 };
     }
   }
   return { ok: false, reason: '翻了太多頁還是沒找到', pages: UNIT_SWEEP.maxPagesPerUnit };
+}
+
+/**
+ * 同名的那幾列各自的帳號——「查到不只一人」時，說明裡要寫得出是哪幾位。
+ *
+ * 帳號在畫面上本來就是遮過的（`A1*****621`），但那是承辦人回系統手動補做時
+ * **唯一**分得出兩位同名者的依據，所以照實寫進結果清單與 log。
+ *
+ * @returns {Promise<string[]>} 讀不到就回空陣列（說明少一句，不影響流程）
+ */
+async function accountsOfSameName(session, rowText) {
+  const column = await readResultNames(session).catch(() => null);
+  if (!column?.ok) return [];
+  const squeeze = (text) => String(text ?? '').replace(/[\s　]/g, '');
+  const wanted = squeeze(rowText);
+  return column.values
+    .map((name, index) => (squeeze(name) === wanted ? column.accounts[index] : ''))
+    .filter(Boolean);
 }
 
 /**
@@ -784,19 +858,26 @@ async function locatePerson(session, entry) {
 
   if (entry.rowText) {
     // 掃來的名單：查到幾筆都正常（姓氏會命中好幾個人），要認的是「那一列」。
-    const picked = await clickRowByDisplayName(session, entry.rowText);
+    const picked = await clickRowByDisplayName(session, entry.rowText, entry.rowAccount);
     if (picked.ok) {
       // 這一行是「有沒有點到對的人」唯一的憑據：查到好幾筆時，
-      // 光看「查詢結果 N 筆」看不出程式挑了誰。姓名照舊遮蔽後才寫。
-      log.info(`  認到那一列：${maskName(entry.rowText)}（第 ${picked.pages} 頁，共 ${total} 筆裡）`);
+      // 光看「查詢結果 N 筆」看不出程式挑了誰。姓名照舊遮蔽後才寫，
+      // 連「靠什麼認出來的」一起記——同名時那才是判斷可不可信的關鍵。
+      log.info(
+        `  認到那一列：${maskName(entry.rowText)}` +
+          `（第 ${picked.pages} 頁，共 ${total} 筆裡，靠${picked.matchedBy}）`,
+      );
     }
     if (!picked.ok) {
+      // 同名撞在一起時，把那幾位的帳號寫出來——承辦人回系統補做時只認得帳號。
+      const sameName = picked.ambiguous ? await accountsOfSameName(session, entry.rowText) : [];
       return fail({
         outcome: picked.ambiguous ? OUTCOME.multiple : OUTCOME.notFound,
         step: '步驟4 在查詢結果裡認出那一列',
         detail:
           `以「${maskName(searchName)}」查到 ${total} 筆（依${countedBy}），` +
-          `但${picked.reason}（找了 ${picked.pages} 頁）`,
+          `但${picked.reason}（找了 ${picked.pages} 頁）` +
+          (sameName.length > 1 ? `；畫面上同名的有 ${sameName.length} 位，帳號分別是 ${sameName.join('、')}` : ''),
       });
     }
   } else {
@@ -832,7 +913,7 @@ async function locatePerson(session, entry) {
  * @returns {Promise<GrantResult>}
  */
 export async function grantOne(session, entry, options = {}) {
-  const base = { unit: entry.unit, name: entry.name };
+  const base = { unit: entry.unit, name: entry.name, account: entry.rowAccount ?? '' };
 
   const located = await locatePerson(session, entry);
   if (!located.ok) return { ...base, ...located.result };
@@ -1000,7 +1081,7 @@ async function verifyGranted(session, entry) {
  * @returns {Promise<GrantResult>}
  */
 export async function revokeOne(session, entry, options = {}) {
-  const base = { unit: entry.unit, name: entry.name };
+  const base = { unit: entry.unit, name: entry.name, account: entry.rowAccount ?? '' };
   const code = SITE.flow.subsystemCode;
 
   const located = await locatePerson(session, entry);
@@ -1137,6 +1218,7 @@ async function runBatch(session, entries, options, handleOne) {
       result = {
         unit: entry.unit,
         name: entry.name,
+        account: entry.rowAccount ?? '',
         outcome: OUTCOME.failed,
         step: '未預期的錯誤',
         detail: error instanceof Error ? error.message : String(error),

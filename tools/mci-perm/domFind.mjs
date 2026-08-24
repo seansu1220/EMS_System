@@ -456,17 +456,32 @@ function queryPage(params) {
   }
 
   if (mode === 'rowAction') {
-    // 找出「含指定文字的那一列」，再在那一列裡面找可以按的東西。
+    // 找出「要的那一列」，再在那一列裡面找可以按的東西。認列有兩種方式：
+    //
+    //   cellTexts＝這一列**要有幾格分別完全等於**這些字（姓名欄就是姓名欄）。
+    //     ⚠ 2026-08-24 實跑才發現非用不可：遮蔽後的 `陳O` 是同單位另外 7 位
+    //       `陳O宏`、`陳O婷`… 的開頭，用「整列包含」比對會 8 列全中而卡住。
+    //   rowTexts ＝整列文字**包含**這些字（舊寫法）。表格以外的版面（li、
+    //     沒有 td 的列）只有這一種認得出來，因此保留為退路。
+    const cellTexts = params.cellTexts || [];
+    const rowMatchesTarget = (row) => {
+      if (cellTexts.length === 0) {
+        return (params.rowTexts || []).some((candidate) => matches(clean(row.textContent), candidate, false));
+      }
+      const cells = Array.prototype.slice.call(row.querySelectorAll('td'));
+      if (cells.length === 0) return false;
+      const texts = cells.map((cell) => clean(cell.textContent));
+      return cellTexts.every((candidate) => texts.some((text) => matches(text, candidate, true)));
+    };
+
     const rows = Array.prototype.slice.call(document.querySelectorAll('tr, li'));
-    const targetRows = rows.filter(
-      (row) =>
-        isVisible(row) && params.rowTexts.some((candidate) => matches(clean(row.textContent), candidate, false)),
-    );
+    const targetRows = rows.filter((row) => isVisible(row) && rowMatchesTarget(row));
     // 只留最內層的列（表格巢狀時，外層的 tr 也會命中）。
     const innermost = targetRows.filter((row) => !targetRows.some((other) => other !== row && row.contains(other)));
-    if (innermost.length === 0) return { ok: false, reason: '找不到含該文字的那一列', rowCount: 0 };
+    const howMatched = cellTexts.length > 0 ? '每一格都完全相符' : '含該文字';
+    if (innermost.length === 0) return { ok: false, reason: `找不到${howMatched}的那一列`, rowCount: 0 };
     if (innermost.length > 1 && params.requireUnique) {
-      return { ok: false, reason: '含該文字的列不只一列', rowCount: innermost.length };
+      return { ok: false, reason: `${howMatched}的列不只一列`, rowCount: innermost.length };
     }
     const row = innermost[0];
     const candidates = Array.prototype.slice.call(
@@ -534,6 +549,8 @@ function queryPage(params) {
     //   只給「全面取消」讀姓名欄用——不先知道一個單位裡有誰，就無從逐一取消。
     //   呼叫端負責遮蔽後才輸出（見 logger 的 maskName）。
     const wanted = params.headers || [];
+    // 第二欄是「有就更好」：帳號欄用來把同名的兩列分開（見 config.resultAccountHeaders）。
+    const extraWanted = params.extraHeaders || [];
     const requireTexts = params.requireTexts || [];
     const tables = Array.prototype.slice.call(document.querySelectorAll('table')).filter(isVisible);
     const seenHeaders = [];
@@ -567,24 +584,30 @@ function queryPage(params) {
 
       // 先找完全相同的欄位標題，再退而求其次找包含的
       //（排序欄位有時會寫成「姓名 ▲」，那時只有包含比對認得出來）。
-      let columnIndex = -1;
-      for (const exact of [true, false]) {
-        for (const candidate of wanted) {
-          columnIndex = headers.findIndex((header) => header && matches(header, candidate, exact));
-          if (columnIndex >= 0) break;
+      const findColumn = (candidates) => {
+        for (const exact of [true, false]) {
+          for (const candidate of candidates) {
+            const hit = headers.findIndex((header) => header && matches(header, candidate, exact));
+            if (hit >= 0) return hit;
+          }
         }
-        if (columnIndex >= 0) break;
-      }
+        return -1;
+      };
+      const columnIndex = findColumn(wanted);
       if (columnIndex < 0) continue;
+      // 讀不到第二欄只是少一項辨識依據，不該讓整張表作廢（回傳空字串，呼叫端自己退回只比姓名）。
+      const extraIndex = extraWanted.length > 0 ? findColumn(extraWanted) : -1;
 
       const values = [];
+      const extras = [];
       for (const row of rows) {
         if (row === headerRow) continue;
         const cells = Array.prototype.slice.call(row.querySelectorAll('td'));
         if (cells.length === 0) continue; // 標題列或分隔列
         values.push(clean(cells[columnIndex] ? cells[columnIndex].textContent : ''));
+        extras.push(extraIndex >= 0 && cells[extraIndex] ? clean(cells[extraIndex].textContent) : '');
       }
-      return { ok: true, columnIndex, headers, values };
+      return { ok: true, columnIndex, extraIndex, headers, values, extras };
     }
 
     return {
@@ -592,6 +615,7 @@ function queryPage(params) {
       reason: tables.length === 0 ? '這一頁沒有看得見的表格' : '找不到「標題列有這一欄」的結果表格',
       headers: seenHeaders.slice(0, 20),
       values: [],
+      extras: [],
     };
   }
 
@@ -814,10 +838,13 @@ export async function selectOptionInRow(frame, rowTexts, textCandidates) {
 }
 
 /**
- * 在「含指定文字的那一列」裡按下動作按鈕。
- * @param {{rowTexts:string[], actionTexts?:string[], actionIndex?:number,
+ * 在「要的那一列」裡按下動作按鈕。
+ * @param {{rowTexts?:string[], cellTexts?:string[], actionTexts?:string[], actionIndex?:number,
  *   requireUnique?:boolean, dryRun?:boolean, skipToggles?:boolean,
  *   requireActionText?:boolean}} options
+ *   `cellTexts`＝這一列要有幾格分別**完全等於**這些字（給查詢結果表格用：
+ *   姓名欄要正好是這個姓名，`陳O` 才不會誤中 `陳O宏`）。給了 `cellTexts`
+ *   就不看 `rowTexts`；`rowTexts` 是整列文字**包含**比對，表格以外的版面用；
  *   `skipToggles`＝不要把勾選框／單選鈕當成候選（點下去會切換狀態，
  *   可能把已經勾好的權限取消掉）；
  *   `requireActionText`＝只認文字對得上的元素（那一列若還有勾選框或下拉，
@@ -850,16 +877,26 @@ export async function listOptions(frame, selector) {
 /**
  * 從查詢結果表格讀出某一欄的內容。
  *
- * ⚠ 這是本模組**唯一會取出資料列內容**的函式，只給「全面取消」讀姓名欄用：
- *   不先知道一個單位裡有誰，就沒辦法逐一取消。取出的姓名只留在記憶體與
- *   `out/` 底下的名單／結果檔，寫進 log 前一律先經過 `maskName`。
+ * ⚠ 這是本模組**唯一會取出資料列內容**的函式，而且只讀兩欄：姓名與帳號。
+ *   不先知道一個單位裡有誰，就沒辦法逐一處理；不連帳號一起抄，遮蔽後撞名的
+ *   兩位（同單位兩個 `李O城`）就分不出是哪一列。這兩欄在畫面上本來就是
+ *   遮蔽過的（`許O軒`、`A1*****621`），取出後只留在記憶體與 `out/` 底下的
+ *   名單／結果檔，寫進 log 前一律先經過 `maskName`。
  *
  * @param {string[]} headerCandidates 欄位標題（由前往後比對，先完全相符再包含）
  * @param {string[]} [requireTexts] 表格裡一定要有的字（用來認出「這張才是結果表」）
- * @returns {Promise<{ok:boolean, columnIndex?:number, headers:string[], values:string[], reason?:string}>}
+ * @param {string[]} [extraHeaders] 順便讀的第二欄（帳號）。找不到這一欄不算失敗，
+ *   `extras` 會是一串空字串——呼叫端就只能靠姓名認人
+ * @returns {Promise<{ok:boolean, columnIndex?:number, extraIndex?:number,
+ *   headers:string[], values:string[], extras:string[], reason?:string}>}
  */
-export async function readResultColumn(frame, headerCandidates, requireTexts = []) {
-  return frame.evaluate(queryPage, { mode: 'columnValues', headers: headerCandidates, requireTexts });
+export async function readResultColumn(frame, headerCandidates, requireTexts = [], extraHeaders = []) {
+  return frame.evaluate(queryPage, {
+    mode: 'columnValues',
+    headers: headerCandidates,
+    requireTexts,
+    extraHeaders,
+  });
 }
 
 /**

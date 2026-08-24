@@ -108,8 +108,12 @@ const UNIT_LIST_FIXTURE = `
 /**
  * 仿照**姓名被遮蔽**的查詢結果（2026-08-23 實跑才發現的真實樣子）。
  *
- * 誘餌：每一列前面都有一個勾選框（沒有文字，預設規則會讓它排在「設定」前面），
- * 而且刻意放了兩位遮蔽後同名的人（`林O華`）——那種情況連人也分不出是誰。
+ * 誘餌有三個，都是 2026-08 實跑真的踩到的：
+ *   1. 每一列前面都有一個勾選框（沒有文字，預設規則會讓它排在「設定」前面）；
+ *   2. 兩位遮蔽後同名的人（`林O華`）——只看姓名連人也分不出是誰，
+ *      但**帳號不一樣**，所以「姓名＋帳號」還是認得出來；
+ *   3. 兩個字的名字遮成 `陳O`，而同一頁還有 `陳O宏`——
+ *      用「整列文字包含」比對會兩列全中（2026-08-24 卡住的就是這一種）。
  */
 const MASKED_LIST_FIXTURE = `
 <table id="result">
@@ -125,6 +129,14 @@ const MASKED_LIST_FIXTURE = `
   <tr>
     <td><input type="checkbox" id="pick3"></td><td>test03</td><td>林O華</td><td>特搜大隊</td>
     <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='林O華(2)'"></td>
+  </tr>
+  <tr>
+    <td><input type="checkbox" id="pick4"></td><td>test04</td><td>陳O</td><td>特搜大隊</td>
+    <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='陳O'"></td>
+  </tr>
+  <tr>
+    <td><input type="checkbox" id="pick5"></td><td>test05</td><td>陳O宏</td><td>特搜大隊</td>
+    <td><input type="button" value="設定" onclick="document.getElementById('clicked').textContent='陳O宏'"></td>
   </tr>
 </table>
 <div id="clicked">(還沒點)</div>`;
@@ -561,6 +573,107 @@ test('同一個遮蔽後的名字出現兩次時寧可不點', { skip }, async (
   assert.equal(result.ok, false);
   assert.match(result.reason, /不只一列/);
   assert.equal(await frame.textContent('#clicked'), '(還沒點)');
+});
+
+test('兩個字的名字（陳O）不會誤中同姓的長名字（陳O宏）', { skip }, async () => {
+  // 2026-08-24 實跑卡住的那一種：遮蔽後的 `陳O` 是同單位 `陳O宏`、`陳O婷`… 的開頭。
+  // 改成「姓名格完全相符」之後，只會中自己那一列。
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    cellTexts: ['陳O'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(await frame.textContent('#clicked'), '陳O');
+});
+
+test('用舊的「整列文字包含」比對時，陳O 確實會中不只一列（這就是要改的原因）', { skip }, async () => {
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    rowTexts: ['陳O'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.rowCount, 2);
+  assert.equal(await frame.textContent('#clicked'), '(還沒點)');
+});
+
+test('同名兩位靠帳號分得出來，而且點到的是帳號相符的那一位', { skip }, async () => {
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    cellTexts: ['林O華', 'test03'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(await frame.textContent('#clicked'), '林O華(2)', '帳號 test03 是第二位');
+});
+
+test('同名兩位、只給姓名時仍然寧可不點', { skip }, async () => {
+  // 沒有帳號可比（舊名單）時，安全網還在：認不出來就跳過，不亂點。
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    cellTexts: ['林O華'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.rowCount, 2);
+  assert.equal(await frame.textContent('#clicked'), '(還沒點)');
+});
+
+test('帳號對不上時一列都不中（呼叫端才好退回只比姓名）', { skip }, async () => {
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const result = await rowAction(frame, {
+    cellTexts: ['許O軒', '這個帳號不存在'],
+    actionTexts: SITE.flow.rowActionTexts,
+    requireUnique: true,
+    skipToggles: true,
+    requireActionText: true,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.rowCount, 0);
+});
+
+test('讀姓名欄時順便把帳號欄一起讀回來（位置一一對應）', { skip }, async () => {
+  const frame = await load(MASKED_LIST_FIXTURE);
+  const column = await readResultColumn(
+    frame,
+    SITE.flow.resultNameHeaders,
+    SITE.flow.rowActionTexts,
+    SITE.flow.resultAccountHeaders,
+  );
+  assert.equal(column.ok, true);
+  assert.deepEqual(column.values, ['許O軒', '林O華', '林O華', '陳O', '陳O宏']);
+  assert.deepEqual(column.extras, ['test01', 'test02', 'test03', 'test04', 'test05']);
+});
+
+test('沒有帳號欄時照樣讀得到姓名，帳號一律是空字串', { skip }, async () => {
+  // 少一項辨識依據不該讓整張表作廢——同名時才會卡住，其餘照跑。
+  await page.setContent(`
+    <table>
+      <tr><th>姓名</th><th>單位</th><th>功能</th></tr>
+      <tr><td>測試甲</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+    </table>`);
+  const column = await readResultColumn(
+    page.mainFrame(),
+    SITE.flow.resultNameHeaders,
+    SITE.flow.rowActionTexts,
+    SITE.flow.resultAccountHeaders,
+  );
+  assert.equal(column.ok, true);
+  assert.deepEqual(column.values, ['測試甲']);
+  assert.deepEqual(column.extras, ['']);
 });
 
 test('這一頁沒有那個人時回報 rowCount 0（呼叫端據此翻下一頁）', { skip }, async () => {

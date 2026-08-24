@@ -15,8 +15,10 @@
  *   - **看不懂就跳過整個單位**，不猜：讀不到姓名欄時記下原因、繼續下一個單位，
  *     那個單位的人這次一個都不會被動到（少做比做錯好）。
  *
- * ⚠ 個資原則：本模組會取出**姓名**（不取姓名以外的任何欄位）。
- *   姓名只留在記憶體與 `out/` 底下的名單／結果檔，寫進 log 前一律經過 `maskName`。
+ * ⚠ 個資原則：本模組只取出結果表格的**姓名**與**帳號**兩欄（其餘欄位一概不讀）。
+ *   兩者在畫面上本來就是遮過的（`許O軒`、`A1*****621`）；不連帳號一起抄，
+ *   同單位兩位都顯示成 `李O城` 時就分不出是哪一位（2026-08-24 實跑踩過）。
+ *   取出的內容只留在記憶體與 `out/` 底下的名單／結果檔，姓名寫進 log 前一律經過 `maskName`。
  */
 import { SITE, UNIT_SWEEP } from './config.mjs';
 import { listOptions } from './domFind.mjs';
@@ -224,13 +226,16 @@ export function withSearchNames(entries) {
  *
  * @param {import('./session.mjs').PermSession} session
  * @param {UnitOption} unitOption
- * @returns {Promise<{ok:boolean, names:string[], total:number|null, reason?:string}>}
+ * @returns {Promise<{ok:boolean, people:{name:string, account:string}[],
+ *   total:number|null, hasAccounts:boolean, reason?:string}>}
  */
 export async function collectUnitRoster(session, unitOption) {
   // 每個單位都重新確認「現在在查詢頁」：已經在就直接用，不在才走選單回去
   //（處理完上一個單位可能停在別的畫面）。
   const opened = await openAccountPermissionPage(session);
-  if (!opened.ok) return { ok: false, names: [], total: null, reason: `${opened.step}：${opened.detail}` };
+  if (!opened.ok) {
+    return { ok: false, people: [], total: null, hasAccounts: false, reason: `${opened.step}：${opened.detail}` };
+  }
 
   // 姓名留空＝不限姓名，列出整個單位。
   const searched = await submitSearch(session, opened.frame, {
@@ -238,15 +243,22 @@ export async function collectUnitRoster(session, unitOption) {
     unitValue: unitOption.value,
     name: '',
   });
-  if (!searched.ok) return { ok: false, names: [], total: null, reason: `${searched.step}：${searched.detail}` };
+  if (!searched.ok) {
+    return { ok: false, people: [], total: null, hasAccounts: false, reason: `${searched.step}：${searched.detail}` };
+  }
 
   const page = activePage(session);
   await waitWhileLoading(page);
   const total = await readStableCount(page);
 
-  /** @type {string[]} */
-  const names = [];
+  /** @type {{name:string, account:string}[]} */
+  const people = [];
+  // 去重的鍵是「姓名＋帳號」而不是只有姓名。
+  // ⚠ 2026-08-24 實跑踩到的：同一個單位裡兩位都顯示成 `李O城`，
+  //   只用姓名去重會把兩個人併成一筆——併掉的那位整份名單裡就消失了，
+  //   而留下的那筆到了開通階段又會因為「同名兩列」而卡住，兩位都沒開到。
   const seen = new Set();
+  let hasAccounts = false;
 
   let loggedHeaders = false;
   for (let pageIndex = 0; pageIndex < UNIT_SWEEP.maxPagesPerUnit; pageIndex += 1) {
@@ -255,8 +267,8 @@ export async function collectUnitRoster(session, unitOption) {
       // 第一頁就讀不到＝這個單位整個沒掃到，要讓呼叫端知道並跳過。
       // 已經讀到幾頁才失敗的話，寧可用已讀到的部分，也要如實說有問題。
       const detail = `${column.reason}${column.headers.length ? `（看到的欄位標題：${column.headers.join('、')}）` : ''}`;
-      if (names.length === 0) return { ok: false, names, total, reason: detail };
-      return { ok: false, names, total, reason: `第 ${pageIndex + 1} 頁${detail}` };
+      if (people.length === 0) return { ok: false, people, total, hasAccounts, reason: detail };
+      return { ok: false, people, total, hasAccounts, reason: `第 ${pageIndex + 1} 頁${detail}` };
     }
     // 欄位標題屬表單結構、可安全記錄。成功時也留一行：系統改版時，
     // 這一行就是判斷「表格變成什麼樣子」的第一手線索（2026-08-23 那次
@@ -267,20 +279,24 @@ export async function collectUnitRoster(session, unitOption) {
     }
 
     const firstOnPage = column.values[0] ?? '';
-    for (const value of column.values) {
+    for (const [index, value] of column.values.entries()) {
       const name = String(value ?? '').trim();
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      names.push(name);
+      if (!name) continue;
+      const account = String(column.accounts?.[index] ?? '').trim();
+      if (account) hasAccounts = true;
+      const key = `${name}｜${account}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      people.push({ name, account });
     }
 
     // 系統自己說共幾項，收滿就不必再翻（最後一頁的「下一頁」點下去也不會動，
     // 每個單位白等 6 秒，76 個單位就是快 8 分鐘）。
-    if (total !== null && names.length >= total) break;
+    if (total !== null && people.length >= total) break;
     if (!(await goToNextPage(session, firstOnPage))) break;
   }
 
-  return { ok: true, names, total };
+  return { ok: true, people, total, hasAccounts };
 }
 
 /**
@@ -303,18 +319,20 @@ export async function sweepAllUnits(session, targets) {
     log.step(`[掃描 ${index + 1}/${targets.length}] ${unitOption.text}`);
     const result = await collectUnitRoster(session, unitOption);
 
-    for (const name of result.names) {
-      const { searchName, masked } = splitMaskedName(name);
+    for (const person of result.people) {
+      const { searchName, masked } = splitMaskedName(person.name);
       entries.push({
         unit: unitOption.text,
         unitValue: unitOption.value,
         // 名字是**畫面上顯示的樣子**（可能被遮成 `許O軒`）。進度檔與結果清單都用它，
         // 因為那就是承辦人在系統上看得到的東西。
-        name,
+        name: person.name,
         // 拿去填「姓名」欄的字：遮蔽時只有沒被遮到的那一段能查。
         searchName,
         // 遮蔽時要靠「顯示文字」在結果表格裡認出是哪一列（見 grantFlow.locatePerson）。
-        rowText: masked ? name : '',
+        rowText: masked ? person.name : '',
+        // 同一列上的帳號（也是遮過的）。遮蔽後撞名時，這是唯一分得出兩位的欄位。
+        rowAccount: person.account,
         lineNumber: 0,
       });
     }
@@ -322,21 +340,27 @@ export async function sweepAllUnits(session, targets) {
     if (!result.ok) {
       problems.push({ unit: unitOption.text, reason: result.reason ?? '掃不出這個單位的人' });
       log.warn(`${unitOption.text}：${result.reason}`);
-      log.info(`  （這個單位只掃到 ${result.names.length} 位，其餘的人這次不會被動到）`);
+      log.info(`  （這個單位只掃到 ${result.people.length} 位，其餘的人這次不會被動到）`);
     } else {
-      const mismatch = result.total !== null && result.total !== result.names.length;
+      const mismatch = result.total !== null && result.total !== result.people.length;
       log.ok(
-        `${unitOption.text}：${result.names.length} 位` +
-          `${mismatch ? `（系統顯示共 ${result.total} 項，同名的已併成一筆）` : ''}`,
+        `${unitOption.text}：${result.people.length} 位` +
+          `${mismatch ? `（系統顯示共 ${result.total} 項，姓名與帳號都一樣的已併成一筆）` : ''}`,
       );
       // 只印前幾位（已遮蔽）讓人看得出真的抓到人，不把整個單位洗到畫面上。
-      if (result.names.length > 0) {
-        log.info(`  例如：${result.names.slice(0, 3).map(maskName).join('、')}…`);
+      if (result.people.length > 0) {
+        log.info(`  例如：${result.people.slice(0, 3).map((person) => maskName(person.name)).join('、')}…`);
         // 系統本身就把姓名遮起來時要講明白：那決定了後面「怎麼查這個人」。
-        const sample = splitMaskedName(result.names[0]);
+        const sample = splitMaskedName(result.people[0].name);
         if (sample.masked) {
           log.info(`  （系統顯示的姓名是遮蔽過的，之後會用「${sample.searchName}…」這樣的字查，再認出那一列）`);
         }
+        // 有沒有抄到帳號決定「同名時分不分得出人」，掃描當下就要看得出來。
+        log.info(
+          result.hasAccounts
+            ? '  （帳號欄有抄到，同名時靠它分辨是哪一位）'
+            : '  ⚠ 這個單位讀不到帳號欄：萬一有同名的，程式會分不出是哪一位而跳過',
+        );
       }
     }
 

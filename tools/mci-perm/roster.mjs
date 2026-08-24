@@ -21,6 +21,9 @@ import path from 'node:path';
  *   那一段能查（見 `unitSweep.splitMaskedName`）；沒有這一欄就用 `name`
  * @property {string} [rowText] 姓名遮蔽時，用來在查詢結果裡認出「是哪一列」的顯示文字
  *   （見 `grantFlow.locatePerson`）。空字串代表姓名沒被遮，走「查到剛好一筆」那條路
+ * @property {string} [rowAccount] 同一列上顯示的帳號（系統遮過的，例如 `A1*****621`）。
+ *   遮蔽後的姓名會撞名（同單位兩位都顯示成 `李O城`），那時只有這一欄分得出是哪一位；
+ *   只有從系統畫面掃來的名單才有，使用者貼上的名單沒有這一欄
  */
 
 /**
