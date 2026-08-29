@@ -314,6 +314,46 @@ export const CLEAR_ALL = {
   },
 };
 
+/**
+ * 「取消分隊權限」的設定：只把**各分隊**的 MCI 權限拿掉，科室與大隊維持現狀。
+ *
+ * 使用者 2026-08-29 的要求：「把各分隊目前有權限的人都刪掉，只有 OO 分隊要，
+ * 如果是科室或者大隊就維持現狀」。
+ *
+ * ⚠ 為什麼是「照名稱型態挑」而不是把分隊一個一個列進設定檔：分隊有幾十個，
+ *   而且會改名、會增減。列清單的話，漏掉的那個分隊會安靜地保有權限，
+ *   事後幾乎不可能發現。改成「名稱裡有『分隊』就算」，新設的分隊自動涵蓋。
+ */
+export const CLEAR_STATIONS = {
+  /**
+   * 單位名稱含這些字才會被處理（**包含**比對）。
+   *
+   * 在 `.env` 設 `MCI_CLEAR_UNIT_KEYWORDS=分隊,小隊`（逗號分隔）可覆寫。
+   *
+   * @returns {string[]}
+   */
+  keywords() {
+    const raw = (process.env.MCI_CLEAR_UNIT_KEYWORDS ?? '').trim();
+    if (!raw) return ['分隊'];
+    return raw
+      .split(/[,，、]/)
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
+  },
+
+  /**
+   * 就算名稱含「分隊」也一個人都不動的單位。
+   *
+   * 沿用 `MCI_KEEP_UNITS`（與「全面取消」同一份設定）：兩支指令對
+   * 「哪個單位碰不得」的認定若不一致，遲早會有人被錯清。
+   *
+   * @returns {string[]}
+   */
+  keepUnits() {
+    return CLEAR_ALL.keepUnits();
+  },
+};
+
 /** 瀏覽器啟動設定。使用本機已安裝的 Chrome 或 Edge，不另外下載 Chromium。 */
 export const BROWSER = {
   /** 公家電腦不一定裝了 Chrome，但幾乎必有 Edge（同為 Chromium 核心，操作方式相同）。 */

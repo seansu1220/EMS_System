@@ -134,6 +134,63 @@ export function pickUnits(options, wantedUnits, placeholders = SITE.flow.unitPla
 }
 
 /**
+ * 依名稱關鍵字把單位分成「要處理」與「不動」兩堆（「取消分隊權限」用）。
+ *
+ * 與 {@link splitUnits}（除了這幾個以外全部都要）和 {@link pickUnits}（只要指名的
+ * 這幾個）都不同：這裡是**照名稱的型態**挑——單位名稱裡有「分隊」的才動，
+ * 科室、大隊、中心一律維持現狀。使用者的話是「只有 OO 分隊要，科室或大隊維持現狀」，
+ * 而分隊有幾十個且會增減，一個一個列進設定檔遲早會漏。
+ *
+ * ⚠ 一個都沒命中時**不要當成「沒事做」**：那代表系統換了單位的寫法
+ *   （或關鍵字設錯），呼叫端要停手並印出實際的單位清單。
+ *
+ * @param {UnitOption[]} options 下拉裡的所有選項
+ * @param {string[]} keywords 要處理的單位名稱關鍵字（**包含**比對，例如「分隊」）
+ * @param {string[]} [keepUnits] 就算名稱符合也不動的單位（**包含**比對）
+ * @param {string[]} [placeholders] 「請選擇」這類不是單位的選項
+ * @returns {{targets: UnitOption[], skipped: UnitOption[], kept: UnitOption[], ignored: UnitOption[]}}
+ *   `targets` 要處理；`kept` 是被保留清單擋下來的；`skipped` 是名稱型態不符（科室、大隊…）；
+ *   `ignored` 不是單位（「請選擇」）
+ */
+export function splitUnitsByKeyword(
+  options,
+  keywords,
+  keepUnits = [],
+  placeholders = SITE.flow.unitPlaceholderTexts,
+) {
+  /** @type {UnitOption[]} */
+  const targets = [];
+  /** @type {UnitOption[]} */
+  const skipped = [];
+  /** @type {UnitOption[]} */
+  const kept = [];
+  /** @type {UnitOption[]} */
+  const ignored = [];
+
+  for (const option of options ?? []) {
+    const text = String(option?.text ?? '').trim();
+    if (!text || !option?.value) {
+      ignored.push(option);
+      continue;
+    }
+    if ((placeholders ?? []).some((word) => squeeze(text) === squeeze(word))) {
+      ignored.push(option);
+      continue;
+    }
+    if ((keepUnits ?? []).some((word) => word && squeeze(text).includes(squeeze(word)))) {
+      kept.push(option);
+      continue;
+    }
+    if ((keywords ?? []).some((word) => word && squeeze(text).includes(squeeze(word)))) {
+      targets.push(option);
+      continue;
+    }
+    skipped.push(option);
+  }
+  return { targets, skipped, kept, ignored };
+}
+
+/**
  * 只留下名稱符合的單位（`--unit=` 用：先拿一個小單位試跑，確認流程正確再跑全部）。
  *
  * @param {UnitOption[]} targets

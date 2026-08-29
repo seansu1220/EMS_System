@@ -10,7 +10,15 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEntriesByUnit, filterUnits, pickUnits, splitMaskedName, splitUnits, withSearchNames } from './unitSweep.mjs';
+import {
+  filterEntriesByUnit,
+  filterUnits,
+  pickUnits,
+  splitMaskedName,
+  splitUnits,
+  splitUnitsByKeyword,
+  withSearchNames,
+} from './unitSweep.mjs';
 
 /** 仿照真實下拉：第一個是「請選擇」（沒有 value），其餘是科室與分隊。 */
 const OPTIONS = [
@@ -188,4 +196,46 @@ test('沿用舊名單時，--unit 也要篩得掉別的單位的人', () => {
   assert.deepEqual(filterEntriesByUnit(entries, '測試甲').map((entry) => entry.name), ['測試甲']);
   assert.equal(filterEntriesByUnit(entries, '').length, 2, '留空等於不過濾');
   assert.equal(filterEntriesByUnit(entries, '不存在').length, 0);
+});
+
+/** 仿照真實下拉：科室、大隊、分隊混在一起（「取消分隊權限」要挑得出分隊）。 */
+const 混合下拉 = [
+  { value: '', text: '請選擇' },
+  { value: 'A1', text: '緊急救護科' },
+  { value: 'A2', text: '火災預防科' },
+  { value: 'C1', text: '第一救災救護大隊' },
+  { value: 'C2', text: '特搜大隊' },
+  { value: 'B1', text: '測試甲分隊' },
+  { value: 'B2', text: '測試乙分隊' },
+];
+
+test('取消分隊：只挑得到分隊，科室與大隊都不動', () => {
+  const { targets, skipped } = splitUnitsByKeyword(混合下拉, ['分隊']);
+  assert.deepEqual(targets.map((option) => option.text), ['測試甲分隊', '測試乙分隊']);
+  assert.deepEqual(
+    skipped.map((option) => option.text),
+    ['緊急救護科', '火災預防科', '第一救災救護大隊', '特搜大隊'],
+  );
+});
+
+test('取消分隊：「請選擇」不算單位，不會被挑進去也不算被跳過', () => {
+  const { targets, skipped, ignored } = splitUnitsByKeyword(混合下拉, ['分隊']);
+  assert.deepEqual(ignored.map((option) => option.text), ['請選擇']);
+  assert.ok(![...targets, ...skipped].some((option) => option.text === '請選擇'));
+});
+
+test('取消分隊：保留清單擋得下名稱含「分隊」的單位', () => {
+  const { targets, kept } = splitUnitsByKeyword(混合下拉, ['分隊'], ['測試甲分隊']);
+  assert.deepEqual(kept.map((option) => option.text), ['測試甲分隊']);
+  assert.deepEqual(targets.map((option) => option.text), ['測試乙分隊']);
+});
+
+test('取消分隊：關鍵字對不上時挑不到任何單位（呼叫端據此停手）', () => {
+  const { targets } = splitUnitsByKeyword(混合下拉, ['小隊']);
+  assert.equal(targets.length, 0);
+});
+
+test('取消分隊：關鍵字可以給多個', () => {
+  const { targets } = splitUnitsByKeyword(混合下拉, ['分隊', '特搜']);
+  assert.deepEqual(targets.map((option) => option.text), ['特搜大隊', '測試甲分隊', '測試乙分隊']);
 });
