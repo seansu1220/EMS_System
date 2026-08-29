@@ -170,3 +170,30 @@ test('問題列指得出是哪一張工作表的第幾列', () => {
 test('沒有工作表名稱時只講第幾列', () => {
   assert.equal(describeRosterLocation({ lineNumber: 7 }), '第 7 列');
 });
+
+test('示範列的單位寫成「OO分隊」也認得（那一版清冊沒有「(範例)」欄）', () => {
+  const result = parseRosterMatrix([
+    ['大量傷病患系統 權限開通清冊', '', ''],
+    ['單位', '姓名', '開放原因'],
+    ['OO分隊', '王小明', '幹部/TP'],
+    ['大溪分隊', '測試甲', '分隊長'],
+  ]);
+  assert.deepEqual(result.entries.map((entry) => entry.name), ['測試甲']);
+});
+
+test('全形○○分隊、XX分隊一樣算佔位字', () => {
+  for (const 佔位 of ['○○分隊', '〇〇分隊', 'XX分隊', '＊＊分隊']) {
+    const result = parseRosterMatrix([['單位', '姓名'], [佔位, '王小明'], ['大溪分隊', '測試甲']]);
+    assert.deepEqual(result.entries.map((entry) => entry.name), ['測試甲'], 佔位);
+  }
+});
+
+test('真的單位不會被誤判成佔位字', () => {
+  const result = parseRosterMatrix([
+    ['單位', '姓名'],
+    ['大溪分隊', '測試甲'],
+    ['第一搜救救助分隊', '測試乙'],
+    ['觀音分隊', '測試丙'],
+  ]);
+  assert.equal(result.entries.length, 3);
+});

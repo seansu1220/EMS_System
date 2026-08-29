@@ -61,9 +61,23 @@ const HEADER_WORDS = ['單位', '姓名', '名字', '人員', '部門', '機關'
  */
 const SAMPLE_MARKERS = ['範例', '範本', '示範'];
 
-/** 這一列是清冊上的示範列嗎（整列任一格出現示範字樣就算）。 */
+/**
+ * 「這一格是填空用的佔位字」的樣子：開頭連續兩個以上的遮蔽符號。
+ *
+ * ⚠ 2026-08-30 第二大隊的清冊踩到：它的示範列單位寫成 `OO分隊`，而且
+ *   **十二張工作表裡有九張沒有 `(範例)` 那一欄**——只靠 `SAMPLE_MARKERS`
+ *   認不出來，`OO分隊／王小明` 就混進名單，到了系統上必然「找不到單位」。
+ *
+ * 半形 O、全形Ｏ、○、〇、●、＊、*、X 都算：不同人填表的習慣不一。
+ * 真的單位或姓名不會**以連續兩個**這種字元開頭，所以誤判的風險極低。
+ */
+const PLACEHOLDER_PREFIX = /^[OoＯｏ○〇●*＊XxＸ]{2,}/;
+
+/** 這一列是清冊上的示範列嗎（整列任一格出現示範字樣、或是填空用的佔位字就算）。 */
 function looksLikeSampleRow(cells) {
-  return cells.some((cell) => SAMPLE_MARKERS.some((marker) => cell.includes(marker)));
+  return cells.some(
+    (cell) => SAMPLE_MARKERS.some((marker) => cell.includes(marker)) || PLACEHOLDER_PREFIX.test(cell),
+  );
 }
 
 /** 去掉 BOM、前後空白與包住整段的引號。 */
