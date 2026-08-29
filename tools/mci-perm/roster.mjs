@@ -16,6 +16,7 @@ import path from 'node:path';
  * @property {string} name 姓名。**從系統畫面掃來的名單裡，這是遮蔽過的顯示文字**
  *   （`許O軒`）——那就是承辦人在系統上看得到的東西，進度檔與結果清單都用它
  * @property {number} lineNumber 來源的第幾行／第幾列（1 起算，出問題時指得出是哪一筆）
+ * @property {string} [sheetName] 來源 Excel 的工作表名稱（一個分隊一張表時，用來指路）
  * @property {string} [unitValue] 單位下拉的 value（掃描時抄回來的，選單位最精準）
  * @property {string} [searchName] 要填進「姓名」欄的字。姓名被遮蔽時只有沒被遮到的
  *   那一段能查（見 `unitSweep.splitMaskedName`）；沒有這一欄就用 `name`
@@ -29,6 +30,7 @@ import path from 'node:path';
 /**
  * @typedef {Object} RosterProblem
  * @property {number} lineNumber
+ * @property {string} [sheetName] 來源 Excel 的工作表名稱
  * @property {string} reason 為什麼這一行不能用（訊息裡不含姓名，只描述問題）
  */
 
@@ -49,6 +51,20 @@ const SEPARATOR = /[,，\t、]|\s{2,}| /;
  * 使用者的 Excel 標題很可能照抄系統的用詞。
  */
 const HEADER_WORDS = ['單位', '姓名', '名字', '人員', '部門', '機關'];
+
+/**
+ * 示範列的字樣。
+ *
+ * 公文附件的清冊範本，標題列底下固定放一列「桃園分隊／王小明／幹部/TP／(範例)」
+ * 教人怎麼填。那不是真的人，照著去查只會查無此人，還會在結果清單裡佔一列
+ * 讓承辦人以為漏開了誰（2026-08-29 用 1 大的清冊實測到）。
+ */
+const SAMPLE_MARKERS = ['範例', '範本', '示範'];
+
+/** 這一列是清冊上的示範列嗎（整列任一格出現示範字樣就算）。 */
+function looksLikeSampleRow(cells) {
+  return cells.some((cell) => SAMPLE_MARKERS.some((marker) => cell.includes(marker)));
+}
 
 /** 去掉 BOM、前後空白與包住整段的引號。 */
 function tidy(text) {
@@ -141,6 +157,7 @@ export function parseRoster(input, options = {}) {
   }
   const lineOptions = { ...options, nameFirst };
   const pairs = lines.map((rawLine, index) => {
+    if (looksLikeSampleRow([tidy(rawLine)])) return null; // 連範本的示範列一起貼上來
     const parsed = parseRosterLine(rawLine, lineOptions);
     return parsed ? { ...parsed, lineNumber: index + 1 } : null;
   });
@@ -165,7 +182,10 @@ function buildResult(pairs, options = {}) {
   const entries = [];
   /** @type {RosterProblem[]} */
   const problems = [];
-  const seen = new Set();
+  // 去重集合可以由呼叫端帶進來：一份 Excel 有很多張工作表時，
+  // 同一個人出現在兩張表上也要只做一次。
+  const seen = options.seen instanceof Set ? options.seen : new Set();
+  const sheetName = tidy(options.sheetName ?? '');
   let duplicateCount = 0;
 
   for (const pair of pairs) {
@@ -178,12 +198,13 @@ function buildResult(pairs, options = {}) {
     if (!unit && !name) continue; // 整列空白
 
     if (!name) {
-      problems.push({ lineNumber, reason: `這一列有單位「${unit}」但沒有姓名` });
+      problems.push({ lineNumber, sheetName, reason: `這一列有單位「${unit}」但沒有姓名` });
       continue;
     }
     if (!unit) {
       problems.push({
         lineNumber,
+        sheetName,
         reason: '這一列沒有單位，.env 也沒設定 MCI_DEFAULT_UNIT（單位不能用猜的）',
       });
       continue;
@@ -194,7 +215,7 @@ function buildResult(pairs, options = {}) {
       continue;
     }
     seen.add(key);
-    entries.push({ unit, name, lineNumber });
+    entries.push({ unit, name, lineNumber, sheetName });
   }
 
   return { entries, problems, duplicateCount };
@@ -270,14 +291,27 @@ async function readExcelRoster(filePath, options) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`無法讀取名單檔 ${filePath}：${reason}`);
   }
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) throw new Error(`名單檔 ${filePath} 沒有任何工作表`);
-  const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-    header: 1,
-    defval: '',
-    blankrows: false,
-  });
-  return parseRosterMatrix(matrix, options);
+  const sheetNames = workbook.SheetNames ?? [];
+  if (sheetNames.length === 0) throw new Error(`名單檔 ${filePath} 沒有任何工作表`);
+
+  // ⚠ 一定要走完每一張工作表。公文附件的清冊是「一個分隊一張工作表」，
+  //   只讀第一張的話，239 人的清冊會只剩第一個分隊的 10 個人，而且畫面上
+  //   看起來一切正常——沒有錯誤訊息，只是其他人默默沒被開通。
+  const seen = new Set();
+  /** @type {RosterResult} */
+  const merged = { entries: [], problems: [], duplicateCount: 0 };
+  for (const sheetName of sheetNames) {
+    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+      header: 1,
+      defval: '',
+      blankrows: false,
+    });
+    const result = parseRosterMatrix(matrix, { ...options, seen, sheetName });
+    merged.entries.push(...result.entries);
+    merged.problems.push(...result.problems);
+    merged.duplicateCount += result.duplicateCount;
+  }
+  return merged;
 }
 
 /**
@@ -306,11 +340,29 @@ export function parseRosterMatrix(matrix, options = {}) {
   }
 
   // 直接給結構化資料：欄位已經分好了，不要再串成字串切一次（見 buildResult 的說明）。
-  const pairs = rows.slice(startRow).map((row, index) => ({
-    unit: tidy(row[unitColumn] ?? ''),
-    name: tidy(row[nameColumn] ?? ''),
-    // 行號對回 Excel 的實際列號，方便使用者回去看是哪一列。
-    lineNumber: startRow + index + 1,
-  }));
+  const pairs = rows.slice(startRow).map((row, index) => {
+    if (looksLikeSampleRow(row)) return null; // 範本教人怎麼填的那一列
+    return {
+      unit: tidy(row[unitColumn] ?? ''),
+      name: tidy(row[nameColumn] ?? ''),
+      // 行號對回 Excel 的實際列號，方便使用者回去看是哪一列。
+      lineNumber: startRow + index + 1,
+    };
+  });
   return buildResult(pairs, options);
+}
+
+/**
+ * 把「是哪一列出問題」講成人話。
+ *
+ * 一份 Excel 有十幾張工作表時，光說「第 7 列」找不到人——
+ * 要連工作表名稱一起講，承辦人才知道去翻哪一頁。
+ *
+ * @param {RosterProblem|RosterEntry} item
+ * @returns {string}
+ */
+export function describeRosterLocation(item) {
+  const sheetName = tidy(item?.sheetName ?? '');
+  const lineNumber = item?.lineNumber ?? 0;
+  return sheetName ? `工作表「${sheetName}」第 ${lineNumber} 列` : `第 ${lineNumber} 列`;
 }

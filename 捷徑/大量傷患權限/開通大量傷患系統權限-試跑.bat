@@ -48,7 +48,10 @@ echo   ----------------------------------------
 echo   EASIEST: drag your Excel file onto this
 echo   shortcut - it reads the list from the file.
 echo   (Columns are found by the header row, so
-echo    "name" and "unit" can be in any order.)
+echo    "name" and "unit" can be in any order.
+echo    EVERY worksheet is read - the official form
+echo    has one sheet per station. The "(sample)"
+echo    row of the template is skipped.)
 echo.
 echo   Or paste it here instead:
 echo   1. Paste the name list. One person per line,

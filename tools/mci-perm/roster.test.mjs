@@ -7,7 +7,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRoster, parseRosterLine, parseRosterMatrix } from './roster.mjs';
+import {
+  describeRosterLocation,
+  parseRoster,
+  parseRosterLine,
+  parseRosterMatrix,
+} from './roster.mjs';
 
 test('逗號、tab、空白都當成單位與姓名的分隔', () => {
   assert.deepEqual(parseRosterLine('大溪分隊,測試甲'), { unit: '大溪分隊', name: '測試甲' });
@@ -130,4 +135,38 @@ test('標題寫成「姓名／部門」也認得出欄序', () => {
   const result = parseRoster(['姓名,部門', '測試甲,大溪分隊']);
   assert.equal(result.entries[0].unit, '大溪分隊');
   assert.equal(result.entries[0].name, '測試甲');
+});
+
+test('公文清冊的示範列（(範例)）不會被當成真的人', () => {
+  const result = parseRosterMatrix([
+    ['大量傷病患系統 權限開通清冊', '', '', ''],
+    ['單位', '姓名', '開放原因', ''],
+    ['大溪分隊', '王小明', '幹部/TP', '(範例)'],
+    ['大溪分隊', '測試甲', '幹部', ''],
+  ]);
+  assert.deepEqual(result.entries.map((entry) => entry.name), ['測試甲']);
+});
+
+test('貼上時連示範列一起貼進來也會被跳過', () => {
+  const result = parseRoster(['單位,姓名', '大溪分隊,王小明,幹部/TP,(範例)', '大溪分隊,測試甲']);
+  assert.deepEqual(result.entries.map((entry) => entry.name), ['測試甲']);
+});
+
+test('跨工作表共用去重集合：同一個人只算一次', () => {
+  const seen = new Set();
+  const 第一張 = parseRosterMatrix([['單位', '姓名'], ['大溪分隊', '測試甲']], { seen, sheetName: '大溪' });
+  const 第二張 = parseRosterMatrix([['單位', '姓名'], ['大溪分隊', '測試甲']], { seen, sheetName: '中壢' });
+  assert.equal(第一張.entries.length, 1);
+  assert.equal(第二張.entries.length, 0);
+  assert.equal(第二張.duplicateCount, 1);
+});
+
+test('問題列指得出是哪一張工作表的第幾列', () => {
+  const result = parseRosterMatrix([['單位', '姓名'], ['大溪分隊', '']], { sheetName: '大溪' });
+  assert.equal(result.problems.length, 1);
+  assert.equal(describeRosterLocation(result.problems[0]), '工作表「大溪」第 2 列');
+});
+
+test('沒有工作表名稱時只講第幾列', () => {
+  assert.equal(describeRosterLocation({ lineNumber: 7 }), '第 7 列');
 });

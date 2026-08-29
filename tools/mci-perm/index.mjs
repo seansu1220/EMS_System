@@ -44,7 +44,7 @@ import { CLEAR_ALL, GRANT_UNITS, PATHS, SITE } from './config.mjs';
 import { grantAll, openAccountPermissionPage, revokeAll, waitForOptions } from './grantFlow.mjs';
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
 import { runProbe } from './probe.mjs';
-import { readRosterFile, resolveRosterInput } from './roster.mjs';
+import { describeRosterLocation, readRosterFile, resolveRosterInput } from './roster.mjs';
 import {
   appendProgress,
   countByOutcome,
@@ -182,7 +182,7 @@ async function resolveRoster(options) {
     // 這裡只給前幾筆讓人知道是什麼狀況，完整清單寫進結果檔。
     log.warn(`有 ${result.problems.length} 列沒辦法處理（會跳過），前幾筆：`);
     for (const problem of result.problems.slice(0, PROBLEM_PREVIEW)) {
-      log.warn(`  第 ${problem.lineNumber} 列：${problem.reason}`);
+      log.warn(`  ${describeRosterLocation(problem)}：${problem.reason}`);
     }
     if (result.problems.length > PROBLEM_PREVIEW) {
       log.info(`  …其餘 ${result.problems.length - PROBLEM_PREVIEW} 列都列在最後的結果清單裡`);

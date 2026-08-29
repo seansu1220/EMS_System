@@ -11,6 +11,7 @@ import path from 'node:path';
 import { PATHS, RESULT_RETENTION_DAYS } from './config.mjs';
 import { SETTLED_OUTCOMES } from './grantFlow.mjs';
 import { log, maskName } from './logger.mjs';
+import { describeRosterLocation } from './roster.mjs';
 
 /**
  * @typedef {Object} Summary
@@ -109,7 +110,7 @@ export async function writeResultReport(results, options = {}) {
       ``,
       `這幾列缺欄位，程式沒有處理。要補做的話，先在 Excel 裡補齊再跑一次。`,
       ``,
-      ...problems.map((problem) => `- 第 ${problem.lineNumber} 列：${problem.reason}`),
+      ...problems.map((problem) => `- ${describeRosterLocation(problem)}：${problem.reason}`),
     );
   }
 
