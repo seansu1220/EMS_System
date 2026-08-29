@@ -18,6 +18,7 @@ import {
   isDone,
   legacyEntryKey,
   loadProgress,
+  progressFileFor,
   splitByProgress,
 } from './progress.mjs';
 
@@ -144,4 +145,28 @@ test('統計各種結果各有幾筆', async (t) => {
   const counts = countByOutcome(await loadProgress(file));
   assert.equal(counts[OUTCOME.granted], 1);
   assert.equal(counts[OUTCOME.alreadyGranted], 1);
+});
+
+test('沒有名單檔時進度記在「貼上的名單」', () => {
+  assert.equal(path.basename(progressFileFor('')), '貼上的名單.jsonl');
+  assert.equal(path.basename(progressFileFor([])), '貼上的名單.jsonl');
+});
+
+test('一份名單檔用它自己的檔名記進度', () => {
+  assert.equal(path.basename(progressFileFor('D:/名單/一大.xlsx')), '一大.xlsx.jsonl');
+  assert.equal(path.basename(progressFileFor(['D:/名單/一大.xlsx'])), '一大.xlsx.jsonl');
+});
+
+test('好幾份一起跑：同一組檔案要對到同一個進度檔，順序不影響', () => {
+  const 四份 = ['D:/名單/一大.xlsx', 'D:/名單/二大.xlsx', 'D:/名單/三大.xlsx', 'D:/名單/四大.xlsx'];
+  const 正序 = progressFileFor(四份);
+  const 逆序 = progressFileFor([...四份].reverse());
+  assert.equal(正序, 逆序);
+  assert.match(path.basename(正序), /等4份-[0-9a-f]{8}\.jsonl$/);
+});
+
+test('好幾份一起跑：換了一份檔案就是另一個進度檔', () => {
+  const A = progressFileFor(['D:/名單/一大.xlsx', 'D:/名單/二大.xlsx']);
+  const B = progressFileFor(['D:/名單/一大.xlsx', 'D:/名單/三大.xlsx']);
+  assert.notEqual(A, B);
 });

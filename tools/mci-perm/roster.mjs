@@ -17,6 +17,7 @@ import path from 'node:path';
  *   （`許O軒`）——那就是承辦人在系統上看得到的東西，進度檔與結果清單都用它
  * @property {number} lineNumber 來源的第幾行／第幾列（1 起算，出問題時指得出是哪一筆）
  * @property {string} [sheetName] 來源 Excel 的工作表名稱（一個分隊一張表時，用來指路）
+ * @property {string} [sourceName] 來源檔名（一次讀好幾個檔時，用來指出是哪一份）
  * @property {string} [unitValue] 單位下拉的 value（掃描時抄回來的，選單位最精準）
  * @property {string} [searchName] 要填進「姓名」欄的字。姓名被遮蔽時只有沒被遮到的
  *   那一段能查（見 `unitSweep.splitMaskedName`）；沒有這一欄就用 `name`
@@ -31,6 +32,7 @@ import path from 'node:path';
  * @typedef {Object} RosterProblem
  * @property {number} lineNumber
  * @property {string} [sheetName] 來源 Excel 的工作表名稱
+ * @property {string} [sourceName] 來源檔名
  * @property {string} reason 為什麼這一行不能用（訊息裡不含姓名，只描述問題）
  */
 
@@ -200,6 +202,8 @@ function buildResult(pairs, options = {}) {
   // 同一個人出現在兩張表上也要只做一次。
   const seen = options.seen instanceof Set ? options.seen : new Set();
   const sheetName = tidy(options.sheetName ?? '');
+  // 一次讀好幾個檔時，光講「工作表某某第 N 列」還是找不到人——要連檔名一起講。
+  const sourceName = tidy(options.sourceName ?? '');
   let duplicateCount = 0;
 
   for (const pair of pairs) {
@@ -212,13 +216,14 @@ function buildResult(pairs, options = {}) {
     if (!unit && !name) continue; // 整列空白
 
     if (!name) {
-      problems.push({ lineNumber, sheetName, reason: `這一列有單位「${unit}」但沒有姓名` });
+      problems.push({ lineNumber, sheetName, sourceName, reason: `這一列有單位「${unit}」但沒有姓名` });
       continue;
     }
     if (!unit) {
       problems.push({
         lineNumber,
         sheetName,
+        sourceName,
         reason: '這一列沒有單位，.env 也沒設定 MCI_DEFAULT_UNIT（單位不能用猜的）',
       });
       continue;
@@ -229,7 +234,7 @@ function buildResult(pairs, options = {}) {
       continue;
     }
     seen.add(key);
-    entries.push({ unit, name, lineNumber, sheetName });
+    entries.push({ unit, name, lineNumber, sheetName, sourceName });
   }
 
   return { entries, problems, duplicateCount };
@@ -239,20 +244,28 @@ function buildResult(pairs, options = {}) {
 const FILE_EXTENSIONS = ['.xlsx', '.xls', '.xlsm', '.csv', '.txt'];
 
 /**
- * 使用者是不是「把檔案拖進黑視窗」了？
+ * 使用者是不是「把檔案拖進黑視窗」了？拖了幾個？
  *
  * 拖檔案到 Windows 主控台視窗，等於貼上一行檔案路徑（含空格時還會自動加引號）。
  * 這是很自然的操作，卻會讓路徑被當成某個人的姓名去查
  * ——2026-08-20 使用者實際踩到，畫面上出現「第 1 行沒有單位」。
  *
+ * ⚠ **一次拖好幾個檔也要認得**：2026-08-30 使用者一口氣拖了四份大隊清冊進來，
+ *   原本只認「剛好一行」，於是四行路徑被當成四個人的姓名去解析——更糟的是
+ *   `附件1、大量傷病患系統開通清冊-1大.xlsx` 裡的頓號正好是欄位分隔符，
+ *   於是畫面上出現荒謬的「名單共 2 位」。**全部的行都像檔案路徑**才算拖檔案；
+ *   只要混進一行真的姓名就整批當成貼上的名單（真人的姓名不會以 .xlsx 結尾）。
+ *
  * @param {string[]} lines
- * @returns {string} 檔案路徑；不是這種情況時回空字串
+ * @returns {string[]} 檔案路徑（依輸入順序）；不是這種情況時回空陣列
  */
-export function detectDroppedFile(lines) {
+export function detectDroppedFiles(lines) {
   const meaningful = (lines ?? []).map(tidy).filter(Boolean);
-  if (meaningful.length !== 1) return ''; // 混著名單就不是拖檔案
-  const candidate = meaningful[0];
-  return FILE_EXTENSIONS.includes(path.extname(candidate).toLowerCase()) ? candidate : '';
+  if (meaningful.length === 0) return [];
+  const allLookLikeFiles = meaningful.every((candidate) =>
+    FILE_EXTENSIONS.includes(path.extname(candidate).toLowerCase()),
+  );
+  return allLookLikeFiles ? meaningful : [];
 }
 
 /**
@@ -260,13 +273,43 @@ export function detectDroppedFile(lines) {
  *
  * @param {string[]} lines
  * @param {{defaultUnit?: string}} [options]
- * @returns {Promise<RosterResult & {sourceFile?: string}>}
+ * @returns {Promise<RosterResult & {sourceFiles: string[]}>}
  */
 export async function resolveRosterInput(lines, options = {}) {
-  const dropped = detectDroppedFile(lines);
-  if (!dropped) return parseRoster(lines, options);
-  const result = await readRosterFile(dropped, options);
-  return { ...result, sourceFile: dropped };
+  const dropped = detectDroppedFiles(lines);
+  if (dropped.length === 0) return { ...parseRoster(lines, options), sourceFiles: [] };
+  const result = await readRosterFiles(dropped, options);
+  return { ...result, sourceFiles: dropped };
+}
+
+/**
+ * 一次讀好幾個名單檔，合併成一份。
+ *
+ * 去重集合**跨檔共用**：同一個人出現在兩份清冊上只做一次。
+ * 每一筆都記得自己來自哪一個檔（`sourceName`），有問題時指得出是哪一份的哪一列。
+ *
+ * @param {string[]} filePaths
+ * @param {{defaultUnit?: string}} [options]
+ * @returns {Promise<RosterResult>}
+ */
+export async function readRosterFiles(filePaths, options = {}) {
+  const paths = filePaths ?? [];
+  if (paths.length === 1) return readRosterFile(paths[0], options);
+
+  const seen = new Set();
+  /** @type {RosterResult} */
+  const merged = { entries: [], problems: [], duplicateCount: 0 };
+  for (const filePath of paths) {
+    const result = await readRosterFile(filePath, {
+      ...options,
+      seen,
+      sourceName: path.basename(filePath),
+    });
+    merged.entries.push(...result.entries);
+    merged.problems.push(...result.problems);
+    merged.duplicateCount += result.duplicateCount;
+  }
+  return merged;
 }
 
 /**
@@ -311,7 +354,8 @@ async function readExcelRoster(filePath, options) {
   // ⚠ 一定要走完每一張工作表。公文附件的清冊是「一個分隊一張工作表」，
   //   只讀第一張的話，239 人的清冊會只剩第一個分隊的 10 個人，而且畫面上
   //   看起來一切正常——沒有錯誤訊息，只是其他人默默沒被開通。
-  const seen = new Set();
+  // 去重集合可能由呼叫端帶進來（一次讀好幾個檔時共用一份）。
+  const seen = options.seen instanceof Set ? options.seen : new Set();
   /** @type {RosterResult} */
   const merged = { entries: [], problems: [], duplicateCount: 0 };
   for (const sheetName of sheetNames) {
@@ -376,7 +420,9 @@ export function parseRosterMatrix(matrix, options = {}) {
  * @returns {string}
  */
 export function describeRosterLocation(item) {
+  const sourceName = tidy(item?.sourceName ?? '');
   const sheetName = tidy(item?.sheetName ?? '');
   const lineNumber = item?.lineNumber ?? 0;
-  return sheetName ? `工作表「${sheetName}」第 ${lineNumber} 列` : `第 ${lineNumber} 列`;
+  const where = sheetName ? `工作表「${sheetName}」第 ${lineNumber} 列` : `第 ${lineNumber} 列`;
+  return sourceName ? `${sourceName} ${where}` : where;
 }

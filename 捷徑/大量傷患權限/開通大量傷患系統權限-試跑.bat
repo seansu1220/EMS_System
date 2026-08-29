@@ -47,6 +47,8 @@ echo   MCI Permission Grant (DRY RUN)
 echo   ----------------------------------------
 echo   EASIEST: drag your Excel file onto this
 echo   shortcut - it reads the list from the file.
+echo   You can drag SEVERAL files at once; they are
+echo   merged into one list (duplicates dropped).
 echo   (Columns are found by the header row, so
 echo    "name" and "unit" can be in any order.
 echo    EVERY worksheet is read - the official form
@@ -71,13 +73,32 @@ echo   KEEP THIS WINDOW OPEN until it finishes.
 echo ============================================
 echo.
 
-if not "%~1"=="" (
-  echo Name list file: %~nx1
-  echo.
-  call npm run tool:mci -- grant --file="%~1"
-) else (
-  call npm run tool:mci -- grant %*
-)
+rem Every file dragged onto this shortcut becomes one --file= argument.
+rem "if exist" is the test on purpose: a dragged file always exists, while
+rem command-line flags do not. cmd splits --limit=3 at the "=", so testing
+rem for a leading "--" would mistake the "3" for a file name.
+set "FILEARGS="
+set "FILECOUNT=0"
+:collect_files
+if "%~1"=="" goto files_done
+if not exist "%~1" goto next_arg
+set FILEARGS=%FILEARGS% --file="%~1"
+set /a FILECOUNT+=1
+:next_arg
+shift
+goto collect_files
+:files_done
+
+rem No files dragged? Pass the original command line through untouched,
+rem so flags like --limit=3 survive (shift does not change %*).
+if %FILECOUNT% GTR 0 goto run_with_files
+call npm run tool:mci -- grant %*
+goto after_run
+:run_with_files
+echo Name list files: %FILECOUNT%
+echo.
+call npm run tool:mci -- grant %FILEARGS%
+:after_run
 
 echo.
 echo Press any key to close this window.

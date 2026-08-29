@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { PATHS } from './config.mjs';
 import { OUTCOME, SETTLED_OUTCOMES } from './grantFlow.mjs';
 
@@ -62,15 +63,48 @@ export function isDone(record) {
   return SETTLED_OUTCOMES.includes(record.outcome);
 }
 
+/** 檔名裡不能出現的字元（Windows）。 */
+const UNSAFE_FILENAME_CHARS = /[\\/:*?"<>|]/g;
+
 /**
  * 依名單來源決定進度檔位置。
  *
  * 同一份名單再跑就會接上同一個進度檔；換一份名單則各記各的。
- * @param {string} sourceLabel 名單檔路徑；貼上的名單給空字串
+ *
+ * ⚠ **拖進黑視窗的檔案也要算一份名單**。原本只有 `--file=` 那條路會帶檔名進來，
+ *   把檔案拖進視窗時 `source` 是空的，於是全部記到同一個「貼上的名單.jsonl」。
+ *   那個檔案裡躺著 2026-08-21 那次 1890 位的紀錄——2026-08-30 實測，344 位的
+ *   四份清冊會有 **317 位被當成「上次已完成」而默默跳過**，只做 27 位。
+ *   進度檔認錯名單，比查不到人嚴重得多。
+ *
+ * @param {string|string[]} source 名單檔路徑（可以是好幾個）；貼上的名單給空字串或空陣列
  */
-export function progressFileFor(sourceLabel) {
-  const base = sourceLabel ? path.basename(sourceLabel).replace(/[\\/:*?"<>|]/g, '_') : '貼上的名單';
-  return path.join(PATHS.progressDir, `${base}.jsonl`);
+export function progressFileFor(source) {
+  const paths = (Array.isArray(source) ? source : [source]).filter(Boolean);
+  if (paths.length === 0) return path.join(PATHS.progressDir, '貼上的名單.jsonl');
+  if (paths.length === 1) {
+    const base = path.basename(paths[0]).replace(UNSAFE_FILENAME_CHARS, '_');
+    return path.join(PATHS.progressDir, `${base}.jsonl`);
+  }
+  return path.join(PATHS.progressDir, `${multiFileLabel(paths)}.jsonl`);
+}
+
+/**
+ * 好幾份名單一起跑時的進度檔名字。
+ *
+ * 要求兩個：**同一組檔案再拖一次要算同一份**（才接得上進度），
+ * 而且**看得懂是哪一組**。因此用「第一份的檔名 ＋ 共幾份 ＋ 這一組的指紋」，
+ * 指紋用排序後的完整路徑算，所以拖曳的先後順序不影響結果。
+ *
+ * @param {string[]} paths
+ * @returns {string}
+ */
+function multiFileLabel(paths) {
+  // 先排序再取名：拖曳的先後順序不該讓同一組檔案變成兩個進度檔。
+  const sorted = [...paths].sort();
+  const first = path.basename(sorted[0], path.extname(sorted[0])).replace(UNSAFE_FILENAME_CHARS, '_');
+  const fingerprint = createHash('sha1').update(sorted.join('|')).digest('hex').slice(0, 8);
+  return `${first.slice(0, 40)}等${sorted.length}份-${fingerprint}`;
 }
 
 /**

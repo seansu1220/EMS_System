@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   describeRosterLocation,
+  detectDroppedFiles,
   parseRoster,
   parseRosterLine,
   parseRosterMatrix,
@@ -196,4 +197,27 @@ test('真的單位不會被誤判成佔位字', () => {
     ['觀音分隊', '測試丙'],
   ]);
   assert.equal(result.entries.length, 3);
+});
+
+test('拖一個檔進視窗：認得出是檔案', () => {
+  assert.deepEqual(detectDroppedFiles(['D:/名單/一大.xlsx']), ['D:/名單/一大.xlsx']);
+});
+
+test('一次拖好幾個檔：全部都要認得（2026-08-30 只認一個而爆掉）', () => {
+  const 四份 = ['D:/名單/一大.xlsx', 'D:/名單/二大.xlsx', 'D:/名單/三大.csv', 'D:/名單/四大.xls'];
+  assert.deepEqual(detectDroppedFiles(四份), 四份);
+});
+
+test('混進一行真的名單就整批當成貼上的名單，不當檔案', () => {
+  assert.deepEqual(detectDroppedFiles(['D:/名單/一大.xlsx', '大溪分隊,測試甲']), []);
+});
+
+test('什麼都沒貼時不算拖檔案', () => {
+  assert.deepEqual(detectDroppedFiles([]), []);
+  assert.deepEqual(detectDroppedFiles(['', '  ']), []);
+});
+
+test('一次讀好幾個檔時，問題列指得出是哪一份的哪一列', () => {
+  const problem = { sourceName: '三大.xlsx', sheetName: '工作表1', lineNumber: 7 };
+  assert.equal(describeRosterLocation(problem), '三大.xlsx 工作表「工作表1」第 7 列');
 });

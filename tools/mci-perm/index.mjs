@@ -9,6 +9,7 @@
  *   npm run tool:mci -- grant                    試跑：走完整個流程但**不按確定**
  *   npm run tool:mci -- grant --execute          真的開通（會先請你確認一次）
  *   npm run tool:mci -- grant --file=名單.xlsx    從檔案讀名單（也吃 .csv／.txt）
+ *   npm run tool:mci -- grant --file=A.xlsx --file=B.xlsx  好幾份一起跑（合成一份名單）
  *   npm run tool:mci -- grant --unit=大溪分隊      整份名單都用這個單位（名單只要寫姓名）
  *   npm run tool:mci -- grant --limit=3          只處理前 3 位（先確認流程正確再跑整份）
  *   npm run tool:mci -- grant --execute --no-verify  開通後不回頭查證（快一點，但不建議）
@@ -47,7 +48,7 @@ import { CLEAR_ALL, CLEAR_STATIONS, GRANT_UNITS, PATHS, SITE } from './config.mj
 import { grantAll, openAccountPermissionPage, revokeAll, waitForOptions } from './grantFlow.mjs';
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
 import { runProbe } from './probe.mjs';
-import { describeRosterLocation, readRosterFile, resolveRosterInput } from './roster.mjs';
+import { describeRosterLocation, readRosterFiles, resolveRosterInput } from './roster.mjs';
 import {
   appendProgress,
   countByOutcome,
@@ -82,7 +83,7 @@ const PROBLEM_PREVIEW = 10;
  * @property {'grant'|'grant-units'|'clear-all'|'clear-stations'|'probe'} command
  * @property {boolean} execute 真的按下確定
  * @property {boolean} freshLogin
- * @property {string} file 名單檔路徑（空字串代表改用互動貼上）
+ * @property {string[]} files 名單檔路徑（空陣列代表改用互動貼上；可以不只一份）
  * @property {string} unit grant：覆寫整份名單的單位；掃單位那兩支：只處理這一個單位
  * @property {string} name probe 用：要試查的姓名
  * @property {number} limit 只處理前幾位（0＝不限）
@@ -103,6 +104,9 @@ export function parseArgs(args) {
     const hit = args.find((arg) => arg.startsWith(`--${key}=`));
     return hit ? hit.slice(key.length + 3).trim() : '';
   };
+  // --file= 可以給好幾次（拖曳多個檔案到捷徑上時，捷徑會一個檔給一個 --file=）。
+  const valuesOf = (key) =>
+    args.filter((arg) => arg.startsWith(`--${key}=`)).map((arg) => arg.slice(key.length + 3).trim()).filter(Boolean);
   const limitText = valueOf('limit');
   const limit = limitText ? Number.parseInt(limitText, 10) : 0;
   if (limitText && (!Number.isFinite(limit) || limit <= 0)) {
@@ -118,7 +122,7 @@ export function parseArgs(args) {
     restart: args.includes('--restart'),
     /** 掃單位那兩支：重新掃一次名單（預設沿用上次掃到的，省十分鐘）。 */
     rescan: args.includes('--rescan'),
-    file: valueOf('file'),
+    files: valuesOf('file'),
     unit: valueOf('unit'),
     name: valueOf('name'),
     limit,
@@ -138,6 +142,7 @@ async function promptRosterLines() {
   log.info('只寫姓名也可以，但要先用 --unit=單位 指定，或在 .env 設 MCI_DEFAULT_UNIT。');
   log.info('貼不上去時：在黑色視窗內按「滑鼠右鍵」就是貼上（Ctrl+V 常被輸入法吃掉）。');
   log.info('也可以直接把 Excel 檔「拖進這個視窗」再按 Enter，它會讀那個檔。');
+  log.info('好幾份要一起跑：一份拖一行，全部拖完再按一次 Enter（會合起來當一份名單）。');
   /** @type {string[]} */
   const collected = [];
   // 一次貼上多行時，多出來的行會在兩次 prompt 之間到達，必須先開緩衝才不會漏。
@@ -162,17 +167,19 @@ async function promptRosterLines() {
  * 取得這次要處理的名單。
  * @param {CliOptions} options
  * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[],
- *   problems: import('./roster.mjs').RosterProblem[]}>}
+ *   problems: import('./roster.mjs').RosterProblem[], sourceFiles: string[]}>}
  */
 async function resolveRoster(options) {
   const settings = loadSettings();
   const defaultUnit = options.unit || settings.defaultUnit;
   const parseOptions = { defaultUnit };
 
-  const result = options.file
-    ? await readRosterFile(options.file, parseOptions)
-    : await resolveRosterInput(await promptRosterLines(), parseOptions);
-  if (result.sourceFile) log.ok(`讀取名單檔：${result.sourceFile}`);
+  const result =
+    options.files.length > 0
+      ? { ...(await readRosterFiles(options.files, parseOptions)), sourceFiles: options.files }
+      : await resolveRosterInput(await promptRosterLines(), parseOptions);
+  const sourceFiles = result.sourceFiles ?? [];
+  for (const sourceFile of sourceFiles) log.ok(`讀取名單檔：${sourceFile}`);
 
   if (options.unit) {
     // --unit 是明確指令，蓋過名單裡寫的單位。
@@ -196,9 +203,9 @@ async function resolveRoster(options) {
 
   if (options.limit > 0 && result.entries.length > options.limit) {
     log.info(`依 --limit=${options.limit} 只處理前 ${options.limit} 位`);
-    return { entries: result.entries.slice(0, options.limit), problems: result.problems };
+    return { entries: result.entries.slice(0, options.limit), problems: result.problems, sourceFiles };
   }
-  return { entries: result.entries, problems: result.problems };
+  return { entries: result.entries, problems: result.problems, sourceFiles };
 }
 
 /**
@@ -219,10 +226,12 @@ async function confirmExecute(entries) {
 
 /** 執行 grant 指令。 */
 async function runGrant(options) {
-  const { entries: all, problems } = await resolveRoster(options);
+  const { entries: all, problems, sourceFiles } = await resolveRoster(options);
 
   // 接著上次跑：做完的人跳過，沒做完的（含上次失敗的）再試一次。
-  const progressFile = progressFileFor(options.file);
+  // ⚠ 一定要用**真正的名單來源**（含拖進視窗的檔案），不能只看 --file=：
+  //   認錯名單就會接到別份名單的進度，把沒做過的人當成做完了（見 progressFileFor）。
+  const progressFile = progressFileFor(sourceFiles);
   if (options.restart) {
     await fs.rm(progressFile, { force: true }).catch(() => {});
     log.info('依 --restart 捨棄上次的進度，這次整份從頭跑');
