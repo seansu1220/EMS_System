@@ -2,8 +2,11 @@
  * 二級以上因交通事故救護案件——查詢與匯出。
  *
  * 條件依使用者 2026-09-01 說明的人工作業：
- *   救護狀態＝已結案、危急個案、受傷機轉＝因交通事故，
+ *   救護狀態＝已結案、受傷機轉＝因交通事故，
  *   到院後檢傷分級分別選第 1 級與第 2 級各查一次、各匯出一份。
+ *
+ * ⚠ **不篩「危急個案」**（使用者 2026-09-01 更正）：只要到院後檢傷第 2 級以上，
+ *   是不是危急個案不管。
  *
  * ⚠ 這一頁有兩組長得一模一樣的欄位（受傷機轉的 `_scar` 與 `_scarSub`；
  *   到院前／到院後檢傷分級兩個下拉的選項也完全相同），選錯了畫面不會有任何反應，
@@ -35,7 +38,6 @@ import { verifyExportRows } from './trafficCases.mjs';
  * @property {string|null} filePath 匯出檔位置；查無案件時為 null
  * @property {Record<string, string>[]} mainRows 詳細報表一
  * @property {Record<string, string>[]} patientRows 詳細報表二
- * @property {string[]} warnings 核對到、但不足以中止的情況（見 config 的 severity）
  */
 
 /** 內容框每次導航都會重建，一律重新取得，不可快取。 */
@@ -70,15 +72,17 @@ async function checkCriterion(page, selector, label) {
 }
 
 /**
- * 設定所有等級共用的條件：期間、救護狀態、危急個案、受傷機轉＝因交通事故。
+ * 設定所有等級共用的條件：期間、救護狀態、受傷機轉＝因交通事故。
+ *
+ * ⚠ **不篩「危急個案」**：使用者 2026-09-01 決定，只看到院後檢傷第 2 級以上，
+ * 是不是危急個案不管（來文標題雖然寫著危急個案，但認定以檢傷分級為準）。
  *
  * @param {import('playwright-core').Page} page
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {string} dateFormat
  * @param {string} trafficSelector 受傷機轉「因交通事故」的勾選欄
- * @param {string} criticalSelector 「危急個案」的勾選欄
  */
-async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector, criticalSelector) {
+async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector) {
   log.step('設定查詢條件');
   // 迄日用 23:59:59，否則格式含時間時會變成當天 00:00:00，漏掉整個最後一天的案件。
   await fillFrameField(content(page), SITE.queryFields.dateFrom,
@@ -90,7 +94,6 @@ async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector
   await selectFrameField(content(page), SITE.queryFields.rescueStatus,
     QUERY_CRITERIA.rescueStatusValue, `救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`);
 
-  await checkCriterion(page, criticalSelector, '危急個案');
   await checkCriterion(page, trafficSelector, '受傷機轉＝因交通事故');
 
   // 兩個檢傷下拉先全部清成「不限」。查詢頁的條件會跨查詢留著，
@@ -165,8 +168,8 @@ function readExportSheets(filePath) {
  * @param {string} levelLabel
  */
 function expectationsFor(levelLabel) {
-  const { triage, traffic, critical } = TRAFFIC_CASE_REPORT.verifyColumns;
-  return [{ ...triage, expected: levelLabel }, traffic, critical];
+  const { triage, traffic } = TRAFFIC_CASE_REPORT.verifyColumns;
+  return [{ ...triage, expected: levelLabel }, traffic];
 }
 
 /**
@@ -187,7 +190,7 @@ async function queryAndExportLevel(context, page, monthRange, level, triageSelec
   if (await hasNoResult(page)) {
     log.warn(`${level.label}：這個月沒有任何符合條件的案件`);
     return {
-      levelExport: { levelLabel: level.label, filePath: null, mainRows: [], patientRows: [], warnings: [] },
+      levelExport: { levelLabel: level.label, filePath: null, mainRows: [], patientRows: [] },
       failed: [],
     };
   }
@@ -203,15 +206,11 @@ async function queryAndExportLevel(context, page, monthRange, level, triageSelec
   for (const item of failed) {
     log.warn(`${level.label}：有 ${item.badCount} 件的「${item.label}」對不上（欄位 ${item.column}）`);
   }
-  // 只有「畫面上有兩個長得一樣的欄位」那兩項才需要換候選重來（見 config 的 severity 說明）。
-  const mustStop = failed.filter((item) => item.severity !== 'warn');
-  if (mustStop.length > 0) return { levelExport: null, failed: mustStop };
+  // 兩個條件的欄位在畫面上各有兩個長得一樣的，對不上就是選錯了，換候選重來。
+  if (failed.length > 0) return { levelExport: null, failed };
 
-  const warnings = failed.map(
-    (item) => `${level.label}：${item.badCount} 件在匯出檔裡沒有「${item.label}」，請自行確認要不要留`,
-  );
   log.ok(`${level.label}：${mainRows.length} 件，條件逐列核對通過`);
-  return { levelExport: { levelLabel: level.label, filePath, mainRows, patientRows, warnings }, failed: [] };
+  return { levelExport: { levelLabel: level.label, filePath, mainRows, patientRows }, failed: [] };
 }
 
 /**
@@ -236,7 +235,6 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
     content(page), SITE.queryFields.dateFrom, SITE.defaultDateFormat,
   );
 
-  const criticalSelector = await resolveCheckbox(page, '危急個案', [SITE.queryFields.criticalCase]);
   const trafficCandidates = [...SITE.queryFields.injuryByTrafficCandidates];
   const preferred = await resolveCheckbox(page, '因交通事故', trafficCandidates);
   // 標籤找出來的那個排最前面，其餘保留為候選（順序去重）。
@@ -246,7 +244,7 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
   let triageSelector = await resolveTriageSelect(page);
   const remainingTriage = triageQueue.filter((item) => item !== triageSelector);
 
-  await applyCommonCriteria(page, monthRange, dateFormat, trafficSelector, criticalSelector);
+  await applyCommonCriteria(page, monthRange, dateFormat, trafficSelector);
 
   /** @type {LevelExport[]} */
   const exports = [];

@@ -296,7 +296,6 @@ async function runTrafficCaseFlow(session, monthRange, options) {
 
   for (const level of levelExports) {
     log.info(`${level.levelLabel}：${level.mainRows.length} 件`);
-    for (const warning of level.warnings ?? []) log.warn(warning);
   }
   log.info(`合併後共 ${table.rows.length} 件`);
   for (const problem of [...mergeProblems, ...table.problems]) log.warn(problem);

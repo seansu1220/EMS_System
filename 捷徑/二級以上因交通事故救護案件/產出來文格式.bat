@@ -30,9 +30,9 @@ echo.
 echo ==================================================
 echo   Traffic Critical Cases (triage level 1 and 2)
 echo   ----------------------------------------------
-echo   Query: last month, closed cases, critical case,
-echo   injured by traffic accident, triage level 1 and
-echo   level 2 (two queries, merged into one list).
+echo   Query: last month, closed cases, injured by
+echo   traffic accident, in-hospital triage level 1
+echo   and level 2 (two queries, merged into one).
 echo.
 echo   A Chrome window opens at the login page. Type
 echo   the CAPTCHA and sign in. The rest is automatic
