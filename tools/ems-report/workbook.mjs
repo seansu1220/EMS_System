@@ -15,8 +15,12 @@ import XLSX from './xlsxNode.mjs';
  * @property {number} headerRowIndex 標題列在原檔的列索引（0 起算）
  */
 
-/** 讀取檔案並取得第一個工作表的二維陣列。 */
-function readSheetMatrix(filePath) {
+/**
+ * 讀取檔案並取得某一張工作表的二維陣列。
+ * @param {string} filePath
+ * @param {string} [wantedSheetName] 指定工作表名稱；省略時取第一張
+ */
+function readSheetMatrix(filePath, wantedSheetName) {
   let workbook;
   try {
     workbook = XLSX.readFile(filePath);
@@ -24,8 +28,17 @@ function readSheetMatrix(filePath) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`無法讀取匯出檔 ${filePath}：${reason}`);
   }
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) throw new Error(`匯出檔 ${filePath} 沒有任何工作表`);
+  const sheetName = wantedSheetName
+    ? workbook.SheetNames.find((name) => name.trim() === wantedSheetName.trim())
+    : workbook.SheetNames[0];
+  if (!sheetName) {
+    // 指定的工作表不在裡面時，把實際有哪幾張講出來（工作表名稱屬檔案結構，非個資）。
+    throw new Error(
+      wantedSheetName
+        ? `匯出檔 ${filePath} 裡沒有工作表「${wantedSheetName}」，實際有：${workbook.SheetNames.join('、')}`
+        : `匯出檔 ${filePath} 沒有任何工作表`,
+    );
+  }
   const matrix = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
     header: 1,
     defval: '',
@@ -66,7 +79,22 @@ export function findHeaderRowIndex(matrix, expectedColumns) {
  * @returns {TableData}
  */
 export function readTable(filePath, expectedColumns) {
-  const { sheetName, matrix } = readSheetMatrix(filePath);
+  return readSheetTable(filePath, undefined, expectedColumns);
+}
+
+/**
+ * 讀取匯出檔裡**指定名稱**的工作表。
+ *
+ * 有些匯出檔一份就含好幾張工作表（例如救護紀錄表查詢的「詳細報表一／二」），
+ * 只讀第一張會漏掉另一半欄位。
+ *
+ * @param {string} filePath
+ * @param {string|undefined} sheetName 工作表名稱；`undefined` 代表第一張
+ * @param {readonly string[]} expectedColumns 用來定位標題列的欄名候選
+ * @returns {TableData}
+ */
+export function readSheetTable(filePath, sheetName, expectedColumns) {
+  const { sheetName: usedSheetName, matrix } = readSheetMatrix(filePath, sheetName);
   const headerRowIndex = findHeaderRowIndex(matrix, expectedColumns);
   if (headerRowIndex < 0) {
     const preview = matrix.slice(0, 3).map((row) => row.map(toText).filter(Boolean).join(' | '));
@@ -84,7 +112,7 @@ export function readTable(filePath, expectedColumns) {
     });
     return record;
   });
-  return { sheetName, headers, rows, headerRowIndex };
+  return { sheetName: usedSheetName, headers, rows, headerRowIndex };
 }
 
 /**

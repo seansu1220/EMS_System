@@ -11,6 +11,7 @@
  *   npm run tool:ems -- ekg --limit=5        只逐案查核前 5 件（先確認判斷正確再跑整月）
  *   npm run tool:ems -- ekg --squad=平鎮分隊 只查核某一分隊，逐件印出判定（分隊來對數字時用）
  *   npm run tool:ems -- ekg --no-verify      跳過逐案查核，只看原始件數（很快）
+ *   npm run tool:ems -- traffic              二級以上因交通事故救護案件（填成來文格式的一覽表）
  *   npm run tool:ems -- <指令> --month=2026-06  指定月份
  *   npm run tool:ems -- <指令> --keep-raw    保留系統匯出的原始檔（含個資）
  *   npm run tool:ems -- probe                自動探測頁面結構（開發／改版時用）
@@ -55,6 +56,13 @@ import {
 } from './aggregate.mjs';
 import { printReport, writeReport } from './report.mjs';
 import { exportEkgDatasets } from './ekgScrape.mjs';
+import { exportTrafficCaseDatasets } from './trafficScrape.mjs';
+import {
+  mergeSheetPairs,
+  buildDocumentTable,
+  countIncompleteIdentities,
+} from './trafficCases.mjs';
+import { writeTrafficCaseReport } from './trafficReport.mjs';
 import { runEkgDiagnose } from './ekgDiagnose.mjs';
 import { diagnoseOhca } from './ekgOhca.mjs';
 import {
@@ -77,6 +85,7 @@ import {
   BRIGADES,
   REPORT_FORMAT,
   REPORT_PROFILES,
+  TRAFFIC_CASE_REPORT,
   UNLOCK,
 } from './config.mjs';
 import { excludeOhcaCases, temsisSetOf } from './ekgExclude.mjs';
@@ -92,14 +101,14 @@ import { maskCode } from './sheetFields.mjs';
 
 /** 可用的指令。 */
 const COMMANDS = [
-  'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'monthly', 'probe', 'check-sheet',
+  'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe', 'check-sheet',
   'unlock', 'unlock-online', 'unlock-watch',
 ];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'monthly'|'check-sheet'|'unlock'|'unlock-online'
- *   |'unlock-watch'} command
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'|'unlock'
+ *   |'unlock-online'|'unlock-watch'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -253,6 +262,68 @@ async function runReportFlow(session, monthRange, keepRaw) {
   if (keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.total)}（含個資，請自行妥善處理）`);
   } else {
+    await removeRawFiles(rawFiles);
+  }
+}
+
+/**
+ * 二級以上因交通事故救護案件：兩次查詢與匯出 → 合併兩張工作表 → 填成來文格式。
+ *
+ * 「第二級以上」＝到院後檢傷分級第 1、2 級，系統的下拉只能單選，故分兩次查。
+ * 兩份匯出檔各含兩張工作表，來文要的欄位分散在裡面，靠救護紀錄表單號串起來。
+ *
+ * @param {import('./session.mjs').EmsSession} session
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {CliOptions} options
+ */
+async function runTrafficCaseFlow(session, monthRange, options) {
+  const levelExports = await exportTrafficCaseDatasets(session.context, session.page, monthRange);
+
+  log.step('合併兩張工作表並整理成來文格式');
+  const { cases, problems: mergeProblems } = mergeSheetPairs(
+    levelExports.map((item) => ({
+      levelLabel: item.levelLabel,
+      mainRows: item.mainRows,
+      patientRows: item.patientRows,
+    })),
+    TRAFFIC_CASE_REPORT.joinKeyColumn,
+  );
+  const table = buildDocumentTable(
+    cases,
+    TRAFFIC_CASE_REPORT.columnMap,
+    TRAFFIC_CASE_REPORT.dateColumn,
+  );
+
+  for (const level of levelExports) {
+    log.info(`${level.levelLabel}：${level.mainRows.length} 件`);
+    for (const warning of level.warnings ?? []) log.warn(warning);
+  }
+  log.info(`合併後共 ${table.rows.length} 件`);
+  for (const problem of [...mergeProblems, ...table.problems]) log.warn(problem);
+
+  if (table.rows.length === 0) {
+    log.warn('這個月沒有符合條件的案件，仍會產出一份只有標題的來文格式檔。');
+  }
+
+  const { unknownName, missingId } = countIncompleteIdentities(
+    table,
+    TRAFFIC_CASE_REPORT.identityCheck,
+  );
+  if (unknownName > 0 || missingId > 0) {
+    log.warn(
+      `其中姓名為「不詳」或空白的有 ${unknownName} 件、沒有身分證字號的有 ${missingId} 件` +
+        '（無主病患或外籍人士本來就會這樣，送出前請自行確認要不要補）。',
+    );
+  }
+
+  await writeTrafficCaseReport(table, monthRange);
+
+  const rawFiles = Object.fromEntries(
+    levelExports.filter((item) => item.filePath).map((item) => [item.levelLabel, item.filePath]),
+  );
+  if (options.keepRaw) {
+    log.warn(`依 --keep-raw 保留原始明細檔於 ${PATHS.rawDir}（含個資，請自行妥善處理）`);
+  } else if (Object.keys(rawFiles).length > 0) {
     await removeRawFiles(rawFiles);
   }
 }
@@ -928,6 +999,10 @@ async function main() {
       await diagnoseOhca(session.context, session.page, monthRange, { temsis: options.temsis });
       return;
     }
+    if (options.command === 'traffic') {
+      await runTrafficCaseFlow(session, monthRange, options);
+      return;
+    }
     if (options.command === 'monthly') {
       await runMonthlyFlow(session, monthRange, options);
       return;
@@ -936,7 +1011,7 @@ async function main() {
   }, { freshLogin: options.freshLogin });
 
   // 報表都產好了才清舊檔。清理失敗不該影響已經完成的產出，因此不讓它往外拋。
-  if (['run', 'ekg', 'monthly'].includes(options.command)) {
+  if (['run', 'ekg', 'traffic', 'monthly'].includes(options.command)) {
     await pruneOldOutputs().catch((error) => {
       log.warn(`清理舊月份檔案時出錯（不影響本次報表）：${error instanceof Error ? error.message : String(error)}`);
     });

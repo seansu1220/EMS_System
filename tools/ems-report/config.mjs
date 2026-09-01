@@ -73,10 +73,34 @@ export const SITE = {
     prehospitalAlert: '#_selPreHOSPWarning',
     /** 分隊。 */
     squad: '#_selDeptnoCar',
+    /**
+     * 危急個案（勾選欄）。同一排還有大傷案件、毒化災、輻射傷害，
+     * 四個共用 name=`_cba`，只有 id 分得出誰是誰。
+     */
+    criticalCase: '#_cbaCBA1108',
+    /**
+     * 受傷機轉「因交通事故」的勾選欄**候選**。
+     *
+     * ⚠ 這一頁有兩組長得一模一樣的受傷機轉勾選欄（`_scar` 與 `_scarSub`），
+     * 光看畫面分不出哪一組才是查詢真正吃的條件，勾錯了系統也不會抗議。
+     * 因此依序試，並用匯出檔逐列回頭核對（見 `trafficScrape.mjs`）。
+     */
+    injuryByTrafficCandidates: ['#_scarcbc040901', '#_scarSubcbc040901'],
+    /**
+     * 到院後檢傷分級的下拉**候選**。
+     *
+     * ⚠ 頁面上「到院前」與「到院後」兩個下拉的選項完全相同（未評／第1級…第5級），
+     * 也沒有可靠的 id 命名可以分辨。先讀畫面標籤判斷，判不出來就依序試，
+     * 一樣用匯出檔的「到院後檢傷分級」欄回頭核對。
+     */
+    triageAfterArrivalCandidates: ['#_selTTAS_LEVEL', '#_selSPP03'],
     /** 查詢與匯出是圖片按鈕，不是標準表單按鈕。 */
     queryButton: '#_btnQuery',
     excelButton: '#_btnExcel',
   },
+
+  /** 查詢結果為空時，內容框會出現的字樣（用來分辨「沒有案件」與「匯出失敗」）。 */
+  noResultMarker: '查無資料',
 
   /** 偵測不到系統日期元件設定時採用的格式（My97DatePicker 樣式）。 */
   defaultDateFormat: 'yyyy-MM-dd',
@@ -213,6 +237,75 @@ export const QUERY_CRITERIA = {
 export const DATASETS = {
   total: { key: 'total', label: '總案件數', alertValue: '' },
   alert: { key: 'alert', label: '到院前預警案件數', alertValue: QUERY_CRITERIA.prehospitalAlertValue },
+};
+
+/**
+ * 二級以上因交通事故救護案件一覽表（第 8 章）的設定。
+ *
+ * 查詢條件與欄位對應全部集中在這裡：來文格式要加一欄、或系統改了欄名，都只改這裡。
+ * 查詢條件依使用者 2026-09-01 說明的人工作業流程：
+ * 救護狀態＝已結案、危急個案、受傷機轉＝因交通事故，到院後檢傷分級分成第 1、2 級各查一次。
+ */
+export const TRAFFIC_CASE_REPORT = {
+  /** 到院後檢傷分級要查的等級（「第二級以上」＝第 1 級與第 2 級，各查一次再合併）。 */
+  triageLevels: [
+    { key: 'level1', value: '1', label: '第1級' },
+    { key: 'level2', value: '2', label: '第2級' },
+  ],
+  /**
+   * 匯出檔的兩張工作表。來文要的欄位分散在兩張裡：
+   * 日期、地點、到院後檢傷分級在第一張；姓名、身分證、到院前檢傷分級在第二張。
+   */
+  sheets: { main: '詳細報表一', patient: '詳細報表二' },
+  /** 兩張工作表串接用的鍵（每位傷病患一個單號）。 */
+  joinKeyColumn: '救護紀錄表單號',
+  /** 排序用的日期欄（詳細報表一）。 */
+  dateColumn: '案發日期',
+  /**
+   * 匯出後逐列回頭核對的條件——查詢頁選錯欄位時，這是唯一看得出來的地方。
+   * `expected` 是匯出檔裡該欄的值（勾選欄匯出後是 `V`）。
+   *
+   * `severity`：
+   *   - `stop`：這兩個條件的欄位在畫面上各有兩個長得一樣的，選錯了只能靠這裡發現。
+   *     對不上就換另一個候選重來，都不對就停手不產出。
+   *   - `warn`：欄位由唯一的標籤定位、不會選錯，對不上代表系統的篩選與匯出欄位對不起來。
+   *     值得大聲提醒，但不值得把整份報表丟掉（使用者看得到件數，可自行判斷）。
+   */
+  verifyColumns: {
+    /** 這一欄要等於本次查詢的等級標籤，故 expected 由流程填入。 */
+    triage: { key: 'triage', column: '到院後檢傷分級', label: '到院後檢傷分級', severity: 'stop' },
+    traffic: {
+      key: 'traffic', column: '受傷機轉(因交通事故)', expected: 'V',
+      label: '受傷機轉＝因交通事故', severity: 'stop',
+    },
+    critical: { key: 'critical', column: '危急個案', expected: 'V', label: '危急個案', severity: 'warn' },
+  },
+  /**
+   * 來文格式的欄位對應（順序即欄位順序，比對來文範本的標題列）。
+   * `sheet` 指來源工作表；`source` 為 serial（流水號）或 blank（留白）時不取來源欄位。
+   */
+  columnMap: [
+    { title: '編號', source: 'serial' },
+    { title: '發生日期', sheet: 'main', column: '案發日期', transform: 'rocDate' },
+    { title: '發生地點', sheet: 'main', column: '發生地點' },
+    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名' },
+    { title: '身分證字號', sheet: 'patient', column: '身分證字號/護照號碼/居留證號碼' },
+    // 使用者 2026-09-01 指定：照抄系統文字（第1級／第2級），不轉成數字。
+    { title: '醫護人員檢傷分級', sheet: 'main', column: '到院後檢傷分級' },
+    { title: '五級分類', sheet: 'patient', column: '到院前檢傷分級' },
+    { title: '備註', source: 'blank' },
+  ],
+  /** 產出後要提醒使用者的欄位（資料本來就可能沒有，不是程式出錯）。 */
+  identityCheck: { nameTitle: '當事人姓名', idTitle: '身分證字號', unknownNameText: '不詳' },
+  /**
+   * 來文格式的空白範本（使用者放在捷徑資料夾內，與批次檔擺在一起才好找）。
+   * 範本只有標題與欄位列，沒有任何個案資料，因此可以進版控。
+   */
+  templateFile: path.join(TOOL_DIR, '..', '..', '捷徑', '二級以上因交通事故救護案件', '來文格式.xlsx'),
+  /** 範本裡標題列的第一欄文字，用來定位「資料要從第幾列開始填」。 */
+  templateHeaderFirstCell: '編號',
+  /** 產出檔名前綴，實際檔名為 `{prefix}-{YYYY-MM}.xlsx`。 */
+  fileNamePrefix: '二級以上因交通事故救護案件',
 };
 
 /**
