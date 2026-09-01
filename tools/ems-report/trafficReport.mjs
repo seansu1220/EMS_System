@@ -35,9 +35,10 @@ function cellText(cell) {
  *
  * @param {import('exceljs').Worksheet} sheet
  * @param {string[]} wantedHeaders 來文欄位標題（依設定順序）
+ * @param {string} templateFile 範本位置（只用在錯誤訊息，讓人知道要去改哪個檔）
  * @returns {{headerRowNumber: number, columnNumbers: number[]}}
  */
-function locateHeaderRow(sheet, wantedHeaders) {
+function locateHeaderRow(sheet, wantedHeaders, templateFile) {
   const firstCellText = normalizeHeader(TRAFFIC_CASE_REPORT.templateHeaderFirstCell);
   const searchLimit = Math.min(sheet.rowCount || 20, 20);
 
@@ -62,7 +63,7 @@ function locateHeaderRow(sheet, wantedHeaders) {
   throw new Error(
     `在來文格式範本的前 ${searchLimit} 列找不到欄位標題列` +
       `（預期有一格寫著「${TRAFFIC_CASE_REPORT.templateHeaderFirstCell}」）：` +
-      TRAFFIC_CASE_REPORT.templateFile,
+      templateFile,
   );
 }
 
@@ -82,6 +83,30 @@ function writeCell(cell, headerCell, text, alignLeft) {
 }
 
 /**
+ * 找出來文格式範本放在哪裡（完整安裝與可攜版的位置不同，見 config）。
+ *
+ * 兩個位置都沒有時把**找過的位置全部列出來**——只說「找不到範本」的話，
+ * 使用者不會知道該把檔案放到哪裡去。
+ *
+ * @returns {Promise<string>}
+ */
+async function findTemplateFile() {
+  for (const candidate of TRAFFIC_CASE_REPORT.templateFileCandidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // 這個位置沒有，試下一個。
+    }
+  }
+  throw new Error(
+    '找不到來文格式範本（上級發文的空白格式，只有標題與欄位列）。找過這些位置：\n' +
+      TRAFFIC_CASE_REPORT.templateFileCandidates.map((item) => `　${item}`).join('\n') +
+      '\n請把「來文格式.xlsx」放到其中一個位置後重新執行。',
+  );
+}
+
+/**
  * 產出來文格式的 Excel。
  *
  * @param {import('./trafficCases.mjs').DocumentTable} table
@@ -89,22 +114,14 @@ function writeCell(cell, headerCell, text, alignLeft) {
  * @returns {Promise<string>} 產出檔路徑
  */
 export async function writeTrafficCaseReport(table, monthRange) {
-  const templateFile = TRAFFIC_CASE_REPORT.templateFile;
-  try {
-    await fs.access(templateFile);
-  } catch {
-    throw new Error(
-      `找不到來文格式範本：${templateFile}\n` +
-        '這是上級發文的空白格式（只有標題與欄位列）。請把它放回這個位置後重新執行。',
-    );
-  }
+  const templateFile = await findTemplateFile();
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(templateFile);
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error(`來文格式範本沒有任何工作表：${templateFile}`);
 
-  const { headerRowNumber, columnNumbers } = locateHeaderRow(sheet, table.headers);
+  const { headerRowNumber, columnNumbers } = locateHeaderRow(sheet, table.headers, templateFile);
   const headerRow = sheet.getRow(headerRowNumber);
   // 地點是唯一會長到換行的欄位，靠左看得比較順；其餘置中比照來文既有版面。
   const leftAlignedIndex = table.headers.indexOf('發生地點');

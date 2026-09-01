@@ -182,6 +182,17 @@ foreach ($doc in @('README.md', '.env.example')) {
   $docPath = Join-Path $sourceDir $doc
   if (Test-Path $docPath) { Copy-Item -Path $docPath -Destination $toolRoot -Force }
 }
+
+# 來文格式範本（第 8 章用）。可攜版沒有專案根目錄，`../../捷徑/…` 會指到隨身碟外面去，
+# 所以範本要跟著工具走一份（範本只有標題與欄位列，沒有任何個案資料）。
+$templateSource = Join-Path $projectRoot '捷徑\二級以上因交通事故救護案件\來文格式.xlsx'
+if (Test-Path $templateSource) {
+  Copy-Item -Path $templateSource -Destination $toolRoot -Force
+  Write-Host '      已附上「來文格式.xlsx」範本（二級以上因交通事故救護案件用）'
+} else {
+  Write-Warning "找不到來文格式範本：$templateSource"
+  Write-Warning '可攜版的「二級以上因交通事故救護案件」會在最後一步（產出檔案）失敗。'
+}
 Write-Host '      完成（未複製 .env、out/ 與 .auth/，帳密、個案資料與登入狀態不會被帶出去）'
 
 # --- 2. 寫一份只列必要套件的 package.json ---
@@ -356,6 +367,24 @@ New-Launcher -FileName '救護預警統計.bat' `
     'A browser opens - type the CAPTCHA and',
     'sign in. KEEP THIS WINDOW OPEN until it',
     'finishes (about 4 minutes).'
+  )
+
+New-Launcher -FileName '二級以上因交通事故救護案件.bat' `
+  -Title 'Traffic Critical Cases - Official Form' `
+  -Command 'traffic' `
+  -Notice @(
+    'Traffic Cases, Triage Level 1 and 2',
+    '----------------------------------------',
+    'Last month, closed cases, injured by',
+    'traffic accident, in-hospital triage',
+    'level 1 and level 2 - filled into the',
+    'official form template.',
+    '',
+    'A browser opens - type the CAPTCHA and',
+    'sign in. Takes about half a minute.',
+    '',
+    'Result: out\internal\ in this folder.',
+    'It contains names and ID numbers.'
   )
 
 $settingsLauncher = @'
