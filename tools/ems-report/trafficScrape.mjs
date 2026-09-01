@@ -92,6 +92,19 @@ async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector
 
   await checkCriterion(page, criticalSelector, '危急個案');
   await checkCriterion(page, trafficSelector, '受傷機轉＝因交通事故');
+
+  // 兩個檢傷下拉先全部清成「不限」。查詢頁的條件會跨查詢留著，
+  // 只要有一個殘留著上次試錯的值，就等於多了一個沒人知道的條件在篩案件
+  // （2026-09-01 實跑就是這樣少了案子，見 TOOLS_SPEC 8.5）。
+  for (const selector of SITE.queryFields.triageAfterArrivalCandidates) {
+    await clearTriageSelect(page, selector, '（先清成不限）');
+  }
+}
+
+/** 把一個檢傷下拉清成「不限」，並回讀確認真的清掉了。 */
+async function clearTriageSelect(page, selector, why) {
+  await ensureFieldVisible(page, selector).catch(() => {});
+  await selectFrameField(content(page), selector, '', `檢傷分級下拉 ${selector}＝不限${why}`);
 }
 
 /**
@@ -246,6 +259,8 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
       const wrongTraffic = attempt.failed.some((item) => item.key === 'traffic');
 
       if (wrongTriage && remainingTriage.length > 0) {
+        // 換之前一定要把原本那個清成「不限」，否則它會繼續當一個條件在篩案件。
+        await clearTriageSelect(page, triageSelector, '（這個不是到院後，清掉）');
         triageSelector = remainingTriage.shift();
         log.warn(`改用另一個檢傷分級下拉 ${triageSelector} 重來一次`);
       } else if (wrongTraffic && trafficQueue.length > 0) {

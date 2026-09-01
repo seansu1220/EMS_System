@@ -87,13 +87,19 @@ export const SITE = {
      */
     injuryByTrafficCandidates: ['#_scarcbc040901', '#_scarSubcbc040901'],
     /**
-     * 到院後檢傷分級的下拉**候選**。
+     * 到院後檢傷分級的下拉**候選**（順序＝優先嘗試的順序）。
      *
      * ⚠ 頁面上「到院前」與「到院後」兩個下拉的選項完全相同（未評／第1級…第5級），
-     * 也沒有可靠的 id 命名可以分辨。先讀畫面標籤判斷，判不出來就依序試，
-     * 一樣用匯出檔的「到院後檢傷分級」欄回頭核對。
+     * 畫面標籤也分不出來（兩個的同列文字都同時含「到院前」與「到院後」）。
+     *
+     * **2026-09-01 實跑得到答案：`#_selSPP03` 才是到院後**（選第 1 級查出 17 件，
+     * 逐列核對全對）；`#_selTTAS_LEVEL` 選第 1 級查出 39 件、其中 22 件的
+     * 到院後檢傷分級對不上，推測它是**到院前**那一個。因此把 `_selSPP03` 排前面，
+     * 正常情況一次就中，省下一輪查詢與匯出。
+     *
+     * 順序改了核對照做：系統改版時排前面的那個仍可能是錯的。
      */
-    triageAfterArrivalCandidates: ['#_selTTAS_LEVEL', '#_selSPP03'],
+    triageAfterArrivalCandidates: ['#_selSPP03', '#_selTTAS_LEVEL'],
     /** 查詢與匯出是圖片按鈕，不是標準表單按鈕。 */
     queryButton: '#_btnQuery',
     excelButton: '#_btnExcel',

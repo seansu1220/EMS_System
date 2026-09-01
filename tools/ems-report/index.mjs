@@ -310,9 +310,11 @@ async function runTrafficCaseFlow(session, monthRange, options) {
     TRAFFIC_CASE_REPORT.identityCheck,
   );
   if (unknownName > 0 || missingId > 0) {
-    log.warn(
-      `其中姓名為「不詳」或空白的有 ${unknownName} 件、沒有身分證字號的有 ${missingId} 件` +
-        '（無主病患或外籍人士本來就會這樣，送出前請自行確認要不要補）。',
+    // 使用者 2026-09-01 表示「不詳就填不詳，沒關係」，因此照系統的值原樣填，
+    // 這裡只是把件數講出來讓人心裡有數，不是要人去補。
+    log.info(
+      `其中姓名為「不詳」或空白的有 ${unknownName} 件、沒有身分證字號的有 ${missingId} 件，` +
+        '已照系統的值原樣填入（無主病患或外籍人士本來就會這樣）。',
     );
   }
 
