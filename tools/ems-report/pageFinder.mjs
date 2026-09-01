@@ -245,9 +245,24 @@ function queryPage(params) {
 
   if (params.mode === 'checkbox' || params.mode === 'checkboxList') {
     // 這個系統有大量**同名**的勾選框（`_scar`、`_nScar`… 一組幾十個共用一個 name），
-    // 用 name 當選擇器會一次選到一整群。沒有 id 就不回傳選擇器——
-    // 寧可回報找不到，也不要勾錯一個而讓整份統計失真。
-    const selectorOfInput = (element) => (element.id ? `#${CSS.escape(element.id)}` : null);
+    // 用 name 當選擇器會一次選到一整群，絕不能拿 name 當選擇器。
+    //
+    // 沒有 id 的（例如查詢頁那排「危急個案／大傷案件／毒化災／輻射傷害」，四個共用
+    // `name="_cba"` 而 id 全是空的）**當場補一個 id 給它**，才有辦法精準指到那一個。
+    // 這只改瀏覽器端的 DOM 屬性，送出的仍是 name 與 value，不影響查詢結果；
+    // 換頁後會消失，所以每次都要重新找一次，不可把選擇器留到下一頁用。
+    let generatedIdSerial = 0;
+    const selectorOfInput = (element) => {
+      if (!element.id) {
+        let candidate = '';
+        do {
+          generatedIdSerial += 1;
+          candidate = `emsToolAutoId${generatedIdSerial}`;
+        } while (document.getElementById(candidate));
+        element.id = candidate;
+      }
+      return `#${CSS.escape(element.id)}`;
+    };
 
     if (params.mode === 'checkboxList') {
       // 找不到目標勾選框時，回報「這一頁的勾選框旁邊各自寫著什麼」。
@@ -267,18 +282,23 @@ function queryPage(params) {
     const wantedLabels = params.labels.map(normalize);
     let bestMatch = null;
     for (const element of checkboxesIn()) {
-      const selector = selectorOfInput(element);
-      if (!selector) continue;
+      // 先比文字再取選擇器：沒有 id 的會被補上 id，不先過濾的話整頁 400 多個勾選框都會被加。
       const ranked = rankByLabels(nearbyTextsOf(element), wantedLabels);
       if (!ranked) continue;
-      if (!bestMatch || ranked.score < bestMatch.score) {
+      const visible = isVisible(element);
+      // 文字一樣好的時候**看得見的優先**：這一頁有整組隱藏的重複欄位，
+      // 操作到看不見的那一組時畫面毫無反應，條件等於沒設（2026-08 在另一個系統踩過同樣的坑）。
+      const better = !bestMatch
+        || ranked.score < bestMatch.score
+        || (ranked.score === bestMatch.score && visible && !bestMatch.visible);
+      if (better) {
         bestMatch = {
           score: ranked.score,
-          selector,
+          selector: selectorOfInput(element),
           labelText: ranked.text,
           exact: ranked.exact,
           checked: element.checked,
-          visible: isVisible(element),
+          visible,
           matchedBy: ranked.exact ? '旁邊的文字完全相符' : '旁邊的文字包含此字樣',
         };
       }
@@ -623,8 +643,13 @@ export async function listFields(frame) {
  * 這種代碼，光看 id 完全無從得知哪一個是「EKG檢查」。改用人看畫面的方式定位，
  * 系統改版換 id 也不會壞。
  *
- * **沒有 id 的勾選框一律不回傳**：這個系統有大量同名的勾選框，
- * 用 name 當選擇器會一次選到一整群而勾錯。
+ * **絕不用 name 當選擇器**：這個系統有大量同名的勾選框，用 name 會一次選到一整群。
+ * 本來就沒有 id 的（查詢頁那排「危急個案／大傷案件／毒化災／輻射傷害」四個共用 `name="_cba"`、
+ * id 全是空的）會**當場補一個 id**，回傳的選擇器因此永遠只指到那一個。
+ * 補的 id 換頁就沒了，所以每換一次頁都要重新找，不可把選擇器留著下一頁用。
+ *
+ * 文字一樣好時**看得見的優先**：頁面上有整組隱藏的重複欄位，
+ * 操作到看不見的那一組時畫面毫無反應，等於條件根本沒設。
  *
  * @param {import('playwright-core').Frame} frame
  * @param {string[]} labelCandidates 由前往後比對，最精確的放前面

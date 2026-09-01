@@ -53,14 +53,32 @@ async function resolveCheckbox(page, labelText, fallbackSelectors) {
 }
 
 /**
+ * 勾一個勾選框：先試著把它所在的區塊展開，展不開也照樣寫入值。
+ *
+ * 展不開不算失敗——`setCheckbox` 對看不見的欄位是直接寫 `checked` 再補送事件，
+ * 而且會回讀確認。2026-09-01 第一次實跑就是卡在這裡：欄位其實勾得到，
+ * 卻因為「展開後仍看不見」而整支停掉。
+ */
+async function checkCriterion(page, selector, label) {
+  try {
+    await ensureFieldVisible(page, selector);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log.info(`${label} 沒辦法讓它顯示出來（${reason}），改為直接寫入並回讀確認`);
+  }
+  await setFrameCheckbox(content(page), selector, true, label);
+}
+
+/**
  * 設定所有等級共用的條件：期間、救護狀態、危急個案、受傷機轉＝因交通事故。
  *
  * @param {import('playwright-core').Page} page
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  * @param {string} dateFormat
  * @param {string} trafficSelector 受傷機轉「因交通事故」的勾選欄
+ * @param {string} criticalSelector 「危急個案」的勾選欄
  */
-async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector) {
+async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector, criticalSelector) {
   log.step('設定查詢條件');
   // 迄日用 23:59:59，否則格式含時間時會變成當天 00:00:00，漏掉整個最後一天的案件。
   await fillFrameField(content(page), SITE.queryFields.dateFrom,
@@ -72,11 +90,8 @@ async function applyCommonCriteria(page, monthRange, dateFormat, trafficSelector
   await selectFrameField(content(page), SITE.queryFields.rescueStatus,
     QUERY_CRITERIA.rescueStatusValue, `救護狀態＝${QUERY_CRITERIA.rescueStatusLabel}`);
 
-  await ensureFieldVisible(page, SITE.queryFields.criticalCase);
-  await setFrameCheckbox(content(page), SITE.queryFields.criticalCase, true, '危急個案');
-
-  await ensureFieldVisible(page, trafficSelector);
-  await setFrameCheckbox(content(page), trafficSelector, true, '受傷機轉＝因交通事故');
+  await checkCriterion(page, criticalSelector, '危急個案');
+  await checkCriterion(page, trafficSelector, '受傷機轉＝因交通事故');
 }
 
 /**
@@ -148,7 +163,10 @@ function expectationsFor(levelLabel) {
  *   核對不過時 `levelExport` 為 null，由呼叫端決定換哪個候選重來
  */
 async function queryAndExportLevel(context, page, monthRange, level, triageSelector) {
-  await ensureFieldVisible(page, triageSelector);
+  // 展不開也照樣選：`selectField` 會直接寫入並回讀確認（同 checkCriterion 的理由）。
+  await ensureFieldVisible(page, triageSelector).catch((error) => {
+    log.info(`檢傷分級下拉沒辦法讓它顯示出來（${error.message}），改為直接寫入並回讀確認`);
+  });
   await selectFrameField(content(page), triageSelector, level.value, `到院後檢傷分級＝${level.label}`);
 
   log.info('按下查詢，等待結果');
@@ -205,6 +223,7 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
     content(page), SITE.queryFields.dateFrom, SITE.defaultDateFormat,
   );
 
+  const criticalSelector = await resolveCheckbox(page, '危急個案', [SITE.queryFields.criticalCase]);
   const trafficCandidates = [...SITE.queryFields.injuryByTrafficCandidates];
   const preferred = await resolveCheckbox(page, '因交通事故', trafficCandidates);
   // 標籤找出來的那個排最前面，其餘保留為候選（順序去重）。
@@ -214,7 +233,7 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
   let triageSelector = await resolveTriageSelect(page);
   const remainingTriage = triageQueue.filter((item) => item !== triageSelector);
 
-  await applyCommonCriteria(page, monthRange, dateFormat, trafficSelector);
+  await applyCommonCriteria(page, monthRange, dateFormat, trafficSelector, criticalSelector);
 
   /** @type {LevelExport[]} */
   const exports = [];
@@ -233,8 +252,7 @@ export async function exportTrafficCaseDatasets(context, page, monthRange) {
         await setFrameCheckbox(content(page), trafficSelector, false, '取消原本的受傷機轉勾選');
         trafficSelector = trafficQueue.shift();
         log.warn(`改用另一個受傷機轉勾選欄 ${trafficSelector} 重來一次`);
-        await ensureFieldVisible(page, trafficSelector);
-        await setFrameCheckbox(content(page), trafficSelector, true, '受傷機轉＝因交通事故');
+        await checkCriterion(page, trafficSelector, '受傷機轉＝因交通事故');
       } else {
         throw new Error(
           `匯出結果與查詢條件對不上，已無其他欄位可換，不產出報表：` +

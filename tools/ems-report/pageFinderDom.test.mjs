@@ -50,6 +50,26 @@ const FIXTURE = `
   <tr style="display:none">
     <td><input type="checkbox" id="_chkHidden">收合區塊裡的項目</td>
   </tr>
+  <!--
+    仿查詢頁那排案件註記（2026-09-01 實跑踩到）：四個共用 name="_cba"，而 **id 全是空的**。
+    用 name 當選擇器會一次選到四個，所以必須當場補 id 才指得到其中一個。
+  -->
+  <tr>
+    <td><input type="checkbox" name="_cba">危急個案</td>
+    <td><input type="checkbox" name="_cba">大傷案件</td>
+    <td><input type="checkbox" name="_cba">毒化災</td>
+    <td><input type="checkbox" name="_cba">輻射傷害</td>
+  </tr>
+  <!--
+    仿「整組隱藏的重複欄位」：文字一模一樣，但看不見的那一組操作了等於沒設條件。
+    刻意把看不見的那個放在前面——照 DOM 順序取就會取錯。
+  -->
+  <tr style="display:none">
+    <td><input type="checkbox" id="_scarSubcbc040901">因交通事故</td>
+  </tr>
+  <tr>
+    <td><input type="checkbox" id="_scarcbc040901">因交通事故</td>
+  </tr>
   <tr>
     <td colspan="3">
       <select id="_selSTATUS">
@@ -202,6 +222,25 @@ test('勾選框設定得進去，而且回讀確認得到', { skip }, async () =
   // 兩次查詢之間要把上一次的條件清掉，取消勾選同樣必須確實生效。
   await setCheckbox(frame, '#_scarcbc040102', false, 'EKG檢查');
   assert.equal(await frame.locator('#_scarcbc040102').isChecked(), false);
+});
+
+test('id 是空的勾選框也指得到，而且只勾到那一個', { skip }, async () => {
+  // 2026-09-01 第一次實跑就卡在這裡：查詢頁那排案件註記四個共用一個 name、id 全是空的。
+  const found = await findCheckbox(frame, ['危急個案']);
+  assert.ok(found?.selector.startsWith('#'), `應該補出一個 id 選擇器，實際：${found?.selector}`);
+  assert.equal(found.labelText, '危急個案');
+
+  await setCheckbox(frame, found.selector, true, '危急個案');
+  const group = frame.locator('input[name="_cba"]');
+  assert.equal(await group.nth(0).isChecked(), true);
+  assert.equal(await group.nth(1).isChecked(), false, '同名的其他三個不可以被一起勾');
+  assert.equal(await group.nth(2).isChecked(), false);
+});
+
+test('文字一樣好時，看得見的那一個優先（隱藏的重複欄位操作了等於沒設）', { skip }, async () => {
+  const found = await findCheckbox(frame, ['因交通事故']);
+  assert.equal(found.selector, '#_scarcbc040901', '不可以取到 DOM 在前面、但看不見的那一個');
+  assert.equal(found.visible, true);
 });
 
 test('欄位在收合區塊裡看不見時，照樣設定得進去（不是白等 10 秒後失敗）', { skip }, async () => {
