@@ -1,8 +1,12 @@
 /**
- * 二級以上因交通事故救護案件——把整理好的列填進「來文格式」範本並存檔。
+ * 二級以上因交通事故救護案件——把整理好的列排成「來文格式」並存檔。
  *
- * 為什麼是填範本而不是自己畫一張：來文格式是上級發文的固定版面（標題、欄位、欄寬），
- * 自己畫遲早會與來文長得不一樣。範本只有標題與欄位列、沒有任何個案資料，可以進版控。
+ * 版面（標題、欄寬、字型、框線）全部照抄自上級發文的空白格式，寫在
+ * `config.mjs` 的 `TRAFFIC_CASE_REPORT.layout` 與 `columnMap` 裡。
+ *
+ * **為什麼不讀範本檔**（使用者 2026-09-01 決定）：這個格式是固定的，記在程式裡就不必
+ * 帶著一個檔案跑——可攜版少複製一個檔，範本被人移走或不小心改壞也不影響產出。
+ * 來文改版時改設定即可。
  *
  * ⚠ 產出檔含姓名與身分證字號，落在 `out/internal/`（不能發給分隊的那一層，見 config）。
  */
@@ -12,98 +16,85 @@ import ExcelJS from 'exceljs';
 import { PATHS, TRAFFIC_CASE_REPORT } from './config.mjs';
 import { log } from './logger.mjs';
 
-/** 標題比對用：去掉所有空白再比（範本的欄位標題含換行，例如「醫護人員\n檢傷分級」）。 */
-function normalizeHeader(text) {
-  return String(text ?? '').replace(/\s+/g, '');
+/** 四邊都有框線。 */
+function allBorders(style) {
+  return { top: { style }, left: { style }, bottom: { style }, right: { style } };
 }
 
-/** 取得儲存格的純文字（ExcelJS 的值可能是物件形式的 rich text）。 */
-function cellText(cell) {
-  const value = cell?.value;
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object' && Array.isArray(value.richText)) {
-    return value.richText.map((part) => part.text).join('');
-  }
-  return String(value);
+/** 標題列（第 1 列）：跨整個表格寬度合併，置中。 */
+function writeTitleRow(sheet, layout, columnCount) {
+  const row = sheet.getRow(1);
+  row.height = layout.titleRowHeight;
+  const cell = row.getCell(1);
+  cell.value = layout.title;
+  cell.font = { name: layout.fontName, size: layout.titleFontSize };
+  cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  sheet.mergeCells(1, 1, 1, columnCount);
+  row.commit();
 }
 
-/**
- * 在範本裡找出欄位標題列，並算出每一個來文欄位在第幾欄。
- *
- * 不寫死「標題在第 2 列、編號在 A 欄」：來文格式若多加一行說明或調整欄序，
- * 寫死的位置會安靜地把資料填到錯的地方。
- *
- * @param {import('exceljs').Worksheet} sheet
- * @param {string[]} wantedHeaders 來文欄位標題（依設定順序）
- * @param {string} templateFile 範本位置（只用在錯誤訊息，讓人知道要去改哪個檔）
- * @returns {{headerRowNumber: number, columnNumbers: number[]}}
- */
-function locateHeaderRow(sheet, wantedHeaders, templateFile) {
-  const firstCellText = normalizeHeader(TRAFFIC_CASE_REPORT.templateHeaderFirstCell);
-  const searchLimit = Math.min(sheet.rowCount || 20, 20);
+/** 欄位標題列（第 2 列）。 */
+function writeHeaderRow(sheet, layout, columnMap) {
+  const row = sheet.getRow(2);
+  row.height = layout.headerRowHeight;
+  columnMap.forEach((column, index) => {
+    const cell = row.getCell(index + 1);
+    // 來文上有的格子是分兩行寫的（例：醫護人員／檢傷分級），照它的寫法。
+    const headerText = column.headerText ?? column.title;
+    cell.value = headerText;
+    cell.font = { name: layout.fontName, size: layout.headerFontSize };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: headerText.includes('\n') };
+    cell.border = allBorders(layout.borderStyle);
+  });
+  row.commit();
+}
 
-  for (let rowNumber = 1; rowNumber <= searchLimit; rowNumber += 1) {
-    const row = sheet.getRow(rowNumber);
-    const texts = [];
-    row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
-      texts[columnNumber] = normalizeHeader(cellText(cell));
+/** 資料列：一列一件案子，從第 3 列開始。 */
+function writeDataRows(sheet, layout, columnMap, rows) {
+  rows.forEach((values, rowIndex) => {
+    const row = sheet.getRow(3 + rowIndex);
+    row.height = layout.dataRowHeight;
+    values.forEach((text, columnIndex) => {
+      const cell = row.getCell(columnIndex + 1);
+      cell.value = text;
+      cell.font = { name: layout.fontName, size: layout.dataFontSize };
+      cell.alignment = {
+        // 地點是唯一會長到換行的欄位，靠左看得比較順（設定在 columnMap 的 align）。
+        horizontal: columnMap[columnIndex].align ?? 'center',
+        vertical: 'middle',
+        wrapText: true,
+      };
+      cell.border = allBorders(layout.borderStyle);
     });
-    if (!texts.includes(firstCellText)) continue;
-
-    const columnNumbers = wantedHeaders.map((header) => texts.indexOf(normalizeHeader(header)));
-    const missing = wantedHeaders.filter((header, index) => columnNumbers[index] < 0);
-    if (missing.length > 0) {
-      throw new Error(
-        `來文格式範本的第 ${rowNumber} 列找不到欄位：${missing.join('、')}。` +
-          `範本上實際的欄位是：${texts.filter(Boolean).join('、')}`,
-      );
-    }
-    return { headerRowNumber: rowNumber, columnNumbers };
-  }
-  throw new Error(
-    `在來文格式範本的前 ${searchLimit} 列找不到欄位標題列` +
-      `（預期有一格寫著「${TRAFFIC_CASE_REPORT.templateHeaderFirstCell}」）：` +
-      templateFile,
-  );
+    row.commit();
+  });
 }
 
 /**
- * 把一格填上值，並沿用標題列該欄的樣式（框線、字型、欄寬都跟著範本走）。
- * 標題是粗體、資料列不是，其餘照抄。
- */
-function writeCell(cell, headerCell, text, alignLeft) {
-  cell.value = text;
-  cell.border = headerCell.border;
-  cell.font = { ...headerCell.font, bold: false };
-  cell.alignment = {
-    vertical: 'middle',
-    horizontal: alignLeft ? 'left' : 'center',
-    wrapText: true,
-  };
-}
-
-/**
- * 找出來文格式範本放在哪裡（完整安裝與可攜版的位置不同，見 config）。
+ * 依設定的版面排出整張表。
  *
- * 兩個位置都沒有時把**找過的位置全部列出來**——只說「找不到範本」的話，
- * 使用者不會知道該把檔案放到哪裡去。
+ * 不碰檔案系統，方便單獨測試版面有沒有跑掉。
  *
- * @returns {Promise<string>}
+ * @param {import('./trafficCases.mjs').DocumentTable} table
+ * @returns {import('exceljs').Workbook}
  */
-async function findTemplateFile() {
-  for (const candidate of TRAFFIC_CASE_REPORT.templateFileCandidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // 這個位置沒有，試下一個。
-    }
+export function createReportWorkbook(table) {
+  const { layout, columnMap } = TRAFFIC_CASE_REPORT;
+  if (table.headers.length !== columnMap.length) {
+    throw new Error(
+      `欄位數對不上：資料有 ${table.headers.length} 欄、來文格式有 ${columnMap.length} 欄。` +
+        '兩者都來自 config 的 columnMap，對不上代表程式有誤。',
+    );
   }
-  throw new Error(
-    '找不到來文格式範本（上級發文的空白格式，只有標題與欄位列）。找過這些位置：\n' +
-      TRAFFIC_CASE_REPORT.templateFileCandidates.map((item) => `　${item}`).join('\n') +
-      '\n請把「來文格式.xlsx」放到其中一個位置後重新執行。',
-  );
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(layout.sheetName);
+  sheet.columns = columnMap.map((column) => ({ width: column.width }));
+
+  writeTitleRow(sheet, layout, columnMap.length);
+  writeHeaderRow(sheet, layout, columnMap);
+  writeDataRows(sheet, layout, columnMap, table.rows);
+  return workbook;
 }
 
 /**
@@ -114,32 +105,7 @@ async function findTemplateFile() {
  * @returns {Promise<string>} 產出檔路徑
  */
 export async function writeTrafficCaseReport(table, monthRange) {
-  const templateFile = await findTemplateFile();
-
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(templateFile);
-  const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error(`來文格式範本沒有任何工作表：${templateFile}`);
-
-  const { headerRowNumber, columnNumbers } = locateHeaderRow(sheet, table.headers, templateFile);
-  const headerRow = sheet.getRow(headerRowNumber);
-  // 地點是唯一會長到換行的欄位，靠左看得比較順；其餘置中比照來文既有版面。
-  const leftAlignedIndex = table.headers.indexOf('發生地點');
-
-  table.rows.forEach((rowValues, index) => {
-    const row = sheet.getRow(headerRowNumber + 1 + index);
-    rowValues.forEach((text, columnIndex) => {
-      const columnNumber = columnNumbers[columnIndex];
-      writeCell(
-        row.getCell(columnNumber),
-        headerRow.getCell(columnNumber),
-        text,
-        columnIndex === leftAlignedIndex,
-      );
-    });
-    row.height = headerRow.height ?? 22;
-    row.commit();
-  });
+  const workbook = createReportWorkbook(table);
 
   await fs.mkdir(PATHS.internalDir, { recursive: true });
   const filePath = path.join(

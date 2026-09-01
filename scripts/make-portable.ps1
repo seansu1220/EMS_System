@@ -56,7 +56,14 @@ cd /d "%~dp0"
 title $Title
 
 set "NODE_EXE=%~dp0node\node.exe"
-if not exist "%NODE_EXE%" set "NODE_EXE=node"
+if not exist "%NODE_EXE%" (
+  set "NODE_EXE=node"
+  echo [WARN] The bundled Node.js is missing from this folder.
+  echo        Falling back to the Node.js installed on this PC,
+  echo        which may be an old one. If the copy was
+  echo        incomplete, copy the whole folder again.
+  echo.
+)
 
 echo.
 echo ============================================
@@ -183,16 +190,8 @@ foreach ($doc in @('README.md', '.env.example')) {
   if (Test-Path $docPath) { Copy-Item -Path $docPath -Destination $toolRoot -Force }
 }
 
-# 來文格式範本（第 8 章用）。可攜版沒有專案根目錄，`../../捷徑/…` 會指到隨身碟外面去，
-# 所以範本要跟著工具走一份（範本只有標題與欄位列，沒有任何個案資料）。
-$templateSource = Join-Path $projectRoot '捷徑\二級以上因交通事故救護案件\來文格式.xlsx'
-if (Test-Path $templateSource) {
-  Copy-Item -Path $templateSource -Destination $toolRoot -Force
-  Write-Host '      已附上「來文格式.xlsx」範本（二級以上因交通事故救護案件用）'
-} else {
-  Write-Warning "找不到來文格式範本：$templateSource"
-  Write-Warning '可攜版的「二級以上因交通事故救護案件」會在最後一步（產出檔案）失敗。'
-}
+# 註：第 8 章的「來文格式」版面已經記在 config.mjs 的 layout 裡（使用者 2026-09-01 決定），
+# 不需要把範本檔一起帶出去，少一個會被移走或改壞的相依。
 Write-Host '      完成（未複製 .env、out/ 與 .auth/，帳密、個案資料與登入狀態不會被帶出去）'
 
 # --- 2. 寫一份只列必要套件的 package.json ---

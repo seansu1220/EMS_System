@@ -285,32 +285,45 @@ export const TRAFFIC_CASE_REPORT = {
    * `sheet` 指來源工作表；`source` 為 serial（流水號）或 blank（留白）時不取來源欄位。
    */
   columnMap: [
-    { title: '編號', source: 'serial' },
-    { title: '發生日期', sheet: 'main', column: '案發日期', transform: 'rocDate' },
-    { title: '發生地點', sheet: 'main', column: '發生地點' },
-    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名' },
-    { title: '身分證字號', sheet: 'patient', column: '身分證字號/護照號碼/居留證號碼' },
+    { title: '編號', source: 'serial', width: 6.89 },
+    { title: '發生日期', sheet: 'main', column: '案發日期', transform: 'rocDate', width: 11.44 },
+    // 地點是唯一會長到換行的欄位，靠左看得比較順；其餘置中比照來文既有版面。
+    { title: '發生地點', sheet: 'main', column: '發生地點', width: 26.22, align: 'left' },
+    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名', width: 12 },
+    { title: '身分證字號', sheet: 'patient', column: '身分證字號/護照號碼/居留證號碼', width: 13.33 },
     // 使用者 2026-09-01 指定：照抄系統文字（第1級／第2級），不轉成數字。
-    { title: '醫護人員檢傷分級', sheet: 'main', column: '到院後檢傷分級' },
-    { title: '五級分類', sheet: 'patient', column: '到院前檢傷分級' },
-    { title: '備註', source: 'blank' },
+    // `headerText` 是來文格式上那一格的實際寫法（分兩行），`title` 則是程式內部用的名稱。
+    { title: '醫護人員檢傷分級', headerText: '醫護人員\n檢傷分級', sheet: 'main', column: '到院後檢傷分級', width: 10.33 },
+    { title: '五級分類', sheet: 'patient', column: '到院前檢傷分級', width: 10.56 },
+    { title: '備註', source: 'blank', width: 8.89 },
   ],
   /** 產出後要提醒使用者的欄位（資料本來就可能沒有，不是程式出錯）。 */
   identityCheck: { nameTitle: '當事人姓名', idTitle: '身分證字號', unknownNameText: '不詳' },
   /**
-   * 來文格式的空白範本，**依序找、找到就用**。
-   * 範本只有標題與欄位列，沒有任何個案資料，因此可以進版控、也可以放進可攜版。
+   * 來文格式的**版面**：標題、字型、欄寬、列高、框線。
    *
-   * 兩個位置的理由：
-   *   - 工具資料夾內：**可攜版**（沒有專案根目錄，`../../` 會指到隨身碟外面去）
-   *   - 捷徑資料夾內：完整安裝，範本與雙擊用的批次檔擺在一起才好找
+   * 值全部照抄自上級發文的空白格式（2026-09-01 從
+   * `捷徑\二級以上因交通事故救護案件\來文格式.xlsx` 讀出來的實際設定）。
+   *
+   * **為什麼寫在設定裡而不是讀範本檔**（使用者 2026-09-01 決定）：這個格式是固定的，
+   * 記在程式裡就不必帶著一個檔案跑——可攜版少複製一個檔、範本被人移走或改壞也不影響產出。
+   * 來文哪天改版就改這裡（欄位順序與對應在上面的 `columnMap`）。
+   * `來文格式.xlsx` 仍留在捷徑資料夾，當作「當初照抄的依據」給人對照，程式不再讀它。
    */
-  templateFileCandidates: [
-    path.join(TOOL_DIR, '來文格式.xlsx'),
-    path.join(TOOL_DIR, '..', '..', '捷徑', '二級以上因交通事故救護案件', '來文格式.xlsx'),
-  ],
-  /** 範本裡標題列的第一欄文字，用來定位「資料要從第幾列開始填」。 */
-  templateHeaderFirstCell: '編號',
+  layout: {
+    sheetName: '工作表1',
+    title: '桃園市政府消防局檢傷分級第二級以上「危急個案」(交通類)一覽表',
+    /** 來文用標楷體；目標電腦沒有這個字型時 Excel 會自行替代，不影響內容。 */
+    fontName: '標楷體',
+    titleFontSize: 16,
+    headerFontSize: 12,
+    dataFontSize: 14,
+    titleRowHeight: 34.8,
+    headerRowHeight: 33.6,
+    dataRowHeight: 33.6,
+    /** 框線樣式：標題列與資料格四邊都有。 */
+    borderStyle: 'thin',
+  },
   /** 產出檔名前綴，實際檔名為 `{prefix}-{YYYY-MM}.xlsx`。 */
   fileNamePrefix: '二級以上因交通事故救護案件',
 };
