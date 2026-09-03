@@ -88,7 +88,7 @@ import {
   TRAFFIC_CASE_REPORT,
   UNLOCK,
 } from './config.mjs';
-import { excludeOhcaCases, temsisSetOf } from './ekgExclude.mjs';
+import { excludeOhcaCases, temsisSetOf, EXCLUDED_REASON } from './ekgExclude.mjs';
 import {
   resolveSheetSource,
   fetchSheetRows,
@@ -380,15 +380,36 @@ function warnIfNumeratorExceedsDenominator(denominatorCounts, numeratorCounts) {
 }
 
 /**
- * 心電圖流程：兩次查詢與匯出 → 逐案查核 → 產出報表。
+ * 把排除掉的 OHCA 案件**逐件印在終端機上**（使用者 2026-09-03 要求）。
  *
- * 分母＝做過 EKG 檢查的案件；
- * 分子＝做了 12 導程、**且查核確認在到院前就傳出去**的案件。
+ * 只印件數是不夠的：分隊拿自己的數字來對時，第一句話一定是「少的是哪幾件」。
+ * 當場印出來，就不必為了看三、四件案子去翻執行報告。
  *
- * @param {import('./session.mjs').EmsSession} session
- * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @param {CliOptions} options
+ * TEMSIS 只印末 4 碼——終端機的每一行都會寫進執行紀錄檔，標準與執行報告一致；
+ * 要完整編號請開逐案判定表（`out/internal/`，不對外）。
+ *
+ * @param {ReturnType<typeof excludeOhcaCases>} result
  */
+function printExcludedCases(result) {
+  const listed = [...result.countsBySquad]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'))
+    .map(([squad, count]) => `${squad} ${count} 件`);
+  log.warn(`已排除 ${result.cases.length} 件 OHCA 案件（處置勾CPR），分母與分子都不計入。`);
+  log.info(`　原因：${EXCLUDED_REASON}`);
+  log.info(`　各分隊：${listed.join('、')}`);
+  log.info('　逐件如下（TEMSIS 只印末 4 碼，完整編號見逐案判定表）：');
+  const shown = result.cases.slice(0, EKG.excludedCaseListLimit);
+  for (const [position, item] of shown.entries()) {
+    log.info(
+      `　${position + 1}. ${item.squad}　${item.caseDate}　${maskCode(item.temsis)}`
+        + `　（原本出現在：${item.from}）`,
+    );
+  }
+  const hidden = result.cases.length - shown.length;
+  if (hidden > 0) log.info(`　…另有 ${hidden} 件沒印出來，完整清單見執行報告。`);
+  log.info('　這幾件不是默默消失：執行報告與逐案判定表上都有，判定寫「排除：處置勾CPR」。');
+}
+
 /**
  * 把「處置勾了 CPR」的案件從兩份匯出檔裡拿掉（**就地改寫 `table.rows`**）。
  *
@@ -441,12 +462,7 @@ function applyCprExclusion(cprFilePath, ekgChecked, numerator) {
     log.ok('這個月的分母裡沒有處置勾 CPR 的案件，不需要排除。');
     return empty;
   }
-  const listed = [...result.countsBySquad]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-Hant'))
-    .map(([squad, count]) => `${squad} ${count} 件`);
-  log.warn(`已排除 ${result.cases.length} 件 OHCA 案件（處置勾CPR），分母與分子都不計入。`);
-  log.info(`　各分隊：${listed.join('、')}`);
-  log.info('　這幾件會列在執行報告與逐案判定表上，不是默默消失。');
+  printExcludedCases(result);
   return {
     cases: result.cases,
     countsBySquad: result.countsBySquad,
@@ -455,6 +471,55 @@ function applyCprExclusion(cprFilePath, ekgChecked, numerator) {
   };
 }
 
+/**
+ * 跑完之後在終端機上印一段**執行結果**（使用者 2026-09-03 要求）。
+ *
+ * 跑一次要一兩個小時，回來時螢幕上是幾千行查核紀錄。最後這一段的用意，
+ * 是讓人不必往回捲、也不必開檔案，就看得到「這個月到底是多少、扣掉了幾件」。
+ *
+ * 分子不完整時（`incomplete`）**先講不能用**再講數字：這種情況下的比率一定偏低，
+ * 印得跟正式結果一樣會被誤當成真的。
+ *
+ * @param {Object} input
+ * @param {import('./dateRange.mjs').MonthRange} input.monthRange
+ * @param {Map<string, number>} input.denominatorCounts 已含申訴調整
+ * @param {Map<string, number>} input.numeratorCounts 已含申訴調整
+ * @param {{cases: import('./ekgExclude.mjs').ExcludedCase[]}} input.excluded
+ * @param {import('./ekgVerify.mjs').VerifyOutcome[]} input.outcomes
+ * @param {Object|null} input.appeals `applyAppealSheet()` 的回傳
+ * @param {string} input.incomplete 非空字串代表這份數字不能當正式報表
+ */
+function printRunResult(input) {
+  const sum = (counts) => [...(counts?.values() ?? [])].reduce((total, count) => total + count, 0);
+  const denominator = sum(input.denominatorCounts);
+  const numerator = sum(input.numeratorCounts);
+  const ratio = denominator === 0 ? '—' : `${((numerator / denominator) * 100).toFixed(1)}%`;
+  const pending = input.outcomes.filter((item) => item.verdict === VERDICT.unknown).length;
+  const appealed = sum(input.appeals?.numerator);
+
+  log.step(`執行結果（${input.monthRange.label}）`);
+  if (input.incomplete) {
+    log.warn(`⚠ 因為${input.incomplete}，下面的數字**不是正式結果**，只能拿來核對欄位。`);
+  }
+  log.info(`　分母（EKG或12導程）：${denominator} 件`);
+  log.info(`　分子（到院前傳出）：${numerator} 件`);
+  log.info(`　全局傳輸率：${ratio}`);
+  log.info(`　已排除（處置勾CPR＝OHCA）：${input.excluded?.cases.length ?? 0} 件，分母分子都沒算`);
+  if (pending > 0) log.warn(`　判定不出來：${pending} 件（不計入分子，比率會略低於實際）`);
+  if (appealed > 0) log.info(`　申訴補回分子：${appealed} 件`);
+  if (!input.incomplete) log.ok('　細節與待確認事項請看「心電圖執行報告」那份 .md。');
+}
+
+/**
+ * 心電圖流程：兩次查詢與匯出 → 逐案查核 → 產出報表。
+ *
+ * 分母＝做過 EKG 檢查的案件；
+ * 分子＝做了 12 導程、**且查核確認在到院前就傳出去**的案件。
+ *
+ * @param {import('./session.mjs').EmsSession} session
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {CliOptions} options
+ */
 async function runEkgFlow(session, monthRange, options) {
   const profile = REPORT_PROFILES.ekg;
   const rawFiles = await exportEkgDatasets(session.context, session.page, monthRange);
@@ -661,6 +726,16 @@ async function runEkgFlow(session, monthRange, options) {
 
   log.step('這次產出的檔案');
   for (const file of produced) log.info(`　${file}`);
+
+  printRunResult({
+    monthRange,
+    denominatorCounts,
+    numeratorCounts: verifiedCounts,
+    excluded: excludedOhca,
+    outcomes: verifyOutcomes,
+    appeals,
+    incomplete,
+  });
 
   if (options.keepRaw) {
     log.warn(`依 --keep-raw 保留原始明細檔於 ${path.dirname(rawFiles.denominator)}（含個資，請自行妥善處理）`);
