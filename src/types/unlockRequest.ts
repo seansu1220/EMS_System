@@ -68,3 +68,11 @@ export interface UnlockRequestInput {
   /** 申請事由（同一批共用）。 */
   reason: string;
 }
+
+/** 一筆長度不對的 TEMSIS 編號（送出前的檢查結果）。 */
+export interface TemsisLengthError {
+  /** 使用者輸入的原始編號。 */
+  temsis: string;
+  /** 這個編號實際有幾個字元。 */
+  length: number;
+}

@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-09-07　v1.14.0 解鎖工單送出前檢查 TEMSIS 長度
+
+### 問題描述
+分隊在解鎖工單頁貼 TEMSIS 時，常常抄少一碼或多貼一碼。網頁照收不誤，
+要等救護科電腦跑完那一輪、結果欄回「查無案件」，申請人才知道自己打錯，白等一輪。
+
+### 根本原因
+送出前**完全沒有格式檢查**——`parseTemsisList()` 只負責拆行與去重，
+拆出什麼就送什麼；正確編號固定 22 碼這件事只寫在輸入框的範例裡，沒有人會去數。
+
+### 修改的檔案與內容
+- `src/config/constants.ts`：新增 `TEMSIS_CODE_LENGTH = 22`（配置驅動，不寫死在邏輯裡）。
+- `src/types/unlockRequest.ts`：新增 `TemsisLengthError`（編號 + 實際長度）。
+- `src/services/unlockRequestService.ts`：
+  - 新增純函式 `findTemsisLengthErrors()`（挑出長度不符的每一筆）與
+    `describeTemsisLengthError()`（產生那句話，畫面與送出檢查共用同一種說法）。
+  - `createUnlockRequests()` 在批次上限之後再擋一次，錯誤訊息逐行列出。
+- `src/pages/UnlockPage.tsx`：輸入框下方即時顯示紅框，**每個錯的編號一行**
+  「TEMSIS碼長度為 22 碼，目前輸入號碼長度為 OO 碼，請提供正確TEMSIS碼」；
+  有錯期間「送出申請」停用；沒輸入時的提示改成「TEMSIS 碼固定 22 碼，一次最多 50 筆」。
+- `docs/SPEC.md`：2.8 新增「長度檢查（v1.19）」段落，檔頭升版 v1.19.0。
+
+### 驗證
+`npm run build`（tsc -b + vite build）通過。
+
+---
+
 ## 2026-09-05　v1.33.1 規格書補上心電圖流程總覽，查詢條件表補成三次查詢
 
 ### 問題描述

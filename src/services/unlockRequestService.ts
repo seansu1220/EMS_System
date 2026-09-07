@@ -24,9 +24,13 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { COLLECTIONS, UNLOCK_REQUEST_MAX_BATCH } from '../config/constants';
+import { COLLECTIONS, TEMSIS_CODE_LENGTH, UNLOCK_REQUEST_MAX_BATCH } from '../config/constants';
 import type { AppUser } from '../types/user';
-import type { UnlockRequest, UnlockRequestResult } from '../types/unlockRequest';
+import type {
+  TemsisLengthError,
+  UnlockRequest,
+  UnlockRequestResult,
+} from '../types/unlockRequest';
 
 /** Firestore Timestamp / 字串 → ISO 字串。 */
 function toIso(value: unknown): string {
@@ -78,11 +82,33 @@ export function parseTemsisList(raw: string): string[] {
 }
 
 /**
+ * 挑出長度不對的 TEMSIS 編號（純函式，不改動輸入）。
+ *
+ * 正確的編號固定 `TEMSIS_CODE_LENGTH` 碼；抄少一碼或多貼一碼送出去，
+ * 本機工具那端只會回「查無案件」，申請人白等一輪才知道打錯。
+ * 因此**送出前就先擋**，並把每一行的實際長度講清楚，讓人知道要補幾碼。
+ *
+ * @param temsisList 已用 `parseTemsisList` 拆好的清單
+ * @returns 長度不符的項目（清單全部正確時為空陣列）
+ */
+export function findTemsisLengthErrors(temsisList: string[]): TemsisLengthError[] {
+  return temsisList
+    .filter((temsis) => temsis.length !== TEMSIS_CODE_LENGTH)
+    .map((temsis) => ({ temsis, length: temsis.length }));
+}
+
+/** 長度不符時給使用者看的一句話（畫面與送出檢查共用同一種說法）。 */
+export function describeTemsisLengthError({ temsis, length }: TemsisLengthError): string {
+  return `${temsis}：TEMSIS碼長度為 ${TEMSIS_CODE_LENGTH} 碼，`
+    + `目前輸入號碼長度為 ${length} 碼，請提供正確TEMSIS碼`;
+}
+
+/**
  * 送出一批解鎖工單（一個 TEMSIS 一張工單，方便逐筆回報結果）。
  *
  * @param user 申請人（顯示名稱會一併存下，看清單時不必再查 users）
  * @returns 實際建立的工單數
- * @throws 清單為空、超過單次上限、或寫入失敗時
+ * @throws 清單為空、超過單次上限、有編號長度不對、或寫入失敗時
  */
 export async function createUnlockRequests(
   user: AppUser,
@@ -95,6 +121,10 @@ export async function createUnlockRequests(
       `一次最多送 ${UNLOCK_REQUEST_MAX_BATCH} 筆，這次有 ${temsisList.length} 筆。`
         + '請確認是不是整欄誤貼進來了。',
     );
+  }
+  const lengthErrors = findTemsisLengthErrors(temsisList);
+  if (lengthErrors.length > 0) {
+    throw new Error(lengthErrors.map(describeTemsisLengthError).join('\n'));
   }
   try {
     for (const temsis of temsisList) {

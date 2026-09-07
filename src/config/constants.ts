@@ -129,3 +129,11 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
  * 純粹是防手殘（例如整欄幾百個編號誤貼進來），不是系統限制。
  */
 export const UNLOCK_REQUEST_MAX_BATCH = 50;
+
+/**
+ * 一組 TEMSIS 編號的固定長度（純數字 22 碼，例：`2026090710100307554102`）。
+ *
+ * 分隊常見的錯誤是抄少一碼或多貼一碼，送進來只會在本機工具那端查無案件，
+ * 白等一輪；所以在網頁送出前就用長度擋掉（使用者 2026-09-07 指定）。
+ */
+export const TEMSIS_CODE_LENGTH = 22;

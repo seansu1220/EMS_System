@@ -12,12 +12,15 @@ import { useAuth } from '../hooks/useAuth';
 import {
   createUnlockRequests,
   deleteUnlockRequest,
+  describeTemsisLengthError,
+  findTemsisLengthErrors,
   parseTemsisList,
   requeueUnlockRequest,
   subscribeUnlockRequests,
 } from '../services/unlockRequestService';
 import { canSeeAllUnlockRequests, isAdmin } from '../lib/permissions';
 import {
+  TEMSIS_CODE_LENGTH,
   UNLOCK_REQUEST_MAX_BATCH,
   UNLOCK_RESULT_SUMMARY,
   UNLOCK_STATUS_LABELS,
@@ -110,6 +113,13 @@ export function UnlockPage() {
 
   /** 目前輸入框裡有幾個編號（即時顯示，貼完就知道拆成幾筆）。 */
   const parsed = useMemo(() => parseTemsisList(rawTemsis), [rawTemsis]);
+  /**
+   * 長度不對的編號（邊打邊檢查）。
+   *
+   * 送出去之後才發現打錯，要等本機工具跑完回「查無案件」才知道，一輪就是半天；
+   * 在這裡當場講清楚差幾碼，比較快（使用者 2026-09-07 指定）。
+   */
+  const lengthErrors = useMemo(() => findTemsisLengthErrors(parsed), [parsed]);
   const pendingCount = requests?.filter((item) => item.status === 'pending').length ?? 0;
 
   async function handleSubmit(event: FormEvent) {
@@ -177,8 +187,15 @@ export function UnlockPage() {
             <p className="mt-1 text-xs text-slate-400">
               {parsed.length > 0
                 ? `這次會建立 ${parsed.length} 筆工單（重複的編號只留一筆）`
-                : `一次最多 ${UNLOCK_REQUEST_MAX_BATCH} 筆`}
+                : `TEMSIS 碼固定 ${TEMSIS_CODE_LENGTH} 碼，一次最多 ${UNLOCK_REQUEST_MAX_BATCH} 筆`}
             </p>
+            {lengthErrors.length > 0 && (
+              <div className="mt-2 space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                {lengthErrors.map((item) => (
+                  <p key={item.temsis}>{describeTemsisLengthError(item)}</p>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
@@ -199,7 +216,15 @@ export function UnlockPage() {
           )}
 
           <div className="flex items-center gap-3">
-            <Button type="submit" disabled={submitting || parsed.length === 0 || reason.trim() === ''}>
+            <Button
+              type="submit"
+              disabled={
+                submitting
+                || parsed.length === 0
+                || lengthErrors.length > 0
+                || reason.trim() === ''
+              }
+            >
               {submitting ? '送出中…' : '送出申請'}
             </Button>
             <span className="text-xs text-slate-400">
