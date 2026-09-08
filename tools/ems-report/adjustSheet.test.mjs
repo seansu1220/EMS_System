@@ -11,6 +11,8 @@ import {
   parseSheetDate,
   resolveAdjustColumns,
   countAdjustmentsBySquad,
+  resolveAdjustTemsisColumn,
+  collectReportedTemsis,
 } from './adjustSheet.mjs';
 
 test('parseCsv 處理引號、逗號與跨行儲存格', () => {
@@ -107,4 +109,51 @@ test('describeSheet 的日期判定與實際判定一致（含民國年與年月
   const info = describeSheet(rows);
   assert.ok(info.columns[0].kinds.includes('日期'), '診斷要認得出這是日期欄');
   assert.equal(resolveAdjustColumns(rows).dateColumn, 0, '實際判定也要是同一欄');
+});
+
+test('resolveAdjustTemsisColumn 依內容認出 TEMSIS 欄，不看欄名', () => {
+  const rows = [
+    ['項次', '時間', '隨便取的欄名', '分隊'],
+    ['1', '2026-08-01', '2026080110100318521101', '桃園分隊'],
+    ['2', '2026-08-02', '2026080210100308285101', '大林分隊'],
+    ['3', '2026-08-03', '2026080310100307580401', '中路分隊'],
+  ];
+  assert.equal(resolveAdjustTemsisColumn(rows), 2);
+});
+
+test('沒有任何一欄是長數字時回傳 -1，不亂猜欄位', () => {
+  const rows = [
+    ['時間', '分隊'],
+    ['2026-08-01', '桃園分隊'],
+    ['2026-08-02', '大林分隊'],
+  ];
+  assert.equal(resolveAdjustTemsisColumn(rows), -1);
+});
+
+test('collectReportedTemsis 只收期間內、且有填 TEMSIS 的案件', () => {
+  const rows = [
+    ['項次', '時間', '案號(TEMSIS ID)', '分隊'],
+    ['1', '2026-08-05', '2026080510100311365603', '桃園分隊'],
+    ['2', '2026-07-31', '2026073110100315591101', '大林分隊'], // 期間外
+    ['3', '2026-08-20', '', '中路分隊'], // 沒填 TEMSIS
+    ['4', '2026-08-22', '2026082210100310262601', '山腳分隊'],
+  ];
+  const columns = { dateColumn: 1, squadColumn: 3 };
+  const reported = collectReportedTemsis(rows, columns, { start: '2026-08-01', end: '2026-08-31' });
+  assert.deepEqual(
+    [...reported].sort(),
+    ['2026080510100311365603', '2026082210100310262601'],
+  );
+});
+
+test('試算表沒有 TEMSIS 欄時回傳空集合，不讓清冊做不出來', () => {
+  const rows = [
+    ['時間', '分隊'],
+    ['2026-08-05', '桃園分隊'],
+  ];
+  const reported = collectReportedTemsis(rows, { dateColumn: 0, squadColumn: 1 }, {
+    start: '2026-08-01',
+    end: '2026-08-31',
+  });
+  assert.equal(reported.size, 0);
 });

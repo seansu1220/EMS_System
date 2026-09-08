@@ -271,3 +271,60 @@ export function describeSheet(rows) {
   }
   return { rowCount: rows.length, columnCount, columns };
 }
+
+/**
+ * 找出試算表裡的「TEMSIS 欄」是哪一欄。
+ *
+ * 與日期欄、分隊欄一致，**看內容不看欄名**：這份表由使用者自己維護，
+ * 欄名（目前是「案號(TEMSIS ID)」）隨時可能被改。
+ * 判準是「值大多為一長串數字」——表上填錯少貼的情形不少（見 `EKG.appeal.temsisLength`
+ * 的說明），因此只要求 15 碼以上，不強求完整 22 碼。
+ *
+ * @param {string[][]} rows 含標題列
+ * @returns {number} 欄索引；找不到時回傳 -1（**不猜欄位**）
+ */
+export function resolveAdjustTemsisColumn(rows) {
+  const body = rows.slice(1);
+  if (body.length === 0) return -1;
+  const columnCount = Math.max(...rows.map((row) => row.length));
+
+  let bestColumn = -1;
+  let bestScore = 0;
+  for (let index = 0; index < columnCount; index += 1) {
+    const values = body.map((row) => (row[index] ?? '').trim()).filter(Boolean);
+    if (values.length === 0) continue;
+    const score = values.filter((value) => /^\d{15,}$/.test(value)).length / values.length;
+    if (score > bestScore && score >= 0.7) {
+      bestScore = score;
+      bestColumn = index;
+    }
+  }
+  return bestColumn;
+}
+
+/**
+ * 收集「期間內已提報扣除」的 TEMSIS。
+ *
+ * 用途只有一個：未預警逐案清冊要標出「這一件分隊已經提報過了」。
+ * 扣除的**件數**仍由 {@link countAdjustmentsBySquad} 依日期＋分隊計算，
+ * 這裡回傳的 TEMSIS **不參與任何計算**，純粹是清冊上的註記——
+ * 表上的 TEMSIS 常有打錯或少貼，拿它當計算依據會讓件數對不上。
+ *
+ * @param {string[][]} rows 含標題列
+ * @param {{dateColumn: number, squadColumn: number}} columns
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Set<string>} 期間內填了 TEMSIS 的那些案件；沒有 TEMSIS 欄時為空集合
+ */
+export function collectReportedTemsis(rows, columns, monthRange) {
+  const temsisColumn = resolveAdjustTemsisColumn(rows);
+  const reported = new Set();
+  if (temsisColumn < 0) return reported;
+
+  for (const row of rows.slice(1)) {
+    const isoDate = parseSheetDate(row[columns.dateColumn] ?? '');
+    if (isoDate === null || isoDate < monthRange.start || isoDate > monthRange.end) continue;
+    const temsis = String(row[temsisColumn] ?? '').trim();
+    if (temsis) reported.add(temsis);
+  }
+  return reported;
+}

@@ -74,6 +74,7 @@ import {
   VERDICT,
 } from './ekgVerify.mjs';
 import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
+import { writeUnalertedList } from './alertLedger.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
@@ -96,9 +97,13 @@ import {
   describeSheet,
   resolveAdjustColumns,
   countAdjustmentsBySquad,
+  collectReportedTemsis,
 } from './adjustSheet.mjs';
 import { log, closePrompt, enableLiveLog, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
+
+/** 操作備忘的檔名（原始檔在 `tools/ems-report/`，執行時複製到 `out/report/`）。 */
+const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 
 /** 可用的指令。 */
 const COMMANDS = [
@@ -222,6 +227,53 @@ function reportParseFailure(rawFiles) {
 }
 
 /**
+ * 產出未預警逐案清冊；失敗時只警告，不讓正式報表跟著做不出來。
+ *
+ * 這份是附帶產物（給分隊對數字用），比率報表才是主要目的。
+ * 為了一份清冊寫不出來就讓整個月的報表作廢並不划算——原始匯出檔刪掉後
+ * 要重跑得再登入查一次。
+ *
+ * @param {{total: {table: unknown, column: string}, alert: {table: unknown, column: string}}|null} parsed
+ * @param {Set<string>} reportedTemsis
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ */
+async function writeUnalertedCases(parsed, reportedTemsis, monthRange) {
+  if (!parsed) return;
+  const toSource = ({ table, column }) => ({
+    headers: table.headers,
+    rows: table.rows,
+    squadColumn: column,
+  });
+  try {
+    await writeUnalertedList(toSource(parsed.total), toSource(parsed.alert), reportedTemsis, monthRange);
+  } catch (error) {
+    log.warn(
+      `未預警逐案清冊產出失敗（不影響比率報表）：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * 把操作備忘複製到報表資料夾。
+ *
+ * 使用者 2026-09-08 要求：想不起來月度報表怎麼跑時，要能**直接在放報表的資料夾裡點開**，
+ * 不必先想起專案在哪。原始檔留在 `tools/ems-report/`（進版控、多台電腦同步得到），
+ * 每次執行覆蓋一份到 `out/report/`，兩邊內容一定一致。
+ *
+ * 複製失敗只警告：這只是備忘，不值得讓整個月的報表因此做不出來。
+ */
+async function copyHowToFile() {
+  const source = path.join(PATHS.toolDir, HOW_TO_FILE_NAME);
+  const target = path.join(PATHS.reportDir, HOW_TO_FILE_NAME);
+  try {
+    await fs.mkdir(PATHS.reportDir, { recursive: true });
+    await fs.copyFile(source, target);
+  } catch (error) {
+    log.warn(`操作備忘複製失敗（不影響報表）：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * 完整流程：查詢 → 匯出兩份 → 依分隊彙總 → 產出報表 → 刪除原始明細。
  * @param {import('./session.mjs').EmsSession} session
  * @param {import('./dateRange.mjs').MonthRange} monthRange
@@ -232,17 +284,25 @@ async function runReportFlow(session, monthRange, keepRaw) {
 
   log.step('解析匯出檔並依分隊彙總');
   let stats;
+  /** 兩份匯出檔的內容，未預警逐案清冊要用（解析失敗時保持 null）。 */
+  let parsed = null;
   try {
-    const totalCounts = countFile(rawFiles.total, '總案件').counts;
-    const alertCounts = countFile(rawFiles.alert, '到院前預警案件').counts;
-    stats = buildComparison(totalCounts, alertCounts);
+    const total = countFile(rawFiles.total, '總案件');
+    const alert = countFile(rawFiles.alert, '到院前預警案件');
+    parsed = { total, alert };
+    stats = buildComparison(total.counts, alert.counts);
   } catch (error) {
     log.fail('解析匯出檔', error);
     reportParseFailure(rawFiles);
     throw error;
   }
 
-  stats = await adjustStats(stats, monthRange);
+  const adjusted = await adjustStats(stats, monthRange);
+  stats = adjusted.stats;
+
+  // 未預警逐案清冊：報表只有比率，分隊來問「沒預警的是哪幾件」時要答得出來。
+  // ⚠ 一定要在刪掉原始匯出檔之前做完——那兩份檔案是唯一的資料來源。
+  await writeUnalertedCases(parsed, adjusted.reportedTemsis, monthRange);
 
   if (stats.length === 0) {
     log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
@@ -863,12 +923,21 @@ async function checkAdjustSheet(monthRange) {
   if (counts.size === 0) log.warn('這個期間沒有任何要扣除的案件。');
 }
 
-/** 讀取增減試算表並套用扣除；未設定或讀取失敗時不中斷主流程。 */
+/**
+ * 讀取增減試算表並套用扣除；未設定或讀取失敗時不中斷主流程。
+ *
+ * 除了扣除後的統計，另外回傳「期間內已提報的 TEMSIS」給未預警逐案清冊當註記用。
+ * 讀不到試算表時回傳空集合，清冊照樣產得出來，只是每一件都標成未提報。
+ *
+ * @param {import('./aggregate.mjs').SquadStat[]} stats
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Promise<{stats: import('./aggregate.mjs').SquadStat[], reportedTemsis: Set<string>}>}
+ */
 async function adjustStats(stats, monthRange) {
   const source = resolveSheetSource();
   if (!source) {
     log.info('未設定增減試算表（EMS_ADJUST_SHEET_URL），略過扣除。');
-    return stats;
+    return { stats, reportedTemsis: new Set() };
   }
   log.step('套用增減試算表的扣除');
   const rows = await fetchSheetRows(source);
@@ -884,7 +953,7 @@ async function adjustStats(stats, monthRange) {
   if (result.overflow.length > 0) {
     log.warn(`以下分隊扣除後分母小於分子，請人工確認：${result.overflow.join('、')}`);
   }
-  return result.stats;
+  return { stats: result.stats, reportedTemsis: collectReportedTemsis(rows, columns, monthRange) };
 }
 
 /**
@@ -1059,6 +1128,8 @@ async function main() {
   }
 
   log.info(`查詢期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
+  // 先複製操作備忘：登入失敗或查詢中斷時，資料夾裡至少有一份看得到怎麼重跑。
+  if (['run', 'ekg', 'traffic', 'monthly'].includes(options.command)) await copyHowToFile();
   await withSession(async (session) => {
     if (options.command === 'probe') {
       await (options.manual

@@ -650,6 +650,15 @@ export const UNLOCK = {
 };
 
 /**
+ * 匯出檔中「TEMSIS」欄位可能的欄名，由前往後比對。
+ *
+ * 四份匯出檔（總案件／預警案件／EKG檢查／12導程）都是**同一個查詢畫面**匯出的，
+ * 欄位結構一模一樣（實測 252 欄），因此心電圖與到院前預警兩個流程共用這一份候選名單。
+ * 系統改欄名時只要動這裡，兩邊一起生效。
+ */
+export const TEMSIS_COLUMN_CANDIDATES = ['TEMSISID', 'TEMSIS ID', 'TEMSIS', 'TEMSIS編號'];
+
+/**
  * 12 導程心電圖到院前傳輸率（第 3 章）的設定。
  *
  * 這個流程走的欄位（EKG檢查勾選框、心電圖下拉）與畫面（傳輸紀錄、上傳）
@@ -860,8 +869,9 @@ export const EKG = {
     /**
      * 匯出檔中「TEMSIS」欄的欄名候選。
      * 逐案查核要靠 TEMSIS 一件一件查回系統，找不到這一欄就無法查核。
+     * 與到院前預警流程共用（見 `TEMSIS_COLUMN_CANDIDATES`）。
      */
-    temsisColumns: ['TEMSISID', 'TEMSIS ID', 'TEMSIS', 'TEMSIS編號'],
+    temsisColumns: TEMSIS_COLUMN_CANDIDATES,
 
     /**
      * 「到院時間」的欄名／標籤候選。

@@ -37,6 +37,7 @@ export const MONTHLY_OUTPUT_NAMES = [
   '心電圖-有EKG處置無12導程清冊',
   '心電圖待人工確認',
   // out/internal/（內部用）
+  '到院前未預警清冊',
   '心電圖執行報告',
   '心電圖逐案判定',
   '心電圖查核進度',

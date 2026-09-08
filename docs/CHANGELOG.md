@@ -4,6 +4,63 @@
 
 ---
 
+## 2026-09-08　v1.35.0 未預警逐案清冊 ＋ 月度報表操作備忘
+
+### 問題描述
+兩件事：
+
+1. 使用者問「山腳分隊那 19 件沒預警的是哪 19 件」，**答不出來**。
+   報表上只有 `100/119` 這個比率，沒有任何地方留著是哪幾件。
+2. 使用者：「之前整理的月度報表執行方式，能不能做一個精簡的檔案放在輸出月度檔案的地方，
+   方便我想看的時候直接點那個文件回憶。」
+
+### 根本原因
+1. 系統匯出的原始明細含個資，跑完就刪（`removeRawFiles()`）；`last-run.log` 每次執行覆寫；
+   報表本身只有彙總數字。三種紀錄沒有一種答得出「沒預警的是哪幾件」，
+   每被問一次就要重新登入、重跑一次整個月的查詢（約 5 分鐘＋驗證碼）。
+   ⚠ 心電圖那條流程 2026-08-10 就因為同樣的理由做了逐案判定表（`ekgLedger.mjs`），
+   預警這條一直沒補上。
+2. 操作方式只寫在 `README.md` 與 `docs/TOOLS_SPEC.md` 裡，要看得先找到專案資料夾；
+   而使用者平常只會打開放報表的 `out/report/`。
+
+### 修改的檔案與內容
+- **新增** `tools/ems-report/alertLedger.mjs`：未預警逐案清冊。
+  - `buildUnalertedCases()`（純函式）以 TEMSIS 取「總案件 − 預警案件」的差集，
+    依分隊、案件日期排序，並標出該件在增減試算表上有沒有被提報過。
+  - `summarizeUnalerted()`（純函式）依分隊彙總，件數多的在前。
+  - `buildUnalertedWorkbook()` / `writeUnalertedList()` 輸出兩個分頁
+    （`各分隊件數`、`逐案清單`）到 `out/internal/{YYYY-MM}-到院前未預警清冊.xlsx`。
+  - 列的是**未扣除前**的差集：被增減表扣掉的案件本身仍是沒預警的案件，照樣要列，
+    以`已提報扣除`欄區分。找不到 TEMSIS 欄時直接報錯，不默默輸出整份總案件。
+- **新增** `tools/ems-report/alertLedger.test.mjs`：8 個測試（差集、提報註記、
+  空白容錯、彙總排序、報錯、版面）。
+- `tools/ems-report/adjustSheet.mjs`：新增 `resolveAdjustTemsisColumn()`（**看內容不看欄名**：
+  值大多為 15 碼以上純數字者即 TEMSIS 欄）與 `collectReportedTemsis()`。
+  ⚠ 回傳的 TEMSIS **只作清冊註記，不參與扣除計算**——表上的 TEMSIS 常有打錯少貼，
+  拿它當計算依據會讓件數對不上。
+- `tools/ems-report/adjustSheet.test.mjs`：補 4 個測試。
+- `tools/ems-report/config.mjs`：抽出 `TEMSIS_COLUMN_CANDIDATES`，
+  由心電圖與到院前預警兩個流程共用（四份匯出檔是同一個查詢畫面匯出的，欄位結構相同）。
+- `tools/ems-report/index.mjs`：
+  - `adjustStats()` 改為回傳 `{ stats, reportedTemsis }`。
+  - `runReportFlow()` 在**刪掉原始匯出檔之前**產出清冊；失敗只警告不中斷主流程。
+  - 新增 `copyHowToFile()`，在登入前把操作備忘複製到 `out/report/`。
+- **新增** `tools/ems-report/月度報表怎麼跑.md`：三步驟操作、產出檔一覽、
+  兩份報表的算法、常見狀況、指令對照。原始檔進版控，執行時覆蓋一份到 `out/report/`。
+- `tools/ems-report/fileNames.mjs`：`MONTHLY_OUTPUT_NAMES` 加入 `到院前未預警清冊`
+  （沒加的話保留期限清不掉它）。
+- `docs/TOOLS_SPEC.md`：新增 0.10（操作備忘）與 1.12（未預警逐案清冊），
+  1.5 模組職責補上 `alertLedger.mjs`，檔頭升版 v1.35.0。
+
+### 驗證
+`npm run tool:ems:test`：337 個測試全數通過。
+
+### 備註
+既有月份（2026-06 ~ 2026-08）的原始明細早已刪除，**清冊只對之後跑的月份有效**；
+要補 2026-08 的清單需重跑 `npm run tool:ems -- run --month=2026-08`（約 5 分鐘，需輸入驗證碼）。
+
+---
+
 ## 2026-09-07　v1.14.0 解鎖工單送出前檢查 TEMSIS 長度
 
 ### 問題描述
