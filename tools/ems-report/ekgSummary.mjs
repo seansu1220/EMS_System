@@ -15,6 +15,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PATHS } from './config.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 import { VERDICT } from './ekgVerify.mjs';
@@ -247,7 +248,7 @@ export async function writeRunSummary(input) {
   );
 
   await fs.mkdir(PATHS.internalDir, { recursive: true });
-  const filePath = path.join(PATHS.internalDir, `${SUMMARY_PREFIX}-${monthRange.label}.md`);
+  const filePath = path.join(PATHS.internalDir, monthlyFileName(monthRange, SUMMARY_PREFIX, 'md'));
   await fs.writeFile(filePath, lines.join('\n'), 'utf8');
   log.ok(`執行報告已寫出：${path.relative(process.cwd(), filePath)}`);
   if (todo.length > 0) log.warn(`　裡面有 ${todo.length} 件事需要你確認，建議先看這份。`);

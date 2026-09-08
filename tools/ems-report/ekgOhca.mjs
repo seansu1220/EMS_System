@@ -23,6 +23,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { EKG, PATHS, UNLOCK, SQUAD_COLUMN_CANDIDATES } from './config.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import { resolveColumnByNames, resolveSquadColumn } from './aggregate.mjs';
 import { content } from './caseFlow.mjs';
 import { applyBaseCriteria, locateEkgFields, queryAndExport } from './ekgScrape.mjs';
@@ -350,7 +351,7 @@ async function writeOhcaReport(monthRange, counts, overlaps, probes, cprCases) {
   }
 
   await fs.mkdir(PATHS.internalDir, { recursive: true });
-  const filePath = path.join(PATHS.internalDir, `心電圖類型對撞-${monthRange.label}.xlsx`);
+  const filePath = path.join(PATHS.internalDir, monthlyFileName(monthRange, '心電圖類型對撞', 'xlsx'));
   await workbook.xlsx.writeFile(filePath);
   return filePath;
 }

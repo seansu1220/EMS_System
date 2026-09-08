@@ -31,6 +31,44 @@
 
 ---
 
+## 2026-09-05　v1.34.0 產出檔名的年月改放最前面
+
+### 問題描述
+使用者：「之後月度表單輸出的時候，請把年月的數字寫在前面，這樣他排列的時候才會照順序排，
+而不會混在一起。」
+
+### 根本原因
+舊檔名是 `{名稱}-{YYYY-MM}.xlsx`（例如 `心電圖到院前傳輸率-2026-08.xlsx`）。
+檔案總管照名稱排序時，同一個月的產出會被打散成一群不同開頭的檔案
+（到院前預警比率、心電圖…各自排在一起），要找「上個月那批」得一個一個看。
+而且檔名分散在 8 個模組裡各自用字串串出來，沒有一個地方管命名。
+
+### 修改的檔案與內容
+- `tools/ems-report/fileNames.mjs`（新增）：命名規則與**辨識規則放在同一個檔案**——
+  改了名字卻忘了改清理規則的話，舊檔會永遠留著。提供 `monthlyFileName()`（年月在前）、
+  `legacyMonthlyFileName()`（舊寫法，重跑舊月份時要刪它）、`monthOfOutputFile()`
+  與產出檔名單 `MONTHLY_OUTPUT_NAMES`。
+- 改用 `monthlyFileName()` 的模組：`report.mjs`、`ekgLists.mjs`、`ekgLedger.mjs`、
+  `ekgSummary.mjs`、`ekgVerify.mjs`、`ekgOhca.mjs`、`trafficReport.mjs`、`index.mjs`。
+- `tools/ems-report/retention.mjs`：
+  - 清理改用 `monthOfOutputFile()`。**新寫法要對得上產出檔名單才算數**——
+    月份在前正好是使用者自己也會用的取名方式（`2026-08-分隊回覆.xlsx`），
+    照舊規則會在三個月後被當成過期產出刪掉。舊寫法照樣認得，先前產的檔案才清得掉。
+  - 新增 `removeLegacyTwins()`：重跑一個以前跑過的月份時，把同月的舊檔名版本刪掉，
+    免得同一個月躺著兩份名字不同、內容也不同的報表。**只有新檔確實產出來了才刪**。
+- `tools/ems-report/ekgVerify.mjs`：逐案查核進度檔**舊檔還在就繼續用舊的**——
+  換名字等於進度歸零、要再重跑一兩個小時。
+- `tools/ems-report/fileNames.test.mjs`（新增，6 個測試）、`retention.test.mjs`（+3 個測試）：
+  釘住「年月在前」「同月排在一起」「使用者自己的檔案不會被誤刪」。
+- `docs/TOOLS_SPEC.md`：新增 0.9 檔名規則、3.15 清理規則同步改寫、3.7 等產出表全部更新，
+  模組職責表補 `fileNames.mjs`；升版 v1.34.0。
+- `src/pages/ToolsPage.tsx`、`tools/ems-report/README.md`：說明文字裡的檔名一起更新。
+
+### 驗證
+`node --test *.test.mjs`：325 pass / 0 fail（新增 9 個測試）。
+
+---
+
 ## 2026-09-05　v1.33.1 規格書補上心電圖流程總覽，查詢條件表補成三次查詢
 
 ### 問題描述

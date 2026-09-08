@@ -21,8 +21,10 @@
  *   - 只從畫面取出「時間」這一種值，紀錄表全文用完即棄、不落檔
  */
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { EKG, PATHS, UNLOCK } from './config.mjs';
+import { monthlyFileName, legacyMonthlyFileName } from './fileNames.mjs';
 import {
   content,
   applyDateRange,
@@ -78,16 +80,28 @@ export const VERDICT = { before: '到院前', after: '到院後', unknown: '無�
  */
 const diagnosedButtons = new Set();
 
+/** 逐案查核進度檔的檔名（月份會加在最前面，見 `fileNames.mjs`）。 */
+const PROGRESS_FILE_NAME = '心電圖查核進度';
+
 /**
  * 進度檔路徑。
  *
  * 2026-08-10 從 `out/raw/`（跑完即刪）搬到 `out/internal/`（留三個月）：
  * 刪掉的話任何一點小調整都要重跑一兩個小時，而逐案判定表本來就留著同樣的
- * TEMSIS 與時間，刪這一份並沒有多保護到什麼。檔名做成 `-YYYY-MM` 結尾，
+ * TEMSIS 與時間，刪這一份並沒有多保護到什麼。檔名帶著月份，
  * 好讓 `retention.mjs` 跟其他產出一起用同一套保留期限清掉。
+ *
+ * ⚠ **舊檔名（年月在後）還在的話就用舊的**。2026-09-05 把年月改到最前面，
+ *   若此時正好有一個月跑到一半，換了名字等於進度歸零、要再重跑一兩個小時。
+ *   舊檔會在保留期限到期時自然被清掉，不必特別處理。
  */
 export function progressFilePath(monthRange) {
-  return path.join(PATHS.internalDir, `心電圖查核進度-${monthRange.label}.json`);
+  const legacyPath = path.join(
+    PATHS.internalDir,
+    legacyMonthlyFileName(monthRange, PROGRESS_FILE_NAME, 'json'),
+  );
+  if (existsSync(legacyPath)) return legacyPath;
+  return path.join(PATHS.internalDir, monthlyFileName(monthRange, PROGRESS_FILE_NAME, 'json'));
 }
 
 /**

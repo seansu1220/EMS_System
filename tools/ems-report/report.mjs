@@ -14,6 +14,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PATHS, REPORT_FORMAT, REPORT_PROFILES } from './config.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import { formatRatio } from './aggregate.mjs';
 import { log } from './logger.mjs';
 import { displayWidth, excelWidthFor, widenToFitTitle } from './sheetLayout.mjs';
@@ -214,7 +215,10 @@ export async function writeReport(
 ) {
   await fs.mkdir(PATHS.reportDir, { recursive: true });
   const workbook = buildWorkbook(groupedRows, sortedStats, monthRange, profile);
-  const filePath = path.join(PATHS.reportDir, `${profile.fileNamePrefix}-${monthRange.label}.xlsx`);
+  const filePath = path.join(
+    PATHS.reportDir,
+    monthlyFileName(monthRange, profile.fileNamePrefix, 'xlsx'),
+  );
 
   try {
     await workbook.xlsx.writeFile(filePath);

@@ -21,7 +21,7 @@ const BASE = {
   sourceCounts: { ekgChecked: 242, twelveLead: 284, union: 20 },
   outcomes: [],
   appeals: null,
-  files: ['心電圖到院前傳輸率-2026-07.xlsx（正式報表）'],
+  files: ['2026-07-心電圖到院前傳輸率.xlsx（正式報表）'],
 };
 
 /**
@@ -52,7 +52,7 @@ async function render(overrides = {}) {
 test('報告落在 out/internal/，不是要發給分隊的 out/report/', async () => {
   const filePath = await quietly(() => writeRunSummary(BASE));
   assert.equal(path.dirname(filePath), PATHS.internalDir);
-  assert.match(path.basename(filePath), /^心電圖執行報告-2026-07\.md$/);
+  assert.match(path.basename(filePath), /^2026-07-心電圖執行報告\.md$/);
   await fs.rm(filePath, { force: true });
 });
 

@@ -20,6 +20,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PATHS, REPORT_FORMAT, UNLOCK } from './config.mjs';
+import { legacyMonthlyFileName, monthlyFileName } from './fileNames.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { log } from './logger.mjs';
 import { computeColumnWidths, widenToFitTitle } from './sheetLayout.mjs';
@@ -135,7 +136,7 @@ export function buildPendingWorkbook(pending, monthRange) {
  * @returns {Promise<string|null>} 檔案路徑；沒有待確認案件時回傳 null
  */
 export async function writePendingList(outcomes, monthRange, unknownVerdict) {
-  const filePath = path.join(PATHS.reportDir, `心電圖待人工確認-${monthRange.label}.xlsx`);
+  const filePath = path.join(PATHS.reportDir, monthlyFileName(monthRange, PENDING_LIST_NAME, 'xlsx'));
   const pending = outcomes.filter((item) => item.verdict === unknownVerdict);
   if (pending.length === 0) {
     const removed = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
@@ -157,6 +158,9 @@ export async function writePendingList(outcomes, monthRange, unknownVerdict) {
  * 不會出現「檔名是新的、大標還是舊的」。大標刻意只寫用途，
  * 不寫成一長串條件說明（使用者 2026-08-05 指定）。
  */
+/** 待人工確認清冊的檔名（月份會加在最前面，見 `fileNames.mjs`）。 */
+const PENDING_LIST_NAME = '心電圖待人工確認';
+
 const MISSING_PROCEDURE_LIST = {
   prefix: '心電圖-有處置未勾選清冊',
   heading: '有處置未勾選清冊',
@@ -246,7 +250,7 @@ function buildTallyWorkbook(rows, columns, monthRange, spec, extraRows = []) {
  *   沒有案件時 `filePath` 為 null，`removedStale` 表示確實刪掉了一份舊檔
  */
 async function writeTallyList(rows, columns, monthRange, spec, extraRows = []) {
-  const filePath = path.join(PATHS.reportDir, `${spec.prefix}-${monthRange.label}.xlsx`);
+  const filePath = path.join(PATHS.reportDir, monthlyFileName(monthRange, spec.prefix, 'xlsx'));
   if (rows.length + extraRows.length === 0) {
     const removedStale = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
     return { filePath: null, squadCount: 0, removedStale };
@@ -266,7 +270,7 @@ const LEGACY_MISSING_PROCEDURE_PREFIX = '心電圖-有12導程沒勾EKG';
 async function noteLegacyFile(monthRange) {
   const legacyPath = path.join(
     PATHS.reportDir,
-    `${LEGACY_MISSING_PROCEDURE_PREFIX}-${monthRange.label}.xlsx`,
+    legacyMonthlyFileName(monthRange, LEGACY_MISSING_PROCEDURE_PREFIX, 'xlsx'),
   );
   const exists = await fs.access(legacyPath).then(() => true).catch(() => false);
   if (!exists) return;

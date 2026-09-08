@@ -21,6 +21,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { EKG, PATHS, UNLOCK } from './config.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import { EXCLUDED_REASON, EXCLUDED_VERDICT } from './ekgExclude.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { buildListSheet } from './ekgLists.mjs';
@@ -267,7 +268,7 @@ export async function writeLedger(
 
   // 落在 internalDir 而不是 reportDir：這份不能跟要發給分隊的報表放在一起。
   await fs.mkdir(PATHS.internalDir, { recursive: true });
-  const filePath = path.join(PATHS.internalDir, `${LEDGER.prefix}-${monthRange.label}.xlsx`);
+  const filePath = path.join(PATHS.internalDir, monthlyFileName(monthRange, LEDGER.prefix, 'xlsx'));
   const workbook = buildLedgerWorkbook(rows, monthRange, appealResults);
   try {
     await workbook.xlsx.writeFile(filePath);

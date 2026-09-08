@@ -8,19 +8,21 @@
  * ⚠ 保留哪幾個月是**依檔名裡最新的月份**往回算，不是依今天的日期：
  *   補跑舊月份時（`--month=2026-05`）不該把比它新的檔案掃掉。
  *
- * ⚠ 只刪**檔名結尾是 `-YYYY-MM` 的產出檔**。使用者自己放進去的檔案沒有這個樣式，
- *   不會被誤刪。
+ * ⚠ 只刪**認得出來的產出檔**（見 `fileNames.mjs` 的 `monthOfOutputFile`）。
+ *   2026-09-05 起年月改放在檔名最前面，而「2026-08-分隊回覆.xlsx」正是使用者
+ *   自己也會取的名字，因此新寫法**要對得上產出檔名單**才算數；舊寫法（年月在後）
+ *   照樣認得，資料夾裡先前產的檔案才清得掉。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PATHS, REPORT_RETENTION_MONTHS } from './config.mjs';
+import {
+  MONTHLY_OUTPUT_NAMES,
+  legacyMonthlyFileName,
+  monthlyFileName,
+  monthOfOutputFile,
+} from './fileNames.mjs';
 import { log } from './logger.mjs';
-
-/**
- * 產出檔的檔名樣式：`任意名稱-YYYY-MM.副檔名`。
- * `json` 是逐案查核的進度檔（2026-08-10 起也留在 `out/internal/`）。
- */
-const MONTHLY_FILE_PATTERN = /-(\d{4})-(\d{2})\.(xlsx|xls|md|csv|json)$/i;
 
 /**
  * 從一批檔名裡挑出「該刪的」。純函式，方便測試各種邊界。
@@ -31,12 +33,7 @@ const MONTHLY_FILE_PATTERN = /-(\d{4})-(\d{2})\.(xlsx|xls|md|csv|json)$/i;
  *   `expired` 是該刪的檔名；`keptMonths` 是保留下來的月份標籤（新到舊）
  */
 export function selectExpiredFiles(fileNames, keepMonths = REPORT_RETENTION_MONTHS) {
-  const monthOf = (fileName) => {
-    const matched = MONTHLY_FILE_PATTERN.exec(fileName);
-    return matched ? `${matched[1]}-${matched[2]}` : null;
-  };
-
-  const months = [...new Set(fileNames.map(monthOf).filter(Boolean))].sort().reverse();
+  const months = [...new Set(fileNames.map(monthOfOutputFile).filter(Boolean))].sort().reverse();
   const keptMonths = months.slice(0, Math.max(0, keepMonths));
   const kept = new Set(keptMonths);
 
@@ -44,7 +41,7 @@ export function selectExpiredFiles(fileNames, keepMonths = REPORT_RETENTION_MONT
     keptMonths,
     // 認不出月份的檔案一律不動——那不是我們產的。
     expired: fileNames.filter((fileName) => {
-      const month = monthOf(fileName);
+      const month = monthOfOutputFile(fileName);
       return month !== null && !kept.has(month);
     }),
   };
@@ -84,6 +81,45 @@ export async function pruneOldOutputs(keepMonths = REPORT_RETENTION_MONTHS) {
   if (removed.length === 0) return removed;
   log.step('清掉過期的舊月份產出');
   log.info(`只保留最近 ${keepMonths} 個月，已刪 ${removed.length} 個檔案：`);
+  for (const fileName of removed) log.info(`　${fileName}`);
+  return removed;
+}
+
+/**
+ * 重跑一個**以前跑過的月份**時，把舊檔名（年月在後）那幾份刪掉。
+ *
+ * 2026-09-05 把年月改到檔名最前面。不刪舊的話，同一個月會躺著兩份名字不同、
+ * 內容也不同的報表（舊那份是上次跑的結果），遲早有人拿錯。
+ *
+ * ⚠ **只有新檔確實產出來了才刪舊的**。流程中途失敗、這次什麼都沒寫出來時，
+ *   刪掉舊檔會讓使用者連上次的結果都沒有。
+ *
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Promise<string[]>} 刪掉的檔名
+ */
+export async function removeLegacyTwins(monthRange) {
+  const removed = [];
+  for (const directory of [PATHS.reportDir, PATHS.internalDir]) {
+    const fileNames = await fs.readdir(directory).catch(() => null);
+    if (fileNames === null) continue;
+    const present = new Set(fileNames);
+    for (const name of MONTHLY_OUTPUT_NAMES) {
+      for (const extension of ['xlsx', 'md']) {
+        const legacy = legacyMonthlyFileName(monthRange, name, extension);
+        const current = monthlyFileName(monthRange, name, extension);
+        if (!present.has(legacy) || !present.has(current)) continue;
+        try {
+          await fs.rm(path.join(directory, legacy), { force: true });
+          removed.push(legacy);
+        } catch (error) {
+          log.warn(`舊檔名的 ${legacy} 刪不掉（${error instanceof Error ? error.message : String(error)}），略過。`);
+        }
+      }
+    }
+  }
+  if (removed.length === 0) return removed;
+  log.step('清掉舊檔名的同月產出');
+  log.info('年月已改放在檔名最前面，同一個月的舊檔名版本刪掉，免得拿錯：');
   for (const fileName of removed) log.info(`　${fileName}`);
   return removed;
 }

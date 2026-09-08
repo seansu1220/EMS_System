@@ -77,7 +77,8 @@ import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
-import { pruneOldOutputs } from './retention.mjs';
+import { pruneOldOutputs, removeLegacyTwins } from './retention.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
   EKG,
@@ -696,7 +697,9 @@ async function runEkgFlow(session, monthRange, options) {
     );
   }
   const produced = [];
-  if (!incomplete) produced.push(`${profile.fileNamePrefix}-${monthRange.label}.xlsx（正式報表）`);
+  if (!incomplete) {
+    produced.push(`${monthlyFileName(monthRange, profile.fileNamePrefix, 'xlsx')}（正式報表）`);
+  }
   if (ledgerPath) {
     produced.push(`out/internal/${path.basename(ledgerPath)}（每一件算在哪。**內部用，不要發給分隊**）`);
   }
@@ -1088,6 +1091,10 @@ async function main() {
 
   // 報表都產好了才清舊檔。清理失敗不該影響已經完成的產出，因此不讓它往外拋。
   if (['run', 'ekg', 'traffic', 'monthly'].includes(options.command)) {
+    // 先清同一個月的舊檔名版本（2026-09-05 年月改放最前面），再清過期的舊月份。
+    await removeLegacyTwins(monthRange).catch((error) => {
+      log.warn(`清理舊檔名的同月產出時出錯（不影響本次報表）：${error instanceof Error ? error.message : String(error)}`);
+    });
     await pruneOldOutputs().catch((error) => {
       log.warn(`清理舊月份檔案時出錯（不影響本次報表）：${error instanceof Error ? error.message : String(error)}`);
     });

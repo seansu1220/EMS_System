@@ -72,3 +72,30 @@ test('同一個月份的多個檔案要一起留或一起刪', () => {
   ], 1);
   assert.deepEqual(expired.sort(), ['A-2026-01.xlsx', 'B-2026-01.md', 'C-2026-01.csv']);
 });
+
+test('新檔名（年月在前）一樣照月份清理', () => {
+  const { expired, keptMonths } = selectExpiredFiles([
+    '2026-07-心電圖到院前傳輸率.xlsx',
+    '2026-06-心電圖到院前傳輸率.xlsx',
+    '2026-03-心電圖執行報告.md',
+  ], 2);
+  assert.deepEqual(keptMonths, ['2026-07', '2026-06']);
+  assert.deepEqual(expired, ['2026-03-心電圖執行報告.md']);
+});
+
+test('新舊檔名混在同一個資料夾時，月份要算在一起', () => {
+  const { expired } = selectExpiredFiles([
+    '2026-07-心電圖到院前傳輸率.xlsx',
+    '心電圖執行報告-2026-07.md',
+    '心電圖到院前傳輸率-2026-04.xlsx',
+  ], 1);
+  assert.deepEqual(expired, ['心電圖到院前傳輸率-2026-04.xlsx']);
+});
+
+test('使用者自己放的「月份在前」檔案不會被刪', () => {
+  const { expired } = selectExpiredFiles([
+    '2026-07-心電圖到院前傳輸率.xlsx',
+    '2026-01-分隊回覆.xlsx',
+  ], 1);
+  assert.deepEqual(expired, []);
+});

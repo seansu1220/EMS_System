@@ -14,6 +14,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PATHS, TRAFFIC_CASE_REPORT } from './config.mjs';
+import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 
 /** 四邊都有框線。 */
@@ -110,7 +111,7 @@ export async function writeTrafficCaseReport(table, monthRange) {
   await fs.mkdir(PATHS.internalDir, { recursive: true });
   const filePath = path.join(
     PATHS.internalDir,
-    `${TRAFFIC_CASE_REPORT.fileNamePrefix}-${monthRange.label}.xlsx`,
+    monthlyFileName(monthRange, TRAFFIC_CASE_REPORT.fileNamePrefix, 'xlsx'),
   );
   try {
     await workbook.xlsx.writeFile(filePath);
