@@ -1087,8 +1087,8 @@ async function runUnlockWatchCommand(options) {
   let session = null;
   try {
     session = await startSession({ freshLogin: options.freshLogin });
-    // 解鎖流程要用的查詢期間；監看是長時間執行，掛在 session 上一起帶著走。
-    session.range = getRecentRange(UNLOCK.lookbackMonths);
+    // 查詢期間刻意不在這裡算好：監看會整天甚至跨夜開著，先算好的迄日過了午夜就變成昨天，
+    // 當天的案件會全被判成「查無案件」。改由 runUnlockWatch 每批工單現算。
     await runUnlockWatch(session, queue, {
       dryRun: options.dryRun,
       shouldStop: () => stopping,

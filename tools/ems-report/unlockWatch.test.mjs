@@ -7,12 +7,13 @@
  *   3. 雲端讀不到不可以讓整個監看死掉
  *   4. 心跳發現掉線時要重新登入
  *   5. 收到結束指示要停得下來
+ *   6. 跨夜之後查詢期間要跟著往前走（不然當天的案件會全變成「查無案件」）
  *
  * 執行：npm run tool:ems:test
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runUnlockWatch } from './unlockWatch.mjs';
+import { runUnlockWatch, refreshQueryRange } from './unlockWatch.mjs';
 import { UNLOCK } from './config.mjs';
 
 /** 假的工作階段：只需要一個能被等待的 page。 */
@@ -164,4 +165,24 @@ test('收到結束指示就停得下來，不會再去查雲端', async () => {
   const spies = createSpies();
   await runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: () => true }, spies.deps);
   assert.equal(spies.calls.fetch, 0);
+});
+
+test('跨夜之後查詢期間的迄日要跟著變成新的今天', () => {
+  // 2026-09-10 使用者回報：監看視窗 9/9 打開後放著跨夜，
+  // 9/10 送出的申請被判成「查無案件」——因為期間的迄日還停在 9/9。
+  const session = {};
+  const yesterday = refreshQueryRange(session, new Date(2026, 8, 9, 23, 50));
+  assert.equal(yesterday.end, '2026-09-09');
+
+  const today = refreshQueryRange(session, new Date(2026, 8, 10, 0, 10));
+  assert.equal(today.end, '2026-09-10', '過了午夜就要用新的今天當迄日');
+  assert.equal(today.start, '2026-07-10', '起日同樣往前推，維持「近兩個月」的長度');
+  assert.equal(session.range.end, '2026-09-10', '算出來的期間要寫回 session');
+});
+
+test('同一天之內重複呼叫，查詢期間不會亂跳', () => {
+  const session = {};
+  const first = refreshQueryRange(session, new Date(2026, 8, 10, 8, 0));
+  const second = refreshQueryRange(session, new Date(2026, 8, 10, 17, 30));
+  assert.deepEqual(second, first);
 });

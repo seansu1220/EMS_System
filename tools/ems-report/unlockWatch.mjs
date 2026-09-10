@@ -13,6 +13,7 @@
  * 程式不會因此壞掉，只是要多打幾次驗證碼——所以這個設計不賭那個前提。
  */
 import { UNLOCK } from './config.mjs';
+import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import { ensureSignedIn, isSignedIn } from './session.mjs';
@@ -62,6 +63,27 @@ export async function heartbeat(session) {
 }
 
 /**
+ * 取「此刻」的查詢期間，並記在 session 上。
+ *
+ * **每批工單都要重算**：監看是整天、甚至跨夜開著的，若沿用開視窗那一刻算好的期間，
+ * 過了午夜之後迄日就永遠停在昨天，當天新報的案件會全部落在期間外而被誤判成「查無案件」
+ * （使用者 2026-09-10 回報：視窗從 9/9 開著，9/10 的案件解不到）。
+ *
+ * @param {import('./session.mjs').EmsSession & {range?: import('./dateRange.mjs').MonthRange}} session
+ * @param {Date} [now] 基準時間（可注入以便測試）
+ * @returns {import('./dateRange.mjs').MonthRange} 這一批要用的查詢期間
+ */
+export function refreshQueryRange(session, now = new Date()) {
+  const range = getRecentRange(UNLOCK.lookbackMonths, now);
+  const previous = session.range;
+  if (previous && previous.end !== range.end) {
+    log.info(`[${clock(now)}] 已跨日，查詢期間更新為 ${range.start} ~ ${range.end}`);
+  }
+  session.range = range;
+  return range;
+}
+
+/**
  * 處理一批工單，逐筆回寫。
  *
  * **掉線時不可以把案件寫成失敗**：那種「查無案件」是因為根本沒登入，
@@ -73,7 +95,8 @@ export async function processBatch(session, queue, requests) {
   let requeued = 0;
   const outcomes = await runUnlockFlow(session, {
     temsisList: requests.map((request) => request.temsis),
-    range: session.range,
+    // 現算而不是沿用開視窗時的快照，跨夜之後才不會漏掉當天的案件。
+    range: refreshQueryRange(session),
     dryRun: false,
     onCaseStart: (_temsis, index) => markRunning(queue, requests[index].id),
     onCaseDone: async (outcome, index) => {
@@ -96,8 +119,9 @@ export async function processBatch(session, queue, requests) {
 /**
  * 監看主迴圈（**不會自己結束**，關掉視窗或按 Ctrl+C 才停）。
  *
- * @param {import('./session.mjs').EmsSession & {range: object}} session
- *   已登入的工作階段，另外掛上解鎖要用的查詢期間
+ * @param {import('./session.mjs').EmsSession} session
+ *   已登入的工作階段（查詢期間不必先算好，每批工單都會由
+ *   {@link refreshQueryRange} 現算，跨夜才不會沿用昨天的迄日）
  * @param {import('./unlockQueue.mjs').QueueSession} queue
  * @param {{dryRun: boolean, shouldStop: () => boolean}} options
  *   `dryRun`＝true 時只監看與心跳、不解鎖也不回寫

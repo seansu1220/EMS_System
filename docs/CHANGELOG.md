@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-09-10　v1.35.1 常駐監看跨夜之後解不到當天的案件
+
+### 問題描述
+使用者回報：解鎖功能的查詢期間只到 9/9 為止，9/10 送出的解鎖申請一律找不到案件
+（回報「查無案件：這個 TEMSIS 在查詢期間內沒有結果」）。
+
+### 根本原因
+解鎖流程會在救護紀錄表查詢頁填入查詢期間，值是 `getRecentRange(2)`＝「今天往回推兩個月 ~ 今天」。
+
+一次性的 `unlock-online` 每次執行都重算，沒有問題；**常駐監看 `unlock-watch` 卻是跨夜開著的**，
+而期間只在 `index.mjs` 的 `runUnlockWatchCommand()` 登入成功時算過一次，
+之後 `unlockWatch.mjs` 的 `processBatch()` 每一輪都直接沿用 `session.range`。
+於是視窗 9/9 打開、放著跨過午夜之後，迄日仍停在 `2026-09-09`，
+9/10 的案件全部落在查詢期間外——不是解鎖邏輯有問題，是根本沒被查出來。
+
+（迄日本身有補到 `23:59:59`，所以「當天」不是被時間切掉的，純粹是日期沒有跟著往前走。）
+
+### 修改的檔案與內容
+- `tools/ems-report/unlockWatch.mjs`
+  - **新增** `refreshQueryRange(session, now)`：現算「近兩個月 ~ 今天」的期間並寫回 `session.range`；
+    偵測到迄日換日時，在畫面印出「已跨日，查詢期間更新為 …」，人看得出來發生過什麼。
+  - `processBatch()` 改成每批工單呼叫 `refreshQueryRange(session)`，不再沿用開場的快照。
+  - `runUnlockWatch()` 的 JSDoc 拿掉「session 要先掛好 range」的要求。
+- `tools/ems-report/index.mjs`
+  - `runUnlockWatchCommand()` 移除登入後的 `session.range = getRecentRange(...)`，
+    並註明刻意不預先計算的理由（避免又留下一份會過期的副本）。
+- `tools/ems-report/unlockWatch.test.mjs`
+  - 新增兩項測試：跨夜之後迄日與起日要一起往前走；同一天內重複呼叫期間不變。
+  - 測試結果：`npm run tool:ems:test` 339 項全過。
+- `docs/TOOLS_SPEC.md`：新增 5.3「查詢期間**每批工單重算**」小節；2.4 步驟 1 註明「今天」以動手當下為準；
+  5.9 模組職責補上 `refreshQueryRange`；檔頭版本升至 v1.35.1。
+
+### 使用者端的影響
+監看視窗不必再為了換日重開（重開要重打驗證碼）。已經開著的舊版視窗仍是舊行為，
+**這次更新後請重開一次**，之後就不用了。
+
 ## 2026-09-08　v1.35.0 未預警逐案清冊 ＋ 月度報表操作備忘
 
 ### 問題描述
