@@ -74,7 +74,19 @@ import {
   VERDICT,
 } from './ekgVerify.mjs';
 import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
-import { writeUnalertedList } from './alertLedger.mjs';
+import {
+  buildUnalertedCases,
+  collectTemsis,
+  indexUnalertedSquads,
+  markDeducted,
+  writeUnalertedList,
+} from './alertLedger.mjs';
+import {
+  auditAdjustments,
+  buildAuditRows,
+  countApprovedBySquad,
+  printAuditReport,
+} from './adjustAudit.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
@@ -82,6 +94,7 @@ import { pruneOldOutputs, removeLegacyTwins } from './retention.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import {
   SQUAD_COLUMN_CANDIDATES,
+  TEMSIS_CODE_LENGTH,
   EKG,
   PATHS,
   BRIGADES,
@@ -97,7 +110,7 @@ import {
   describeSheet,
   resolveAdjustColumns,
   countAdjustmentsBySquad,
-  collectReportedTemsis,
+  collectAdjustRows,
 } from './adjustSheet.mjs';
 import { log, closePrompt, enableLiveLog, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
@@ -227,49 +240,31 @@ function reportParseFailure(rawFiles) {
 }
 
 /**
+ * 把 `countFile()` 的結果轉成未預警清冊要的來源格式。
+ * @param {{table: {headers: string[], rows: Record<string, unknown>[]}, column: string}} parsed
+ */
+function toAlertSource({ table, column }) {
+  return { headers: table.headers, rows: table.rows, squadColumn: column };
+}
+
+/**
  * 產出未預警逐案清冊；失敗時只警告，不讓正式報表跟著做不出來。
  *
- * 這份是附帶產物（給分隊對數字用），比率報表才是主要目的。
+ * 這份是附帶產物（給分隊對數字、給使用者查扣除用），比率報表才是主要目的。
  * 為了一份清冊寫不出來就讓整個月的報表作廢並不划算——原始匯出檔刪掉後
  * 要重跑得再登入查一次。
  *
- * @param {{total: {table: unknown, column: string}, alert: {table: unknown, column: string}}|null} parsed
- * @param {Set<string>} reportedTemsis
+ * @param {import('./alertLedger.mjs').UnalertedCase[]} cases 已標記扣除狀態的案件
+ * @param {unknown[][]} auditRows 增減試算表的逐列對帳結果
  * @param {import('./dateRange.mjs').MonthRange} monthRange
  */
-async function writeUnalertedCases(parsed, reportedTemsis, monthRange) {
-  if (!parsed) return;
-  const toSource = ({ table, column }) => ({
-    headers: table.headers,
-    rows: table.rows,
-    squadColumn: column,
-  });
+async function writeUnalertedCases(cases, auditRows, monthRange) {
   try {
-    await writeUnalertedList(toSource(parsed.total), toSource(parsed.alert), reportedTemsis, monthRange);
+    await writeUnalertedList(cases, auditRows, monthRange);
   } catch (error) {
     log.warn(
       `未預警逐案清冊產出失敗（不影響比率報表）：${error instanceof Error ? error.message : String(error)}`,
     );
-  }
-}
-
-/**
- * 把操作備忘複製到報表資料夾。
- *
- * 使用者 2026-09-08 要求：想不起來月度報表怎麼跑時，要能**直接在放報表的資料夾裡點開**，
- * 不必先想起專案在哪。原始檔留在 `tools/ems-report/`（進版控、多台電腦同步得到），
- * 每次執行覆蓋一份到 `out/report/`，兩邊內容一定一致。
- *
- * 複製失敗只警告：這只是備忘，不值得讓整個月的報表因此做不出來。
- */
-async function copyHowToFile() {
-  const source = path.join(PATHS.toolDir, HOW_TO_FILE_NAME);
-  const target = path.join(PATHS.reportDir, HOW_TO_FILE_NAME);
-  try {
-    await fs.mkdir(PATHS.reportDir, { recursive: true });
-    await fs.copyFile(source, target);
-  } catch (error) {
-    log.warn(`操作備忘複製失敗（不影響報表）：${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -284,25 +279,33 @@ async function runReportFlow(session, monthRange, keepRaw) {
 
   log.step('解析匯出檔並依分隊彙總');
   let stats;
-  /** 兩份匯出檔的內容，未預警逐案清冊要用（解析失敗時保持 null）。 */
-  let parsed = null;
+  /** 送醫但沒有到院前預警的每一件；同時是增減試算表對帳的名單。 */
+  let unalertedCases = [];
+  /** 當月全部送醫案件的 TEMSIS，對帳要用它分辨「有預警」與「查無此案」。 */
+  let transportedTemsis = new Set();
   try {
     const total = countFile(rawFiles.total, '總案件');
     const alert = countFile(rawFiles.alert, '到院前預警案件');
-    parsed = { total, alert };
     stats = buildComparison(total.counts, alert.counts);
+    unalertedCases = buildUnalertedCases(toAlertSource(total), toAlertSource(alert));
+    transportedTemsis = collectTemsis(toAlertSource(total));
+    log.info(`送醫但沒有到院前預警：${unalertedCases.length} 件（增減試算表只能扣這些案件）`);
   } catch (error) {
     log.fail('解析匯出檔', error);
     reportParseFailure(rawFiles);
     throw error;
   }
 
-  const adjusted = await adjustStats(stats, monthRange);
+  const adjusted = await adjustStats(stats, monthRange, unalertedCases, transportedTemsis);
   stats = adjusted.stats;
 
   // 未預警逐案清冊：報表只有比率，分隊來問「沒預警的是哪幾件」時要答得出來。
   // ⚠ 一定要在刪掉原始匯出檔之前做完——那兩份檔案是唯一的資料來源。
-  await writeUnalertedCases(parsed, adjusted.reportedTemsis, monthRange);
+  await writeUnalertedCases(
+    markDeducted(unalertedCases, adjusted.deductedTemsis),
+    adjusted.auditRows,
+    monthRange,
+  );
 
   if (stats.length === 0) {
     log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
@@ -908,9 +911,26 @@ async function checkAdjustSheet(monthRange) {
 
   const columns = resolveAdjustColumns(rows);
   log.ok(`日期欄判定為第 [${columns.dateColumn}] 欄、分隊欄判定為第 [${columns.squadColumn}] 欄`);
+  if (columns.temsisColumn < 0) {
+    log.warn(
+      'TEMSIS 欄判定不出來（沒有任何一欄的內容大多是 15 碼以上的數字）。'
+        + '正式執行時會因為無法逐列對帳而**不套用任何扣除**，請確認案號(TEMSIS ID)那一欄有填。',
+    );
+  } else {
+    log.ok(`TEMSIS 欄判定為第 [${columns.temsisColumn}] 欄（對帳的鍵）`);
+    const values = rows.slice(1).map((row) => String(row[columns.temsisColumn] ?? '').trim()).filter(Boolean);
+    const wrongLength = values.filter((value) => value.length !== TEMSIS_CODE_LENGTH);
+    if (wrongLength.length > 0) {
+      log.warn(
+        `這一欄有 ${wrongLength.length} / ${values.length} 筆不是 ${TEMSIS_CODE_LENGTH} 碼。`
+          + '這些列對不到案件，正式執行時不會被扣除，屆時會逐件列出來。',
+      );
+    }
+  }
 
   const { counts, inRange, outOfRange, unparsable } = countAdjustmentsBySquad(rows, columns, monthRange);
-  log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內要扣除的件數`);
+  log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內**最多**會扣除的件數`);
+  log.info('（這裡只算日期與分隊；正式執行還要逐列對帳，對不上的不會扣，實際件數只會更少）');
   log.info(`期間內 ${inRange} 件、期間外 ${outOfRange} 件、日期或分隊讀不出來 ${unparsable} 件`);
   // 使用者確認：試算表中日期空白屬正常情形，不需處理，故以一般訊息呈現而非警告，
   // 避免每次執行都跳警示而讓真正該注意的訊息被淹沒。
@@ -923,37 +943,69 @@ async function checkAdjustSheet(monthRange) {
   if (counts.size === 0) log.warn('這個期間沒有任何要扣除的案件。');
 }
 
+/** 沒有增減試算表可套用時的回傳值（統計原樣送回，對帳結果為空）。 */
+function noAdjustment(stats) {
+  return { stats, deductedTemsis: new Set(), auditRows: [] };
+}
+
 /**
- * 讀取增減試算表並套用扣除；未設定或讀取失敗時不中斷主流程。
+ * 讀取增減試算表，**逐列對帳後**才套用扣除；未設定或讀取失敗時不中斷主流程。
  *
- * 除了扣除後的統計，另外回傳「期間內已提報的 TEMSIS」給未預警逐案清冊當註記用。
- * 讀不到試算表時回傳空集合，清冊照樣產得出來，只是每一件都標成未提報。
+ * 對帳規則見 `adjustAudit.mjs`：一列要能扣，它的 TEMSIS 必須出現在
+ * 「送醫但沒有到院前預警」的清單裡。查不到、或那件本來就有預警，一律不扣。
  *
  * @param {import('./aggregate.mjs').SquadStat[]} stats
  * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {Promise<{stats: import('./aggregate.mjs').SquadStat[], reportedTemsis: Set<string>}>}
+ * @param {import('./alertLedger.mjs').UnalertedCase[]} unalertedCases 對帳名單
+ * @param {Set<string>} transportedTemsis 當月全部送醫案件的 TEMSIS
+ * @returns {Promise<{stats: import('./aggregate.mjs').SquadStat[],
+ *   deductedTemsis: Set<string>, auditRows: unknown[][]}>}
  */
-async function adjustStats(stats, monthRange) {
+async function adjustStats(stats, monthRange, unalertedCases, transportedTemsis) {
   const source = resolveSheetSource();
   if (!source) {
     log.info('未設定增減試算表（EMS_ADJUST_SHEET_URL），略過扣除。');
-    return { stats, reportedTemsis: new Set() };
+    return noAdjustment(stats);
   }
-  log.step('套用增減試算表的扣除');
+  log.step('增減試算表：逐列對帳後套用扣除');
   const rows = await fetchSheetRows(source);
   const columns = resolveAdjustColumns(rows);
-  const { counts, inRange, outOfRange, unparsable } = countAdjustmentsBySquad(rows, columns, monthRange);
-  log.info(`試算表 ${rows.length - 1} 列：期間內 ${inRange} 件、期間外 ${outOfRange} 件、無法判讀 ${unparsable} 件`);
 
+  // 沒有 TEMSIS 欄就完全對不了帳。這時候**寧可一件都不扣**也不要照舊全扣：
+  // 舊做法只看日期與分隊，等於誰填誰有分（使用者 2026-09-10 要求改掉的正是這件事）。
+  if (columns.temsisColumn < 0) {
+    log.warn(
+      '增減試算表找不到 TEMSIS 欄（沒有任何一欄的內容大多是長數字），無法逐列對帳，'
+        + '本次**不套用任何扣除**。請確認表上有填案號(TEMSIS ID)那一欄。',
+    );
+    return noAdjustment(stats);
+  }
+
+  const { inRange, outOfRange, unparsable } = collectAdjustRows(rows, columns, monthRange);
+  log.info(
+    `試算表 ${rows.length - 1} 列：期間內 ${inRange.length} 件、期間外 ${outOfRange} 件、`
+      + `無法判讀 ${unparsable} 件`,
+  );
+
+  const results = auditAdjustments(inRange, indexUnalertedSquads(unalertedCases), transportedTemsis);
+  printAuditReport(results);
+
+  const counts = countApprovedBySquad(results);
   const result = applyAdjustments(stats, counts);
   log.ok(`已自送醫案件數（分母）扣除 ${result.applied} 件，預警案件數不變`);
   if (result.unmatched.length > 0) {
-    log.warn(`試算表中有 ${result.unmatched.length} 個分隊在統計結果裡找不到，未扣除：${result.unmatched.join('、')}`);
+    log.warn(`有 ${result.unmatched.length} 個分隊在統計結果裡找不到，未扣除：${result.unmatched.join('、')}`);
   }
+  // 對帳過後理論上扣不到分母小於分子（扣的每一件都來自該隊的未預警案件），
+  // 這道檢查留著當最後一層保險：真的叫了就代表對帳邏輯有洞，要查。
   if (result.overflow.length > 0) {
-    log.warn(`以下分隊扣除後分母小於分子，請人工確認：${result.overflow.join('、')}`);
+    log.warn(`以下分隊扣除後分母小於分子，對帳邏輯可能有問題，請通報：${result.overflow.join('、')}`);
   }
-  return { stats: result.stats, reportedTemsis: collectReportedTemsis(rows, columns, monthRange) };
+
+  const deductedTemsis = new Set(
+    results.filter((item) => item.squad).map((item) => item.row.temsis),
+  );
+  return { stats: result.stats, deductedTemsis, auditRows: buildAuditRows(results) };
 }
 
 /**

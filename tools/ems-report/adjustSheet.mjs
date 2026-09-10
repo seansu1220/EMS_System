@@ -194,7 +194,35 @@ export function resolveAdjustColumns(rows) {
 
   if (dateColumn < 0) throw new Error('增減試算表中找不到日期欄（沒有任何一欄的內容大多是日期）');
   if (squadColumn < 0) throw new Error('增減試算表中找不到分隊欄（沒有任何一欄的內容大多以分隊／大隊結尾）');
-  return { dateColumn, squadColumn };
+  return {
+    dateColumn,
+    squadColumn,
+    // TEMSIS 是對帳的鍵（見 `adjustAudit.mjs`）。找不到時為 -1，由呼叫端決定怎麼辦，
+    // 不在這裡丟錯——`check-sheet` 只是要看看表長什麼樣子，不該因為少一欄就跑不動。
+    temsisColumn: resolveAdjustTemsisColumn(rows),
+    // 扣除原因只用來顯示（讓人看得懂那一列在講什麼），找不到就算了。
+    reasonColumn: resolveAdjustReasonColumn(rows),
+  };
+}
+
+/**
+ * 找出「扣除原因」欄。
+ *
+ * 這一欄純粹是給人看的（對帳報表上要印出來，否則使用者看到一列「不採計」也不知道是什麼事），
+ * 不參與任何判斷，因此**只用欄名比對**就夠——內容是自由文字，判不出型態。
+ *
+ * @param {string[][]} rows 含標題列
+ * @returns {number} 欄索引；找不到時回傳 -1
+ */
+export function resolveAdjustReasonColumn(rows) {
+  const headers = (rows[0] ?? []).map((text) => String(text ?? '').replace(/\s/g, ''));
+  const candidates = ['扣除原因', '原因', '說明', '備註'];
+  for (const candidate of candidates) {
+    const index = headers.indexOf(candidate);
+    if (index >= 0) return index;
+  }
+  const partial = headers.findIndex((header) => header.includes('原因'));
+  return partial;
 }
 
 /**
@@ -303,28 +331,58 @@ export function resolveAdjustTemsisColumn(rows) {
 }
 
 /**
- * 收集「期間內已提報扣除」的 TEMSIS。
+ * @typedef {Object} AdjustRow 增減試算表上的一列（只留對帳與扣除要用的欄）
+ * @property {string} temsis 表上填的 TEMSIS 原文（可能填錯或留空）
+ * @property {string} squad 表上填的分隊
+ * @property {string} caseDate 表上填的日期原文
+ * @property {string} isoDate 解析後的 `YYYY-MM-DD`
+ * @property {string} reason 扣除原因（只供顯示）
+ * @property {number} lineNumber 試算表列號（含標題列，1 起算），供人回表上找那一列
+ */
+
+/**
+ * 取出「期間內」的每一列，保留原始內容供逐列對帳。
  *
- * 用途只有一個：未預警逐案清冊要標出「這一件分隊已經提報過了」。
- * 扣除的**件數**仍由 {@link countAdjustmentsBySquad} 依日期＋分隊計算，
- * 這裡回傳的 TEMSIS **不參與任何計算**，純粹是清冊上的註記——
- * 表上的 TEMSIS 常有打錯或少貼，拿它當計算依據會讓件數對不上。
+ * 與 {@link countAdjustmentsBySquad} 的差別：那支只回傳「哪一隊幾件」，
+ * 這支回傳**每一列本身**——扣除改成要先驗證該案是不是真的沒預警（見 `adjustAudit.mjs`），
+ * 只有件數是不夠的。
  *
  * @param {string[][]} rows 含標題列
- * @param {{dateColumn: number, squadColumn: number}} columns
+ * @param {{dateColumn: number, squadColumn: number, temsisColumn: number, reasonColumn: number}} columns
  * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {Set<string>} 期間內填了 TEMSIS 的那些案件；沒有 TEMSIS 欄時為空集合
+ * @returns {{inRange: AdjustRow[], outOfRange: number, unparsable: number}}
  */
-export function collectReportedTemsis(rows, columns, monthRange) {
-  const temsisColumn = resolveAdjustTemsisColumn(rows);
-  const reported = new Set();
-  if (temsisColumn < 0) return reported;
+export function collectAdjustRows(rows, columns, monthRange) {
+  const cell = (row, index) => (index >= 0 ? String(row[index] ?? '').trim() : '');
+  const inRange = [];
+  let outOfRange = 0;
+  let unparsable = 0;
 
-  for (const row of rows.slice(1)) {
+  rows.slice(1).forEach((row, index) => {
     const isoDate = parseSheetDate(row[columns.dateColumn] ?? '');
-    if (isoDate === null || isoDate < monthRange.start || isoDate > monthRange.end) continue;
-    const temsis = String(row[temsisColumn] ?? '').trim();
-    if (temsis) reported.add(temsis);
-  }
-  return reported;
+    if (isoDate === null) {
+      unparsable += 1;
+      return;
+    }
+    if (isoDate < monthRange.start || isoDate > monthRange.end) {
+      outOfRange += 1;
+      return;
+    }
+    const squad = cell(row, columns.squadColumn);
+    if (!squad) {
+      unparsable += 1;
+      return;
+    }
+    inRange.push({
+      temsis: cell(row, columns.temsisColumn),
+      squad,
+      caseDate: cell(row, columns.dateColumn),
+      isoDate,
+      reason: cell(row, columns.reasonColumn),
+      // +2：陣列從 0 起算，而且第 1 列是標題，這樣算出來才是試算表上看到的列號。
+      lineNumber: index + 2,
+    });
+  });
+
+  return { inRange, outOfRange, unparsable };
 }

@@ -12,7 +12,8 @@ import {
   resolveAdjustColumns,
   countAdjustmentsBySquad,
   resolveAdjustTemsisColumn,
-  collectReportedTemsis,
+  resolveAdjustReasonColumn,
+  collectAdjustRows,
 } from './adjustSheet.mjs';
 
 test('parseCsv 處理引號、逗號與跨行儲存格', () => {
@@ -76,7 +77,9 @@ test('resolveAdjustColumns 以內容判定日期欄與分隊欄', () => {
     ['A2', '2026/6/2', '大林分隊', ''],
     ['A3', '115/6/3', '中路分隊', ''],
   ];
-  assert.deepEqual(resolveAdjustColumns(rows), { dateColumn: 1, squadColumn: 2 });
+  assert.deepEqual(resolveAdjustColumns(rows), {
+    dateColumn: 1, squadColumn: 2, temsisColumn: -1, reasonColumn: 3,
+  });
 });
 
 test('countAdjustmentsBySquad 只計期間內的列', () => {
@@ -130,30 +133,54 @@ test('沒有任何一欄是長數字時回傳 -1，不亂猜欄位', () => {
   assert.equal(resolveAdjustTemsisColumn(rows), -1);
 });
 
-test('collectReportedTemsis 只收期間內、且有填 TEMSIS 的案件', () => {
-  const rows = [
-    ['項次', '時間', '案號(TEMSIS ID)', '分隊'],
-    ['1', '2026-08-05', '2026080510100311365603', '桃園分隊'],
-    ['2', '2026-07-31', '2026073110100315591101', '大林分隊'], // 期間外
-    ['3', '2026-08-20', '', '中路分隊'], // 沒填 TEMSIS
-    ['4', '2026-08-22', '2026082210100310262601', '山腳分隊'],
-  ];
-  const columns = { dateColumn: 1, squadColumn: 3 };
-  const reported = collectReportedTemsis(rows, columns, { start: '2026-08-01', end: '2026-08-31' });
-  assert.deepEqual(
-    [...reported].sort(),
-    ['2026080510100311365603', '2026082210100310262601'],
-  );
+test('resolveAdjustReasonColumn 依欄名找出扣除原因欄', () => {
+  const rows = [['項次', '時間', '案號(TEMSIS ID)', '分隊', '扣除原因'], ['1', '2026-08-01', '', '桃園分隊', '系統異常']];
+  assert.equal(resolveAdjustReasonColumn(rows), 4);
+  assert.equal(resolveAdjustReasonColumn([['項次', '時間'], ['1', '2026-08-01']]), -1);
 });
 
-test('試算表沒有 TEMSIS 欄時回傳空集合，不讓清冊做不出來', () => {
+test('collectAdjustRows 只取期間內的列，並保留原始內容與列號', () => {
   const rows = [
-    ['時間', '分隊'],
-    ['2026-08-05', '桃園分隊'],
+    ['項次', '時間', '案號(TEMSIS ID)', '分隊', '扣除原因'],
+    ['1', '2026-08-05', '2026080510100311365603', '桃園分隊', '系統異常，到院才恢復'],
+    ['2', '2026-07-31', '2026073110100315591101', '大林分隊', '期間外'],
+    ['3', '2026-08-22', '', '山腳分隊', '沒填 TEMSIS 也要收，對帳時才判得出來'],
+    ['4', '看不懂的日期', '2026080110100318521101', '中路分隊', '日期讀不出來'],
+    ['5', '2026-08-10', '2026081010100305322301', '', '沒填分隊'],
   ];
-  const reported = collectReportedTemsis(rows, { dateColumn: 0, squadColumn: 1 }, {
-    start: '2026-08-01',
-    end: '2026-08-31',
+  const columns = { dateColumn: 1, squadColumn: 3, temsisColumn: 2, reasonColumn: 4 };
+  const result = collectAdjustRows(rows, columns, { start: '2026-08-01', end: '2026-08-31' });
+
+  assert.equal(result.outOfRange, 1);
+  assert.equal(result.unparsable, 2, '日期讀不出來與分隊空白都算無法判讀');
+  assert.deepEqual(
+    result.inRange.map((item) => [item.squad, item.temsis, item.lineNumber]),
+    [
+      ['桃園分隊', '2026080510100311365603', 2],
+      ['山腳分隊', '', 4],
+    ],
+  );
+  assert.equal(result.inRange[0].reason, '系統異常，到院才恢復');
+  assert.equal(result.inRange[0].isoDate, '2026-08-05');
+});
+
+test('沒有 TEMSIS 欄與原因欄時（欄索引 -1）仍取得出列，只是那兩欄是空字串', () => {
+  const rows = [['時間', '分隊'], ['2026-08-05', '桃園分隊']];
+  const result = collectAdjustRows(rows, { dateColumn: 0, squadColumn: 1, temsisColumn: -1, reasonColumn: -1 },
+    { start: '2026-08-01', end: '2026-08-31' });
+  assert.equal(result.inRange.length, 1);
+  assert.equal(result.inRange[0].temsis, '');
+  assert.equal(result.inRange[0].reason, '');
+});
+
+test('resolveAdjustColumns 一併回傳 TEMSIS 欄與原因欄', () => {
+  const rows = [
+    ['項次', '時間', '案號(TEMSIS ID)', '分隊', '扣除原因'],
+    ['1', '2026-08-01', '2026080110100318521101', '桃園分隊', '系統異常'],
+    ['2', '2026-08-02', '2026080210100308285101', '大林分隊', '系統異常'],
+    ['3', '2026-08-03', '2026080310100307580401', '中路分隊', '系統異常'],
+  ];
+  assert.deepEqual(resolveAdjustColumns(rows), {
+    dateColumn: 1, squadColumn: 3, temsisColumn: 2, reasonColumn: 4,
   });
-  assert.equal(reported.size, 0);
 });

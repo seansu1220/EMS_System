@@ -659,6 +659,16 @@ export const UNLOCK = {
 export const TEMSIS_COLUMN_CANDIDATES = ['TEMSISID', 'TEMSIS ID', 'TEMSIS', 'TEMSIS編號'];
 
 /**
+ * TEMSIS 的正確長度。
+ *
+ * 組成是 `日期(8) + 單位代碼(6) + 時分秒(6) + 序號(2)`，實測匯出檔一律 22 碼。
+ * 人工填的表常見填成 17 碼（少了中間的單位代碼，看起來是從別的畫面抄「案號」），
+ * 2026-09 實測整張增減試算表 280 筆有 31 筆是 17 碼。
+ * 這些對不上匯出檔，**一律不當成「系統查無此案」以外的任何情況**。
+ */
+export const TEMSIS_CODE_LENGTH = 22;
+
+/**
  * 12 導程心電圖到院前傳輸率（第 3 章）的設定。
  *
  * 這個流程走的欄位（EKG檢查勾選框、心電圖下拉）與畫面（傳輸紀錄、上傳）
@@ -850,7 +860,7 @@ export const EKG = {
      * 長度不符**一律不當成「系統查無此案」**——那會讓分母分子平白各加 1 件，
      * 而它們多半只是打錯或少貼。改走下面的後備比對。
      */
-    temsisLength: 22,
+    temsisLength: TEMSIS_CODE_LENGTH,
 
     /**
      * 後備比對的時間容差（毫秒）。

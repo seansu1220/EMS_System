@@ -6,8 +6,9 @@
  * 原本一件也答不出來——原始匯出檔含個資，跑完就刪，`last-run.log` 又每次覆寫。
  * 結果就是每被問一次就要重新登入、重跑一次查詢。
  *
- * 這份清冊把「總案件 − 預警案件」的差集攤平成一件一列，並標出該件在增減試算表上
- * 有沒有被提報過，分隊要對數字時直接開檔案即可。
+ * 這份清冊把「總案件 − 預警案件」的差集攤平成一件一列，並標出該件有沒有被扣除。
+ * 它同時也是**增減試算表對帳的依據**（見 `adjustAudit.mjs`）：
+ * 一件案子要能被扣除，前提就是它出現在這份清單裡。
  *
  * ⚠ 個資原則：含完整 TEMSIS 與案件日期，比照逐案判定表——
  *   檔案只落在 `out/internal/`（已 gitignore、不上雲），終端機與 log 仍只印末 4 碼。
@@ -19,19 +20,20 @@ import { PATHS, TEMSIS_COLUMN_CANDIDATES, UNLOCK } from './config.mjs';
 import { monthlyFileName, legacyMonthlyFileName } from './fileNames.mjs';
 import { resolveColumnByNames, rowsNotIn } from './aggregate.mjs';
 import { buildListSheet } from './ekgLists.mjs';
+import { AUDIT_COLUMNS } from './adjustAudit.mjs';
 import { log } from './logger.mjs';
 
 /** 檔名前綴與大標（改名時兩個一起改，並同步 `fileNames.mjs` 的產出檔名單）。 */
 export const UNALERTED = { prefix: '到院前未預警清冊', heading: '到院前未預警清冊' };
 
 /** 逐案清單的欄位順序即輸出順序。 */
-const CASE_COLUMNS = ['分隊', '案件日期', 'TEMSIS', '已提報扣除'];
+const CASE_COLUMNS = ['分隊', '案件日期', 'TEMSIS', '已提報並扣除'];
 
 /** 各分隊件數分頁的欄位。 */
-const SUMMARY_COLUMNS = ['分隊', '未預警件數', '其中已提報扣除'];
+const SUMMARY_COLUMNS = ['分隊', '未預警件數', '其中已扣除'];
 
-/** 提報狀態欄的兩種值（只是註記，不影響任何計算）。 */
-const REPORTED = { yes: '是', no: '否' };
+/** 扣除狀態欄的兩種值。 */
+const DEDUCTED = { yes: '是', no: '否' };
 
 /**
  * @typedef {Object} AlertSource 一份匯出檔，以及它的分隊欄名
@@ -45,7 +47,7 @@ const REPORTED = { yes: '是', no: '否' };
  * @property {string} squad
  * @property {string} caseDate 案件日期原文；讀不到為空字串
  * @property {string} temsis
- * @property {boolean} reported 增減試算表上有沒有這一件
+ * @property {boolean} deducted 有沒有被增減試算表扣掉
  */
 
 /** 取一列的某一欄，去掉前後空白；沒有那一欄就回傳空字串。 */
@@ -73,32 +75,47 @@ function resolveTemsisColumn(source) {
 }
 
 /**
+ * 取出一份匯出檔裡的全部 TEMSIS。
+ *
+ * 用途：增減試算表對帳要分辨「這件有預警」與「查無此案」，
+ * 前者要拿**全部送醫案件**來比對，光有未預警清單分不出來。
+ *
+ * @param {AlertSource} source
+ * @returns {Set<string>}
+ */
+export function collectTemsis(source) {
+  const column = resolveTemsisColumn(source);
+  const codes = new Set();
+  for (const row of source.rows) {
+    const temsis = cell(row, column);
+    if (temsis) codes.add(temsis);
+  }
+  return codes;
+}
+
+/**
  * 算出「送醫但沒有到院前預警」的案件（純函式，不碰檔案）。
  *
  * ⚠ 這裡算的是**未扣除前**的差集：增減試算表的扣除只動報表上的分母，
  * 被扣掉的案件本身仍是「沒有預警」的案件，照樣要列出來——分隊要看的正是
- * 「我這個月有幾件沒預警、其中幾件已經提報過了」。已提報的以 `reported` 標示。
+ * 「我這個月有幾件沒預警、其中幾件已經扣掉了」。扣掉的以 `deducted` 標示。
  *
  * @param {AlertSource} total 總案件（送醫）那份匯出檔
  * @param {AlertSource} alert 到院前預警案件那份匯出檔
- * @param {Set<string>} [reportedTemsis] 增減試算表上期間內填過的 TEMSIS
  * @returns {UnalertedCase[]} 依分隊、案件日期排序
  */
-export function buildUnalertedCases(total, alert, reportedTemsis = new Set()) {
+export function buildUnalertedCases(total, alert) {
   const totalTemsis = resolveTemsisColumn(total);
   const alertTemsis = resolveTemsisColumn(alert);
   const caseDateColumn = resolveColumnByNames(total.headers, UNLOCK.listColumns.caseDate)?.column ?? null;
 
   const missing = rowsNotIn(total.rows, totalTemsis, alert.rows, alertTemsis);
-  const cases = missing.map((row) => {
-    const temsis = cell(row, totalTemsis);
-    return {
-      squad: cell(row, total.squadColumn) || '(讀不到分隊)',
-      caseDate: cell(row, caseDateColumn),
-      temsis,
-      reported: reportedTemsis.has(temsis),
-    };
-  });
+  const cases = missing.map((row) => ({
+    squad: cell(row, total.squadColumn) || '(讀不到分隊)',
+    caseDate: cell(row, caseDateColumn),
+    temsis: cell(row, totalTemsis),
+    deducted: false,
+  }));
 
   return cases.sort(
     (left, right) => left.squad.localeCompare(right.squad, 'zh-Hant')
@@ -107,19 +124,42 @@ export function buildUnalertedCases(total, alert, reportedTemsis = new Set()) {
 }
 
 /**
+ * 把未預警案件整理成「TEMSIS → 該案實際所屬分隊」（純函式）。
+ *
+ * 這就是對帳的名單：增減試算表上的一列查得到這裡，才算得上是合法的扣除。
+ *
+ * @param {UnalertedCase[]} cases
+ * @returns {Map<string, string>}
+ */
+export function indexUnalertedSquads(cases) {
+  return new Map(cases.map((item) => [item.temsis, item.squad]));
+}
+
+/**
+ * 標記哪些案件被扣掉了（純函式，回傳新陣列，不改動輸入）。
+ *
+ * @param {UnalertedCase[]} cases
+ * @param {Set<string>} deductedTemsis 對帳後**實際採計**的 TEMSIS
+ * @returns {UnalertedCase[]}
+ */
+export function markDeducted(cases, deductedTemsis) {
+  return cases.map((item) => ({ ...item, deducted: deductedTemsis.has(item.temsis) }));
+}
+
+/**
  * 依分隊彙總未預警件數（純函式）。
  *
  * 依件數由多到少排序：會打開這份檔案的人，第一個要找的就是件數最多的那幾隊。
  *
  * @param {UnalertedCase[]} cases
- * @returns {{squad: string, count: number, reported: number}[]}
+ * @returns {{squad: string, count: number, deducted: number}[]}
  */
 export function summarizeUnalerted(cases) {
   const bySquad = new Map();
   for (const item of cases) {
-    const entry = bySquad.get(item.squad) ?? { squad: item.squad, count: 0, reported: 0 };
+    const entry = bySquad.get(item.squad) ?? { squad: item.squad, count: 0, deducted: 0 };
     entry.count += 1;
-    if (item.reported) entry.reported += 1;
+    if (item.deducted) entry.deducted += 1;
     bySquad.set(item.squad, entry);
   }
   return [...bySquad.values()].sort(
@@ -130,22 +170,25 @@ export function summarizeUnalerted(cases) {
 /**
  * 組出清冊的活頁簿（不寫檔，供測試在記憶體中檢查版面）。
  *
- * 兩個分頁的分工比照「有處置未勾選清冊」：
- * 第一頁看得到哪一隊要盯，第二頁才是拿回系統叫案件用的明細。
+ * 三個分頁的分工：
+ *   1. `各分隊件數`　看得出哪一隊要盯
+ *   2. `逐案清單`　　拿回系統叫案件用的明細
+ *   3. `增減表對帳`　每一列扣除成不成立、為什麼（見 `adjustAudit.mjs`）
  *
  * @param {UnalertedCase[]} cases
  * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {unknown[][]} [auditRows] 對帳結果；沒有增減試算表時傳空陣列，該分頁就不建
  * @returns {ExcelJS.Workbook}
  */
-export function buildUnalertedWorkbook(cases, monthRange) {
+export function buildUnalertedWorkbook(cases, monthRange, auditRows = []) {
   const workbook = new ExcelJS.Workbook();
   const title = `${monthRange.label}　${UNALERTED.heading}`;
 
   const summary = summarizeUnalerted(cases);
-  const totalReported = summary.reduce((sum, item) => sum + item.reported, 0);
+  const totalDeducted = summary.reduce((sum, item) => sum + item.deducted, 0);
   const summaryRows = [
-    ['合計', cases.length, totalReported],
-    ...summary.map((item) => [item.squad, item.count, item.reported]),
+    ['合計', cases.length, totalDeducted],
+    ...summary.map((item) => [item.squad, item.count, item.deducted]),
   ];
   buildListSheet(workbook, '各分隊件數', title, SUMMARY_COLUMNS, summaryRows);
 
@@ -153,25 +196,34 @@ export function buildUnalertedWorkbook(cases, monthRange) {
     item.squad,
     item.caseDate || '(讀不到)',
     item.temsis,
-    item.reported ? REPORTED.yes : REPORTED.no,
+    item.deducted ? DEDUCTED.yes : DEDUCTED.no,
   ]);
   buildListSheet(workbook, '逐案清單', title, CASE_COLUMNS, caseRows);
+
+  if (auditRows.length > 0) {
+    buildListSheet(
+      workbook,
+      '增減表對帳',
+      `${monthRange.label}　增減試算表逐列對帳`,
+      AUDIT_COLUMNS,
+      auditRows,
+      { wideColumns: ['說明', '扣除原因'] },
+    );
+  }
   return workbook;
 }
 
 /**
  * 寫出未預警逐案清冊。
  *
- * @param {AlertSource} total
- * @param {AlertSource} alert
- * @param {Set<string>} reportedTemsis
+ * @param {UnalertedCase[]} cases 已標記過扣除狀態的案件
+ * @param {unknown[][]} auditRows 增減試算表的逐列對帳結果
  * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {Promise<{filePath: string, cases: UnalertedCase[]}|null>} 一件都沒有時回傳 null
+ * @returns {Promise<string|null>} 檔案路徑；沒有任何內容可寫時回傳 null
  */
-export async function writeUnalertedList(total, alert, reportedTemsis, monthRange) {
-  const cases = buildUnalertedCases(total, alert, reportedTemsis);
-  if (cases.length === 0) {
-    log.info('這個月每一件送醫案件都有到院前預警，不產出未預警清冊。');
+export async function writeUnalertedList(cases, auditRows, monthRange) {
+  if (cases.length === 0 && auditRows.length === 0) {
+    log.info('這個月每一件送醫案件都有到院前預警，也沒有要對帳的扣除，不產出未預警清冊。');
     return null;
   }
 
@@ -183,7 +235,7 @@ export async function writeUnalertedList(total, alert, reportedTemsis, monthRang
     { force: true },
   );
 
-  const workbook = buildUnalertedWorkbook(cases, monthRange);
+  const workbook = buildUnalertedWorkbook(cases, monthRange, auditRows);
   try {
     await workbook.xlsx.writeFile(filePath);
   } catch (error) {
@@ -197,12 +249,12 @@ export async function writeUnalertedList(total, alert, reportedTemsis, monthRang
     throw error;
   }
 
-  const reportedCount = cases.filter((item) => item.reported).length;
+  const deductedCount = cases.filter((item) => item.deducted).length;
   log.ok(
     `未預警逐案清冊已產出：${path.relative(process.cwd(), filePath)}`
-      + `（${cases.length} 件，其中 ${reportedCount} 件已提報扣除）`,
+      + `（${cases.length} 件，其中 ${deductedCount} 件已扣除）`,
   );
   log.info('之後有分隊來問「我那幾件沒預警的是哪幾件」，直接開這份就看得到，不必重跑。');
-  log.warn('⚠ 這份含全局每一件的完整 TEMSIS，**不要整份發給分隊**，所以沒有放在 out/report/。');
-  return { filePath, cases };
+  log.warn('這份含全局每一件的完整 TEMSIS，**不要整份發給分隊**，所以沒有放在 out/report/。');
+  return filePath;
 }
