@@ -365,16 +365,29 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     log.info(`  配對結果：${mapping}`);
   }
 
+  // 每一張紀錄表都沒有鎖頭 → 這件本來就是未結案。
+  //
+  // ⚠ 這個判斷**必須放在看解鎖按鈕數量之前**（2026-09-11 實跑才抓到）。
+  // 「調整為未結案」那顆按鈕**解完也永遠不會消失**（見 TOOLS_SPEC 2.2，
+  // 使用者 2026-08-06 確認），所以它的數量說明不了有沒有鎖，
+  // 真正的鎖頭訊號只有紀錄表按鈕上那個「鎖」字。
+  //
+  // 實跑遇到的就是這種：1 張紀錄表寫著「救護紀錄」（沒鎖）、卻仍有 1 顆按鈕。
+  // 舊版把它判成「已定位」，正式模式會去按那顆按鈕——但案件早就是未結案了，
+  // 按它沒有用；真正該做的是刪掉「線上使用狀況」裡那一列（見 `onlineUsage.mjs`）。
+  //
+  // 讀不到按鈕文字時 `isLockedRecord` 一律回傳 true，因此這裡不會誤放行。
+  if (paired.recordCount > 0 && paired.pairs.every((pair) => !isLockedRecord(pair.recordText))) {
+    return {
+      temsis,
+      status: '無需處理',
+      detail: `案件內 ${paired.recordCount} 張紀錄表都沒有鎖頭（已是未結案），不需要解鎖`,
+    };
+  }
+
   if (paired.unlockCount === 0) {
-    // 找得到紀錄表、而且每一張都沒有鎖頭 → 這件本來就是未結案，不是出問題。
-    // 反之（連紀錄表都找不到）才是真的不知道發生什麼事，要人來看。
-    if (paired.recordCount > 0 && paired.pairs.every((pair) => !isLockedRecord(pair.recordText))) {
-      return {
-        temsis,
-        status: '無需處理',
-        detail: `案件內 ${paired.recordCount} 張紀錄表都沒有鎖頭（已是未結案），本來就不需要解鎖`,
-      };
-    }
+    // 連紀錄表都找不到（上面那個判斷要 recordCount > 0 才成立），
+    // 又沒有解鎖按鈕——這是真的不知道發生什麼事，要人來看。
     return {
       temsis,
       status: '需人工處理',

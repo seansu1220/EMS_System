@@ -29,9 +29,9 @@ function createFakePage(pairsResult) {
   return { frames: () => [frame] };
 }
 
-test('案件內只有一張紀錄表時直接鎖定，不需要開紀錄表比對', async () => {
+test('案件內只有一張（有鎖頭的）紀錄表時直接鎖定，不需要開紀錄表比對', async () => {
   const page = createFakePage({
-    pairs: [{ recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄' }],
+    pairs: [{ recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄(鎖)' }],
     recordCount: 1,
     unlockCount: 1,
     unlockTexts: [],
@@ -40,6 +40,23 @@ test('案件內只有一張紀錄表時直接鎖定，不需要開紀錄表比�
     readCodes: async () => assert.fail('只有一張時不應該去開紀錄表'),
   });
   assert.equal(outcome.status, '已定位');
+});
+
+test('唯一那張沒有鎖頭時不可以按「調整為未結案」，要交給第二條路徑', async () => {
+  // 2026-09-11 實跑抓到的真實情況：1 張紀錄表寫著「救護紀錄」（沒鎖）、卻仍有 1 顆按鈕。
+  // 舊版只看按鈕數量就判成「已定位」，正式模式會去按那顆按鈕——但案件早就是未結案了。
+  // 那顆按鈕解完也永遠不會消失（使用者 2026-08-06 確認），所以數量根本說明不了有沒有鎖。
+  const page = createFakePage({
+    pairs: [{ recordIndex: 0, unlockIndex: 0, recordText: '救護紀錄' }],
+    recordCount: 1,
+    unlockCount: 1,
+    unlockTexts: [],
+  });
+  const outcome = await locateUnlockTarget({}, page, 'T115070100001', {
+    readCodes: async () => assert.fail('沒鎖頭那張不該去開'),
+  });
+  assert.equal(outcome.status, '無需處理');
+  assert.match(outcome.detail, /都沒有鎖頭/);
 });
 
 test('找不到解鎖按鈕時回報需人工處理', async () => {
