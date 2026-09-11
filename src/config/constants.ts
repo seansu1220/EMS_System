@@ -100,6 +100,10 @@ export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }>
   pending: { label: '待處理', tone: 'amber' },
   running: { label: '處理中', tone: 'blue' },
   unlocked: { label: '已解鎖', tone: 'green' },
+  // 第二種解鎖方式的結果（v1.20）：案件本來就是未結案，卡住的原因是那份紀錄表
+  // **還被某台裝置佔用著**，救護科把那筆佔用紀錄刪掉就放開了。
+  // 對申請人來說結果一樣是「可以去改了」，但分開列才看得出救護科實際動了什麼。
+  usageCleared: { label: '已解除佔用', tone: 'green' },
   // 「案件未結案」是**申請人聽得懂的說法**：沒有鎖頭＝這件本來就還沒結案，
   // 直接進去改就好。本機工具的終端機仍講「本來就沒鎖」，那是給操作的人看的。
   noAction: { label: '案件未結案', tone: 'slate' },
@@ -120,6 +124,9 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
   pending: '等救護科電腦執行',
   running: '正在處理…',
   unlocked: '已解鎖，可以進系統修改了',
+  // 講「有人還開著」而不是「佔用紀錄」：申請人不需要知道系統內部怎麼記這件事，
+  // 只需要知道原因不是自己填錯、而且現在可以去改了。
+  usageCleared: '本來就是未結案，但還有人開著；已經幫你放開，可以進系統修改了',
   noAction: '案件未結案，不需解鎖。有問題請洽救護科承辦人',
   failed: '請洽救護科承辦人處理',
 };

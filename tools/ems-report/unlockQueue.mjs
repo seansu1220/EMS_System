@@ -37,14 +37,19 @@ const COLLECTION = 'unlockRequests';
 /**
  * 解鎖結果 → 工單狀態的對照（純函式，方便測試）。
  *
- * 只有三種結局要讓申請人看到：解開了、本來就沒鎖、需要人接手。
+ * 只有四種結局要讓申請人看到：解開了、解除了佔用、本來就沒鎖、需要人接手。
  * 「查無案件」「失敗」都併入 failed——對申請人來說都是「這筆沒處理成，看說明」。
  *
+ * `已解除佔用` 刻意**不併進 unlocked**（使用者 2026-09-11 新增的第二條路徑）：
+ * 對申請人來說結果一樣是「可以去改了」，但對承辦人來說動的是完全不同的地方
+ * （一個改案件狀態、一個放掉裝置佔用）。併在一起的話，事後回頭核對會分不出來。
+ *
  * @param {string} status `UnlockOutcome.status`
- * @returns {'unlocked'|'noAction'|'failed'}
+ * @returns {'unlocked'|'usageCleared'|'noAction'|'failed'}
  */
 export function toQueueStatus(status) {
   if (status === '已解鎖') return 'unlocked';
+  if (status === '已解除佔用') return 'usageCleared';
   if (status === '無需處理') return 'noAction';
   return 'failed';
 }

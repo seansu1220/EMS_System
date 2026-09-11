@@ -1,6 +1,8 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.19.2　建立日期：2026-07-22　最後更新：2026-09-10
+> 版本：v1.20.0　建立日期：2026-07-22　最後更新：2026-09-11
+> v1.20.0：解鎖工單新增狀態 **`usageCleared`（已解除佔用）**——案件本來就是未結案，
+> 　　　　 但紀錄表還被某台裝置線上使用中，救護科電腦會自動去刪掉那筆佔用紀錄（見 2.8）
 > v1.19.2：`/tools` 的「到院前預警比率」補上**增減試算表逐列對帳**的說明
 > 　　　　 （工具細節見 TOOLS_SPEC 1.13）；見第 4 章
 > v1.19.1：`/tools` 的「到院前預警比率」補上新產出的**到院前未預警清冊**
@@ -287,8 +289,21 @@
 | `pending` | 待處理 | 等救護科電腦執行 |
 | `running` | 處理中 | 正在處理… |
 | `unlocked` | 已解鎖 | 已解鎖，可以進系統修改了 |
+| `usageCleared` | 已解除佔用 | 本來就是未結案，但還有人開著；已經幫你放開，可以進系統修改了 |
 | `noAction` | 案件未結案 | 案件未結案，不需解鎖。有問題請洽救護科承辦人 |
 | `failed` | 需人工處理 | 請洽救護科承辦人處理 |
+
+**`usageCleared` 是第二種解鎖方式的結果**（v1.20，使用者 2026-09-11 指定）。
+有些案件**本來就是未結案**（紀錄表後面沒有那個「鎖」字），分隊卻還是進不去改——
+卡住的原因不是結案鎖，而是那份紀錄表**還被某台裝置線上使用中**。
+救護科電腦判到「沒有鎖頭」時會自動改走第二條路：到目標系統的
+「系統設定 → 線上使用狀況」找出那一筆佔用紀錄並刪掉（完整作法見
+[TOOLS_SPEC.md](TOOLS_SPEC.md) 2.11）。
+
+刻意**不與 `unlocked` 合併**：對申請人來說結果一樣是「可以去改了」，
+但救護科實際動的是完全不同的地方，事後回頭核對要分得出來。
+也因為多了這一步，`noAction` 的意思跟著收窄——現在要**紀錄表沒鎖頭、
+而且線上使用狀況裡也查不到佔用紀錄**，才會回報「案件未結案，不需解鎖」。
 
 **結果欄分兩種詳細度**（v1.18.3 起，使用者 2026-08-09 指定）：
 
@@ -328,7 +343,7 @@
   offDayCount（全年放假天數，供人工核對）, updatedBy, updatedAt }（v1.12 新增，見 2.7）
   ——文件 ID 就是年份，重複匯入同年直接覆蓋。
 - `unlockRequests/{id}`（v1.17 新增）：{ temsis, reason, requestedBy, requestedByName, requestedAt,
-  status（pending/running/unlocked/noAction/failed）, result（{caseDate, vehicle, squad, detail,
+  status（pending/running/unlocked/**usageCleared**/noAction/failed）, result（{caseDate, vehicle, squad, detail,
   processedAt, processedBy} 或 null）}
   ——**一個 TEMSIS 一張工單**。網頁只負責申請與查結果，實際解鎖由本機工具執行後回寫，
   原因與完整流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章。

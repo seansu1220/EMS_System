@@ -22,6 +22,8 @@ import {
   findSelectByOption,
   findMarkedRows,
   findRowsWithColumnValue,
+  findRowsByColumnValue,
+  clickRowButtonByColumnValue,
   listCheckboxLabels,
   listTableHeaders,
 } from './pageFinder.mjs';
@@ -120,6 +122,67 @@ const FIXTURE = `
   <tr>
     <td>2026/07/01 09:55:00</td><td>ZOLL</td><td>19</td><td>98</td><td>126/78</td>
     <td>98</td><td>-</td><td>未判讀</td>
+  </tr>
+</table>
+<!--
+  仿「系統設定 → 線上使用狀況」那張表（2026-09-11 探測到的真實結構）。
+  這是第二種解鎖路徑要動手的地方，刪錯一列無法復原，因此誘餌放得特別狠：
+
+  - **每一列的刪除鈕 id 全都是 _btnDelete**（真實系統就是這樣）→ 靠 id 或序號必然刪錯
+  - 第 2 列的 TEMSIS 是第 1 列的**超集**（尾巴多一碼）→ 用「包含」比對就會多刪一列
+  - 第 4 列的刪除鈕 onclick 帶的是**第 1 列的**編號 → 按鈕與所在列對不起來，必須擋下
+  - 第 5、6 列是**同一個編號的兩列** → 任何選擇都是猜的，一律不動手
+  - 第 3 列**沒有刪除鈕** → 不可以退而求其次去按別列的
+
+  onclick 仿真實系統那種 (^w^) 分隔的參數，並順手把按到誰記在 window 上，
+  測試才驗得到「真的按到那一列」，而不只是「有按到東西」。
+-->
+<table id="table1">
+  <tr>
+    <th>項次</th><th>案件編號</th><th>TEMSIS ID</th><th>救護車</th>
+    <th>使用者</th><th>日期</th><th>裝置ID</th><th>&nbsp;</th>
+  </tr>
+  <tr>
+    <td>1</td><td>A0001</td><td>2026091110100300000001</td><td>中路92</td>
+    <td>tyfd01</td><td>2026/09/11 09:59:22</td><td>DEV-1</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0001(^w^)2026091110100300000001(^w^)tyfd01(^w^)2026/09/11 09:59:22(^w^)DEV-1(^w^)中路92'"></td>
+  </tr>
+  <tr>
+    <td>2</td><td>A0002</td><td>20260911101003000000012</td><td>竹圍92</td>
+    <td>tyfd02</td><td>2026/09/10 08:00:00</td><td>DEV-2</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0002(^w^)20260911101003000000012(^w^)tyfd02(^w^)2026/09/10 08:00:00(^w^)DEV-2(^w^)竹圍92'"></td>
+  </tr>
+  <tr>
+    <td>3</td><td>A0003</td><td>2026091110100300000003</td><td>高平91</td>
+    <td>tyfd03</td><td>2026/09/09 07:00:00</td><td>DEV-3</td>
+    <td>&nbsp;</td>
+  </tr>
+  <tr>
+    <td>4</td><td>A0004</td><td>2026091110100300000004</td><td>草漯93</td>
+    <td>tyfd04</td><td>2026/09/08 06:00:00</td><td>DEV-4</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0001(^w^)2026091110100300000001(^w^)tyfd01(^w^)2026/09/11 09:59:22(^w^)DEV-1(^w^)中路92'"></td>
+  </tr>
+  <tr>
+    <td>5</td><td>A0005</td><td>2026091110100300000005</td><td>幼獅92</td>
+    <td>tyfd05</td><td>2026/09/07 05:00:00</td><td>DEV-5</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0005(^w^)2026091110100300000005(^w^)tyfd05(^w^)2026/09/07 05:00:00(^w^)DEV-5(^w^)幼獅92'"></td>
+  </tr>
+  <tr>
+    <td>7</td><td>A0007</td><td></td><td>大湳93</td>
+    <td>tyfd07</td><td>2026/09/05 03:00:00</td><td>DEV-7</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0007(^w^)(^w^)tyfd07(^w^)2026/09/05 03:00:00(^w^)DEV-7(^w^)大湳93'"></td>
+  </tr>
+  <tr><td colspan="8">（跨欄的版面列，欄數不足）</td></tr>
+  <tr>
+    <td>6</td><td>A0006</td><td>2026091110100300000005</td><td>埔心91</td>
+    <td>tyfd06</td><td>2026/09/06 04:00:00</td><td>DEV-6</td>
+    <td><input type="button" id="_btnDelete" name="_btnDelete" value="刪除"
+      onclick="window.__deleted='A0006(^w^)2026091110100300000005(^w^)tyfd06(^w^)2026/09/06 04:00:00(^w^)DEV-6(^w^)埔心91'"></td>
   </tr>
 </table>`;
 
@@ -336,4 +399,157 @@ test('只取出含「12導程」的那幾列，其他列不帶出來', { skip },
     found.rows.every((row) => !row.some((cell) => cell.includes('血氧'))),
     '不得把沒命中的列一起帶出來（個資防護的重點）',
   );
+});
+
+
+// ── 線上使用狀況：找出該刪的那一列（第二種解鎖路徑） ──────────────────
+//
+// 這一組是全檔風險最高的測試：真實系統裡按下去就是不可復原的刪除，
+// 而每一列的按鈕 id 完全相同，唯一能分辨的只有「在不在同一個 <tr>」。
+
+/** 用假表的欄位設定叫 findRowsByColumnValue。 */
+function scanUsage(temsis) {
+  return findRowsByColumnValue(frame, {
+    value: temsis,
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+    wantedHeaders: ['救護車', '日期'],
+  });
+}
+
+/** 按下之前先把「按到誰」的紀錄清掉，才驗得出這一次到底有沒有按。 */
+async function resetClickRecord() {
+  await frame.evaluate(() => { window.__deleted = null; });
+}
+
+test('線上使用狀況：找得到相符的那一列，並帶回該列的救護車與日期', { skip }, async () => {
+  const scan = await scanUsage('2026091110100300000001');
+  assert.equal(scan.found, true);
+  assert.equal(scan.matches.length, 1);
+  assert.equal(scan.matches[0].hasButton, true);
+  assert.equal(scan.matches[0].buttonSelfIdentifies, true);
+  assert.equal(scan.matches[0].values['救護車'], '中路92');
+  assert.equal(scan.matches[0].values['日期'], '2026/09/11 09:59:22');
+});
+
+test('線上使用狀況：編號比對是完全相等，尾巴多一碼的那一列不算', { skip }, async () => {
+  // 用「包含」比對的話，第 2 列（尾巴多一碼）會跟著被算進來，於是多刪一筆別人的。
+  const scan = await scanUsage('2026091110100300000001');
+  assert.equal(scan.matches.length, 1, '只有第 1 列才是這個編號');
+  assert.equal(scan.matches[0].values['救護車'], '中路92');
+});
+
+test('線上使用狀況：只帶回指定欄位，使用者與裝置ID 不外流', { skip }, async () => {
+  const scan = await scanUsage('2026091110100300000001');
+  assert.deepEqual(Object.keys(scan.matches[0].values).sort(), ['日期', '救護車'].sort());
+  const dumped = JSON.stringify(scan.matches[0].values);
+  assert.ok(!dumped.includes('tyfd01'), '不該把使用者帳號帶出來');
+  assert.ok(!dumped.includes('DEV-1'), '不該把裝置ID帶出來');
+});
+
+test('線上使用狀況：那一列沒有刪除鈕時如實回報，不去抓別列的', { skip }, async () => {
+  const scan = await scanUsage('2026091110100300000003');
+  assert.equal(scan.matches.length, 1);
+  assert.equal(scan.matches[0].hasButton, false);
+});
+
+test('線上使用狀況：按鈕帶的編號與所在列對不起來時要看得出來', { skip }, async () => {
+  // 第 4 列的按鈕 onclick 帶的是第 1 列的編號——這正是「按下去會刪到別排」的樣子。
+  const scan = await scanUsage('2026091110100300000004');
+  assert.equal(scan.matches.length, 1);
+  assert.equal(scan.matches[0].hasButton, true);
+  assert.equal(scan.matches[0].buttonSelfIdentifies, false);
+});
+
+test('線上使用狀況：找不到 TEMSIS 欄時回報版面欄位，不當成「沒有這筆」', { skip }, async () => {
+  const scan = await findRowsByColumnValue(frame, {
+    value: '2026091110100300000001',
+    columnCandidates: ['這個欄位不存在'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(scan.found, false);
+  assert.equal(scan.reason, 'noColumn');
+  assert.ok(scan.tableHeaders.length > 0, '要列出這一頁實際有哪些欄位供排查');
+});
+
+test('線上使用狀況：按下去的是同一列的那顆鈕，不是第幾顆', { skip }, async () => {
+  // 六列的刪除鈕 id 全是 _btnDelete，序號定位必然刪錯；這裡驗證真的按到第 1 列。
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '2026091110100300000001',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, true);
+  const payload = await frame.evaluate(() => window.__deleted);
+  assert.ok(payload.includes('2026091110100300000001'), '按到的必須是這個編號那一列');
+  assert.ok(payload.includes('中路92'), '按到的必須是中路92那一列');
+});
+
+test('線上使用狀況：同一個編號有兩列時一個都不按', { skip }, async () => {
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '2026091110100300000005',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, false);
+  assert.equal(result.reason, 'notUnique');
+  assert.equal(await frame.evaluate(() => window.__deleted), null, '一個都不可以按下去');
+});
+
+test('線上使用狀況：按鈕與所在列對不起來時不按', { skip }, async () => {
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '2026091110100300000004',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, false);
+  assert.equal(result.reason, 'buttonMismatch');
+  assert.equal(await frame.evaluate(() => window.__deleted), null, '按下去就會刪到第 1 列');
+});
+
+test('線上使用狀況：那一列沒有刪除鈕時不按', { skip }, async () => {
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '2026091110100300000003',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, false);
+  assert.equal(result.reason, 'noButton');
+  assert.equal(await frame.evaluate(() => window.__deleted), null);
+});
+
+test('線上使用狀況：清單裡沒有這筆時不按，且回報 notFound', { skip }, async () => {
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '9999999999999999999999',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, false);
+  assert.equal(result.reason, 'notFound');
+  assert.equal(await frame.evaluate(() => window.__deleted), null);
+});
+
+test('線上使用狀況：比對值是空的時候一律當成找不到，不可以對上空欄位', { skip }, async () => {
+  // 空字串會與空儲存格相等，放行的話有機會刪到一列根本沒填編號的資料。
+  await resetClickRecord();
+  const result = await clickRowButtonByColumnValue(frame, {
+    value: '',
+    columnCandidates: ['TEMSIS ID'],
+    buttonTexts: ['刪除'],
+  });
+  assert.equal(result.clicked, false);
+  assert.equal(result.reason, 'notFound');
+  assert.equal(await frame.evaluate(() => window.__deleted), null);
+});
+
+test('線上使用狀況：表格有跨欄的版面列時照樣掃得完，不會整個拋錯', { skip }, async () => {
+  // 欄數不足的列讀 undefined.textContent 會讓整個 evaluate 掛掉，連掃描結果都拿不到。
+  const scan = await scanUsage('2026091110100300000005');
+  assert.equal(scan.found, true);
+  assert.equal(scan.matches.length, 2, '兩列同編號的還是要找得到');
 });

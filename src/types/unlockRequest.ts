@@ -16,14 +16,25 @@
 /**
  * 工單狀態。
  *
- * 後四種與本機工具的 `UnlockOutcome.status` 一一對應（見 `tools/ems-report/unlock.mjs`）：
+ * `pending`／`running` 是網頁這端的排隊狀態；其餘四種與本機工具的 `UnlockOutcome.status`
+ * 一一對應（對照表在 `tools/ems-report/unlockQueue.mjs` 的 `toQueueStatus`）：
  * - `pending`：已送出，等本機工具來拿
  * - `running`：本機工具正在處理這一筆
  * - `unlocked`：已解鎖（對應「已解鎖」）
- * - `noAction`：那張紀錄表本來就沒有鎖頭，不需要動作（對應「無需處理」）
+ * - `usageCleared`：紀錄表本來就沒有鎖頭，卡住的原因是**還被某台裝置線上使用中**，
+ *   已把那筆佔用紀錄刪掉（對應「已解除佔用」）。這是第二種解鎖方式，
+ *   刻意不與 `unlocked` 合併——對申請人來說結果一樣是「可以去改了」，
+ *   但救護科實際動的是完全不同的地方，事後回頭核對要分得出來
+ * - `noAction`：紀錄表沒有鎖頭，**而且也沒有人佔用**，這筆真的不需要動作（對應「無需處理」）
  * - `failed`：程式判斷不出來或流程出錯，要人接手（對應「需人工處理／查無案件／失敗」）
  */
-export type UnlockRequestStatus = 'pending' | 'running' | 'unlocked' | 'noAction' | 'failed';
+export type UnlockRequestStatus =
+  | 'pending'
+  | 'running'
+  | 'unlocked'
+  | 'usageCleared'
+  | 'noAction'
+  | 'failed';
 
 /** 本機工具跑完之後回寫的結果。 */
 export interface UnlockRequestResult {

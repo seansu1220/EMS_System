@@ -486,6 +486,118 @@ function queryPage(params) {
     return result;
   }
 
+  if (params.mode === 'rowsByColumnValue' || params.mode === 'clickRowButton') {
+    // 找出「某一欄的值等於指定值」的那幾列，並取出**同一列裡面的**那顆按鈕。
+    //
+    // 這是「線上使用狀況」刪除佔用紀錄的定位方式，也是全檔最不能出錯的一段：
+    // 刪錯一列就是把別人的紀錄放掉，而且不可復原。因此定位只認**同一個 `<tr>`**，
+    // 不靠序號、不靠 id——那一頁每顆刪除鈕的 id 都是 `_btnDelete`，完全一樣。
+    const wantedValue = normalize(params.value);
+    const columnWanted = params.columnCandidates.map(normalize);
+    const buttonWanted = params.buttonTexts.map(normalize);
+    const textOf = (cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim();
+
+    /** 找出含有目標欄位的那張表（一頁可能有多張表，版面表也算在內）。 */
+    const findTarget = () => {
+      for (const table of document.querySelectorAll('table')) {
+        const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+        if (!headerRow) continue;
+        const headers = [...headerRow.cells].map(textOf);
+        // 欄名用**完全相等**比對：用「包含」的話「TEMSIS」會同時命中別的欄。
+        const columnIndex = headers.findIndex((header) => columnWanted.includes(normalize(header)));
+        if (columnIndex < 0) continue;
+        return { table, headerRow, headers, columnIndex };
+      }
+      return null;
+    };
+
+    // 比對值是空的時候**一律當成找不到**。不擋的話，空字串會與每個空儲存格相等，
+    // 於是「剛好一列相符」有可能成立在一列根本沒填編號的資料上——那就是刪錯列。
+    if (wantedValue === '') {
+      return params.mode === 'clickRowButton'
+        ? { clicked: false, reason: 'notFound', matches: [], scanned: 0 }
+        : { found: true, headers: [], matches: [], scanned: 0 };
+    }
+
+    const target = findTarget();
+    if (!target) {
+      // 找不到那一欄時回報這一頁實際有哪些欄名，才知道是不是欄位改名了。
+      const allHeaders = [...document.querySelectorAll('table')]
+        .map((table) => [...table.querySelectorAll('th')].map(textOf).filter(Boolean))
+        .filter((headers) => headers.length > 0)
+        .map((headers) => headers.join('｜'));
+      return { found: false, reason: 'noColumn', headers: [], tableHeaders: allHeaders, matches: [], scanned: 0 };
+    }
+
+    const { table, headerRow, headers, columnIndex } = target;
+    const matches = [];
+    let scanned = 0;
+    for (const row of table.rows) {
+      if (row === headerRow) continue;
+      if (scanned >= params.maxRows) break;
+      scanned += 1;
+      const cells = [...row.cells];
+      // 欄數不足的列（跨欄的「查無資料」、分頁列等）直接略過：
+      // 不擋的話讀 undefined 的 textContent 會整個 evaluate 拋錯，連掃描結果都拿不到。
+      if (!cells[columnIndex]) continue;
+      if (normalize(textOf(cells[columnIndex])) !== wantedValue) continue;
+
+      // 同一列裡面的那顆按鈕——**不是**整頁第幾顆。
+      const button = [...row.querySelectorAll('input, button, a, img, [onclick]')].find((element) => {
+        const type = (element.getAttribute('type') || '').toLowerCase();
+        if (element.tagName === 'INPUT' && !['submit', 'button', 'image', 'reset'].includes(type)) {
+          return false;
+        }
+        return buttonWanted.includes(normalize(labelOf(element)));
+      });
+
+      // ⚠ 個資：只帶回呼叫端指定的那幾欄，其餘儲存格（使用者帳號、裝置ID…）一律不外流。
+      const values = {};
+      for (const wanted of params.wantedHeaders) {
+        const index = headers.findIndex((header) => normalize(header).includes(normalize(wanted)));
+        if (index >= 0 && cells[index] !== undefined) values[wanted] = textOf(cells[index]).slice(0, 40);
+      }
+
+      matches.push({
+        rowIndex: [...table.rows].indexOf(row),
+        hasButton: Boolean(button),
+        // 第三道閘：這一頁的按鈕 `onclick` 自帶該列資料（以 `(^w^)` 分隔），
+        // 按下去之前確認它真的寫著這組編號。按鈕自證身分比任何外部推論都可靠。
+        buttonSelfIdentifies: button
+          ? normalize(button.getAttribute('onclick') || '').includes(wantedValue)
+          : false,
+        values,
+        button,
+      });
+    }
+
+    const describeMatches = matches.map((item) => ({
+      rowIndex: item.rowIndex,
+      hasButton: item.hasButton,
+      buttonSelfIdentifies: item.buttonSelfIdentifies,
+      values: item.values,
+    }));
+
+    if (params.mode === 'rowsByColumnValue') {
+      return { found: true, headers, matches: describeMatches, scanned };
+    }
+
+    // mode === 'clickRowButton'：**定位與按下在同一次頁面執行內完成**，
+    // 中間沒有任何空隙讓畫面重排、讓列的順序改變。三個條件全成立才動手。
+    if (matches.length !== 1) {
+      return { clicked: false, reason: matches.length === 0 ? 'notFound' : 'notUnique',
+        matches: describeMatches, scanned };
+    }
+    const only = matches[0];
+    if (!only.hasButton) return { clicked: false, reason: 'noButton', matches: describeMatches, scanned };
+    if (!only.buttonSelfIdentifies) {
+      return { clicked: false, reason: 'buttonMismatch', matches: describeMatches, scanned };
+    }
+    only.button.scrollIntoView({ block: 'center' });
+    only.button.click();
+    return { clicked: true, matches: describeMatches, scanned };
+  }
+
   if (params.mode === 'pairs') {
     // 把「紀錄連結」與「解鎖按鈕」以所在的表格列配對。
     // 純粹靠序號配對很危險（順序未必一致），同一列才能確定是同一張紀錄表。
@@ -872,5 +984,69 @@ export async function findPairedRows(frame, recordTexts, unlockTexts, options = 
     unlockTexts,
     recordExact: options.recordExact ?? false,
     unlockExact: options.unlockExact ?? false,
+  });
+}
+
+/**
+ * @typedef {Object} RowMatch
+ * @property {number} rowIndex 這一列在表格中的位置（僅供人核對，不拿來當定位依據）
+ * @property {boolean} hasButton 同一列裡有沒有那顆按鈕
+ * @property {boolean} buttonSelfIdentifies 那顆按鈕的 `onclick` 是否自己寫著這組值
+ * @property {Record<string,string>} values 指定欄位的值（其餘儲存格不外流）
+ */
+
+/**
+ * 找出「某一欄的值等於指定值」的那幾列。
+ *
+ * 與 {@link findRowsWithColumnValue} 的差別：那個是「這一欄有沒有值／含不含某字樣」，
+ * 這個是「這一欄**正好等於**某個編號」，而且會一併回報**同一列裡**有沒有指定的按鈕。
+ * 用途是線上使用狀況頁「找出該刪哪一列」。
+ *
+ * ⚠ 個資：只回傳 `wantedHeaders` 指定的欄位值，使用者帳號、裝置ID 等一律不帶出去。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {{value: string, columnCandidates: string[], buttonTexts: string[],
+ *   wantedHeaders?: string[], maxRows?: number}} options
+ *   `columnCandidates` 以**完全相等**比對欄名（用包含的話 `TEMSIS` 會誤中別欄）
+ * @returns {Promise<{found: boolean, reason?: string, headers: string[],
+ *   tableHeaders?: string[], matches: RowMatch[], scanned: number}>}
+ *   `found` 為 false 代表**連那一欄都找不到**（版面改了），與「找得到欄位但沒有相符的列」
+ *   是兩件事，呼叫端必須分開處理。
+ */
+export async function findRowsByColumnValue(frame, options) {
+  return frame.evaluate(queryPage, {
+    mode: 'rowsByColumnValue',
+    value: options.value,
+    columnCandidates: options.columnCandidates,
+    buttonTexts: options.buttonTexts,
+    wantedHeaders: options.wantedHeaders ?? [],
+    maxRows: options.maxRows ?? 500,
+  });
+}
+
+/**
+ * 按下「某一欄的值等於指定值」那一列裡面的按鈕。
+ *
+ * ⚠ **這是不可復原的動作，因此定位與按下必須在同一次頁面執行內完成**：
+ * 先找再按會留下一個空隙，萬一期間畫面重排（這套系統整頁重送很常見），
+ * 按下去的就可能是別一列。三個條件全成立才會動手：
+ *   1. 相符的列**剛好一列**（0 列或 2 列以上一律不動手）
+ *   2. 那一列裡面**有**指定的按鈕
+ *   3. 那顆按鈕的 `onclick` **自己寫著**這組值
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {{value: string, columnCandidates: string[], buttonTexts: string[],
+ *   wantedHeaders?: string[], maxRows?: number}} options
+ * @returns {Promise<{clicked: boolean, reason?: 'notFound'|'notUnique'|'noButton'|'buttonMismatch',
+ *   matches: RowMatch[], scanned: number}>}
+ */
+export async function clickRowButtonByColumnValue(frame, options) {
+  return frame.evaluate(queryPage, {
+    mode: 'clickRowButton',
+    value: options.value,
+    columnCandidates: options.columnCandidates,
+    buttonTexts: options.buttonTexts,
+    wantedHeaders: options.wantedHeaders ?? [],
+    maxRows: options.maxRows ?? 500,
   });
 }

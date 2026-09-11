@@ -623,7 +623,7 @@ test('「本來就沒鎖」要與「需要你接手」分開算，不可以混�
   ];
   const text = capturePrinted(() => printUnlockSummary(outcomes, { dryRun: false }));
   assert.match(text, /已解鎖 3 筆/);
-  assert.match(text, /本來就沒鎖 1 筆/);
+  assert.match(text, /本來就沒鎖也沒被佔用 1 筆/);
   assert.match(text, /需要你接手 0 筆/);
   // 全部都正常時，不可以再叫使用者去人工處理。
   assert.doesNotMatch(text, /請自行到系統處理/);
@@ -668,16 +668,16 @@ test('正式解鎖後要單獨列出「這次到底動了哪幾件」', () => {
     console.error = originalError;
   }
   const text = printed.join('\n');
-  assert.match(text, /解鎖清單/);
+  assert.match(text, /實際動過的案件/);
   assert.match(text, /2026\/08\/01 05:05:03/, '清單要有案件日期時間');
   assert.match(text, /中壢92（中壢分隊）/, '清單要有車輛與分隊');
   assert.match(text, /第 1 張紀錄表/, '清單要說明是第幾張');
   // 沒動到的那筆不可以混進「動過的清單」裡。
-  const list = text.slice(text.indexOf('解鎖清單'));
+  const list = text.slice(text.indexOf('實際動過的案件'));
   assert.doesNotMatch(list, /09:15:33/, '沒解鎖的案件不可以出現在解鎖清單中');
 });
 
-test('試跑不會印出解鎖清單，並明說沒有任何案件被解鎖', () => {
+test('試跑不會印出動過的清單，並明說沒有任何案件被解鎖', () => {
   const printed = [];
   const originalLog = console.log;
   const originalError = console.error;
@@ -694,4 +694,59 @@ test('試跑不會印出解鎖清單，並明說沒有任何案件被解鎖', ()
   const text = printed.join('\n');
   assert.doesNotMatch(text, /解鎖清單/);
   assert.match(text, /沒有任何案件被實際解鎖/);
+});
+
+test('解除線上佔用要算成功、單獨報一個數字，並列進動過的清單', () => {
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (text) => printed.push(String(text));
+  console.error = (text) => printed.push(String(text));
+  try {
+    printUnlockSummary([
+      {
+        temsis: 'T115070100021',
+        status: '已解除佔用',
+        detail: '紀錄表本來就沒有鎖頭，是被線上使用佔用著',
+        caseDate: '2026/09/11 08:10:00',
+        vehicle: '中路92',
+        usageOccupiedAt: '2026/09/11 09:59:22',
+      },
+      {
+        temsis: 'T115070100022',
+        status: '無需處理',
+        detail: '兩邊都沒事',
+        caseDate: '2026/09/11 08:20:00',
+      },
+    ], { dryRun: false });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const text = printed.join('\n');
+  assert.match(text, /解除線上佔用 1 筆/, '第二條路徑要單獨報一個數字');
+  assert.match(text, /需要你接手 0 筆/, '解除佔用是成功，不可以混進「需要你接手」');
+  const list = text.slice(text.indexOf('實際動過的案件'));
+  assert.match(list, /解除線上佔用/, '動過的清單要列出它，並說明動的是哪一種');
+  assert.match(list, /2026\/09\/11 09:59:22/, '要寫出從什麼時候被佔用著，供事後核對');
+  assert.doesNotMatch(list, /08:20:00/, '沒動到的那筆不可以混進來');
+});
+
+test('試跑定位到線上佔用時不算動過，也不可以算成需要接手', () => {
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (text) => printed.push(String(text));
+  console.error = (text) => printed.push(String(text));
+  try {
+    printUnlockSummary([
+      { temsis: 'T115070100023', status: '已定位佔用', detail: '會刪掉這一列' },
+    ], { dryRun: true });
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const text = printed.join('\n');
+  assert.match(text, /定位到線上佔用 1 筆/);
+  assert.match(text, /需要你接手 0 筆/, '試跑定位成功不是「有問題」');
 });

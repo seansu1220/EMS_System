@@ -29,6 +29,7 @@ import {
 import { UNLOCK } from './config.mjs';
 import { log, prompt, startLineBuffering, stopLineBuffering } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
+import { clearOnlineUsage } from './onlineUsage.mjs';
 import {
   findPageMarker,
   clickMatch,
@@ -49,8 +50,11 @@ import {
 /**
  * @typedef {Object} UnlockOutcome
  * @property {string} temsis 使用者輸入的 TEMSIS（顯示時會遮蔽）
- * @property {'已解鎖'|'已定位'|'無需處理'|'查無案件'|'需人工處理'|'失敗'} status
- *   `無需處理`＝那張紀錄表**本來就沒有鎖頭**（已是未結案），不是失敗也不必人工介入；
+ * @property {'已解鎖'|'已定位'|'已解除佔用'|'已定位佔用'|'無需處理'|'查無案件'
+ *   |'需人工處理'|'失敗'} status
+ *   `已解除佔用`＝紀錄表沒有鎖頭，卡住的原因是**被線上使用佔用**，已刪掉那筆佔用紀錄
+ *   （第二種解鎖路徑，見 `onlineUsage.mjs`）；`已定位佔用`＝試跑模式下找到了該刪的那一列；
+ *   `無需處理`＝紀錄表沒有鎖頭，**而且線上使用狀況裡也沒有佔用紀錄**，這筆真的不用動；
  *   `需人工處理`＝**真的卡住了**，程式無法判斷該解哪一張，要人接手。兩者必須分開，
  *   否則「跑得好好的」與「出問題了」會混在同一個數字裡（使用者 2026-08-06 指正）。
  * @property {string} detail 給人看的說明
@@ -59,6 +63,8 @@ import {
  * @property {string|null} [caseDate] 案件日期（供事後追查，抓不到為 null）
  * @property {string|null} [vehicle] 該張紀錄表的派遣車輛（供事後追查，抓不到為 null）
  * @property {string|null} [squad] 該張紀錄表的派遣分隊
+ * @property {string|null} [usageOccupiedAt] 線上使用狀況那一列的日期（這筆從什麼時候被佔用著）；
+ *   只有走第二條路徑時才會有值
  */
 
 /**
@@ -589,6 +595,40 @@ async function unlockLocatedTarget(page, outcome) {
 }
 
 /**
+ * 紀錄表沒有鎖頭時的第二條路徑：去線上使用狀況把佔用紀錄刪掉。
+ *
+ * 為什麼要接這一段：舊版判到「沒有鎖頭」就回報「無需處理」收工，但那句話只說對一半。
+ * 案件確實已是未結案，分隊卻還是進不去改——因為紀錄表**被某台裝置佔用著**。
+ * 不接這一段的話，工單會以「不需解鎖」結案，申請人卻仍然改不了
+ * （使用者 2026-09-11 指出）。
+ *
+ * 這一步失敗不可以讓整筆變成「失敗」：原本的判斷（紀錄表沒鎖頭）仍然成立且有價值，
+ * 因此只把狀態降成「需人工處理」，並如實寫下卡在哪裡。
+ *
+ * @param {UnlockOutcome} outcome 會被就地更新
+ */
+async function applyOnlineUsageFallback(context, page, temsis, outcome, options) {
+  const noLockNote = outcome.detail;
+  try {
+    const usage = await clearOnlineUsage(context, page, temsis, { dryRun: options.dryRun });
+    outcome.status = usage.status;
+    // 原本那句「哪幾張沒鎖頭」要留著：那是管理員事後追查的線索，
+    // 被第二段蓋掉的話，工單上就只剩「解除了佔用」，看不出當初是怎麼判斷的。
+    outcome.detail = `${noLockNote}；${usage.detail}`;
+    outcome.usageOccupiedAt = usage.occupiedAt;
+    // 案件內部讀不到車輛時（沒有鎖頭那條路本來就不一定讀得到），
+    // 拿線上使用狀況那一列的救護車補上，事後才有東西可以核對。
+    if (!outcome.vehicle && usage.vehicle) outcome.vehicle = usage.vehicle;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log.warn(`${maskCode(temsis)}：查線上使用狀況時出了狀況——${reason}`);
+    outcome.status = '需人工處理';
+    outcome.detail = `${noLockNote}；接著要查「線上使用狀況」有沒有佔用紀錄時卡住了：`
+      + `${reason}。請自行到系統確認`;
+  }
+}
+
+/**
  * 處理一筆 TEMSIS。
  * @param {{dryRun: boolean}} options dryRun＝true 時只定位，不按下解鎖
  * @returns {Promise<UnlockOutcome>}
@@ -624,6 +664,13 @@ async function processTemsis(context, page, temsis, range, options) {
     // 只有明確定位到目標才會動手；其餘狀態一律略過，交給人處理。
     if (outcome.status === '已定位' && !options.dryRun) {
       await unlockLocatedTarget(page, outcome);
+    }
+    // 紀錄表沒有鎖頭時**還沒完**：卡住的原因可能是被線上使用佔用著，
+    // 要再去「系統設定 → 線上使用狀況」把那筆佔用紀錄刪掉才放得開
+    // （使用者 2026-09-11 指定）。這一步會把畫面帶離案件內部，因此**一定要放在
+    // 讀完車輛與分隊之後**，否則那兩個欄位就讀不到了。
+    if (outcome.status === '無需處理') {
+      await applyOnlineUsageFallback(context, page, temsis, outcome, options);
     }
     return outcome;
   } catch (error) {
@@ -719,6 +766,18 @@ export async function runUnlockFlow(session, options) {
 }
 
 /**
+ * 「這一筆算是順利完成」的狀態。
+ *
+ * 兩條解鎖路徑各有「真的動手」與「試跑定位」兩種結局，共四個狀態。
+ * 集中定義一次，摘要的顏色與解鎖清單才不會各判各的
+ * （漏掉其中一個，順利的案件會被塗成警告色，看起來像出了事）。
+ */
+const SUCCESS_STATUSES = new Set(['已解鎖', '已定位', '已解除佔用', '已定位佔用']);
+
+/** 實際改動了系統資料的狀態（試跑不會出現這兩個）。 */
+const APPLIED_STATUSES = new Set(['已解鎖', '已解除佔用']);
+
+/**
  * 把結果整理成終端機摘要。
  *
  * 每一列都帶上案件日期與出勤車輛：使用者無法逐筆人工比對，
@@ -740,7 +799,7 @@ export function printUnlockSummary(outcomes, options = {}) {
       : outcome.squad ?? '車輛讀不到';
     const line = `${pad(outcome.caseDate ?? '日期讀不到', 22)}${pad(vehicle, 20)}`
       + `${maskCode(outcome.temsis)}　${outcome.status}　${outcome.detail}`;
-    if (outcome.status === '已解鎖' || outcome.status === '已定位') log.ok(line);
+    if (SUCCESS_STATUSES.has(outcome.status)) log.ok(line);
     // 「無需處理」是正常結果（那張本來就沒鎖），用一般訊息呈現，不擺成警告。
     else if (outcome.status === '無需處理') log.info(line);
     else log.warn(line);
@@ -749,22 +808,29 @@ export function printUnlockSummary(outcomes, options = {}) {
   const countOf = (status) => outcomes.filter((item) => item.status === status).length;
   const unlocked = countOf('已解鎖');
   const located = countOf('已定位');
+  const usageCleared = countOf('已解除佔用');
+  const usageLocated = countOf('已定位佔用');
   const noAction = countOf('無需處理');
   // 「需要人接手的」＝扣掉成功的、也扣掉本來就沒鎖的。這個數字才代表「有問題」，
   // 混進「本來就沒鎖」會讓一次順利的執行看起來像是出了狀況（使用者 2026-08-06 指正）。
-  const needsAttention = outcomes.length - unlocked - located - noAction;
-  const noActionNote = noAction > 0 ? `、本來就沒鎖 ${noAction} 筆（不需動作）` : '';
+  const needsAttention =
+    outcomes.length - unlocked - located - usageCleared - usageLocated - noAction;
+  const noActionNote = noAction > 0 ? `、本來就沒鎖也沒被佔用 ${noAction} 筆（不需動作）` : '';
+  // 第二條路徑（刪線上使用佔用）另外報一個數字：它跟「按調整為未結案」是兩回事，
+  // 併在同一個數字裡的話，事後要回頭核對會分不出到底動了哪一種。
+  const usageNote = usageCleared > 0 ? `、解除線上佔用 ${usageCleared} 筆` : '';
+  const usageDryNote = usageLocated > 0 ? `、定位到線上佔用 ${usageLocated} 筆` : '';
 
   if (options.dryRun) {
     log.info(
-      `共 ${outcomes.length} 筆：定位成功 ${located} 筆${noActionNote}`
+      `共 ${outcomes.length} 筆：定位成功 ${located} 筆${usageDryNote}${noActionNote}`
         + `、需要你接手 ${needsAttention} 筆`,
     );
     log.warn('本次為試跑，沒有任何案件被實際解鎖。');
     return;
   }
   log.info(
-    `共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆${noActionNote}`
+    `共 ${outcomes.length} 筆：已解鎖 ${unlocked} 筆${usageNote}${noActionNote}`
       + `、需要你接手 ${needsAttention} 筆`,
   );
   printUnlockedList(outcomes);
@@ -782,23 +848,40 @@ export function printUnlockSummary(outcomes, options = {}) {
  * @param {UnlockOutcome[]} outcomes
  */
 function printUnlockedList(outcomes) {
-  const unlocked = outcomes.filter((item) => item.status === '已解鎖');
-  if (unlocked.length === 0) {
+  const applied = outcomes.filter((item) => APPLIED_STATUSES.has(item.status));
+  if (applied.length === 0) {
     log.warn('這次沒有任何案件被實際解鎖。');
     return;
   }
-  log.step(`解鎖清單（實際按下「${UNLOCK.buttonTexts.unlock[0]}」的有 ${unlocked.length} 筆）`);
-  for (const [position, outcome] of unlocked.entries()) {
+  log.step(`實際動過的案件（${applied.length} 筆）`);
+  for (const [position, outcome] of applied.entries()) {
     const vehicle = outcome.vehicle
       ? `${outcome.vehicle}${outcome.squad ? `（${outcome.squad}）` : ''}`
       : outcome.squad ?? '車輛讀不到';
-    const sheet = typeof outcome.recordIndex === 'number' && outcome.recordIndex >= 0
-      ? `第 ${outcome.recordIndex + 1} 張紀錄表`
-      : '紀錄表張次不明';
     log.info(
-      `${position + 1}. ${outcome.caseDate ?? '日期讀不到'}　${vehicle}　${sheet}`
+      `${position + 1}. ${outcome.caseDate ?? '日期讀不到'}　${vehicle}　${describeAction(outcome)}`
         + `　TEMSIS ${maskCode(outcome.temsis)}`,
     );
   }
   log.info('以上是這次唯一被修改的案件，請自行到系統核對。');
+}
+
+/**
+ * 一筆到底動了什麼——兩條解鎖路徑改的是不同的東西，清單上必須分得出來。
+ *
+ * 「按調整為未結案」改的是案件狀態，「刪線上使用」放掉的是裝置佔用；
+ * 事後回系統核對時要找的地方不一樣，混在一起寫會害人找錯地方。
+ *
+ * @param {UnlockOutcome} outcome
+ * @returns {string}
+ */
+function describeAction(outcome) {
+  if (outcome.status === '已解除佔用') {
+    const since = outcome.usageOccupiedAt ? `，佔用時間 ${outcome.usageOccupiedAt}` : '';
+    return `解除線上佔用${since}`;
+  }
+  const sheet = typeof outcome.recordIndex === 'number' && outcome.recordIndex >= 0
+    ? `第 ${outcome.recordIndex + 1} 張紀錄表`
+    : '紀錄表張次不明';
+  return `${UNLOCK.buttonTexts.unlock[0]}（${sheet}）`;
 }
