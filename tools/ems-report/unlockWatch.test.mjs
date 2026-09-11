@@ -13,7 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runUnlockWatch, refreshQueryRange } from './unlockWatch.mjs';
+import { runUnlockWatch, refreshQueryRange, isHandledOutcome } from './unlockWatch.mjs';
 import { UNLOCK } from './config.mjs';
 
 /** 假的工作階段：只需要一個能被等待的 page。 */
@@ -185,4 +185,24 @@ test('同一天之內重複呼叫，查詢期間不會亂跳', () => {
   const first = refreshQueryRange(session, new Date(2026, 8, 10, 8, 0));
   const second = refreshQueryRange(session, new Date(2026, 8, 10, 17, 30));
   assert.deepEqual(second, first);
+});
+
+test('兩條解鎖路徑的成功狀態都算「真的處理到了」', () => {
+  // 漏掉任何一個的後果：那一筆會被當成「看起來失敗」去多做一次登入檢查，
+  // 檢查沒過就退回待處理且不寫結果——但事情已經做了，而且不可復原。
+  assert.equal(isHandledOutcome('已解鎖'), true, '按「調整為未結案」那條路');
+  assert.equal(isHandledOutcome('已解除佔用'), true, '刪線上使用佔用那條路（2026-09-11 漏過）');
+  assert.equal(isHandledOutcome('無需處理'), true, '兩邊都沒事也是正常結局');
+});
+
+test('看起來失敗的狀態要留著被登入檢查攔下', () => {
+  // 這幾種都可能只是「根本沒登入」造成的假象，不可以直接寫成失敗。
+  for (const status of ['查無案件', '需人工處理', '失敗']) {
+    assert.equal(isHandledOutcome(status), false, status + ' 必須再確認一次登入');
+  }
+});
+
+test('試跑才有的狀態不算處理到了（監看一律正式模式，出現它們代表有別的問題）', () => {
+  assert.equal(isHandledOutcome('已定位'), false);
+  assert.equal(isHandledOutcome('已定位佔用'), false);
 });

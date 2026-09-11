@@ -84,6 +84,29 @@ export function refreshQueryRange(session, now = new Date()) {
 }
 
 /**
+ * 這一筆是不是**真的處理到了**（純函式，方便測試）。
+ *
+ * 用途：決定要不要多花一次登入檢查。不在這個名單裡的狀態
+ * （查無案件、需人工處理…）都有可能是**登入掉了**造成的假象，
+ * 那種情況必須把工單退回待處理，不可以寫成失敗。
+ *
+ * ⚠ **新增解鎖路徑時務必同步把它的成功狀態加進來**（2026-09-11 踩到）：
+ * 第二條路徑的 `已解除佔用` 一開始漏在這裡，於是一筆**已經把佔用紀錄刪掉**的工單，
+ * 只要那一瞬間登入檢查沒過就會被退回待處理、結果也不寫——
+ * 刪除已經發生而且不可復原，網頁上卻看不到，下一輪還會再跑一次。
+ *
+ * 試跑才會出現的狀態（`已定位`／`已定位佔用`）刻意不列入：
+ * 監看一律以正式模式跑（`dryRun: false`），真的出現它們代表有別的地方不對勁，
+ * 這時多檢查一次登入反而是對的。
+ *
+ * @param {string} status `UnlockOutcome.status`
+ * @returns {boolean}
+ */
+export function isHandledOutcome(status) {
+  return status === '已解鎖' || status === '已解除佔用' || status === '無需處理';
+}
+
+/**
  * 處理一批工單，逐筆回寫。
  *
  * **掉線時不可以把案件寫成失敗**：那種「查無案件」是因為根本沒登入，
@@ -101,7 +124,7 @@ export async function processBatch(session, queue, requests) {
     onCaseStart: (_temsis, index) => markRunning(queue, requests[index].id),
     onCaseDone: async (outcome, index) => {
       // 只有「看起來失敗」時才多花一次檢查，成功的案件不必浪費時間。
-      if (outcome.status !== '已解鎖' && outcome.status !== '無需處理') {
+      if (!isHandledOutcome(outcome.status)) {
         if (!(await isSignedIn(session.page))) {
           log.warn(`　登入已掉線，這一筆沒有真的處理到，退回待處理：${maskCode(outcome.temsis)}`);
           await resetToPending(queue, requests[index].id);
