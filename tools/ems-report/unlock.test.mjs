@@ -57,6 +57,9 @@ test('唯一那張沒有鎖頭時不可以按「調整為未結案」，要交�
   });
   assert.equal(outcome.status, '無需處理');
   assert.match(outcome.detail, /都沒有鎖頭/);
+  // 只有一張時它必定就是目標，記下位置後面才讀得到車輛與分隊
+  // （2026-09-13 實跑時結果顯示「車輛讀不到」）。
+  assert.equal(outcome.recordIndex, 0);
 });
 
 test('找不到解鎖按鈕時回報需人工處理', async () => {
@@ -563,6 +566,8 @@ test('整件案子都沒有鎖頭時，明說沒有需要解鎖的對象', async
   // 一次順利的執行會看起來像是出了狀況（使用者 2026-08-06 指正）。
   assert.equal(outcome.status, '無需處理');
   assert.match(outcome.detail, /都沒有鎖頭/);
+  // 兩張都沒鎖頭時無從確定是哪一張，不可以隨便挑一張去讀車輛。
+  assert.equal(outcome.recordIndex, undefined, '多張時不可以猜是哪一張');
 });
 
 test('有鎖頭的都比對過都不相符、其餘本來就沒鎖時，是「無需處理」不是「卡住了」', async () => {

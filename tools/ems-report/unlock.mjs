@@ -382,6 +382,10 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
       temsis,
       status: '無需處理',
       detail: `案件內 ${paired.recordCount} 張紀錄表都沒有鎖頭（已是未結案），不需要解鎖`,
+      // 只有一張時，那一張必定就是這個 TEMSIS 的紀錄表，記下它的位置，
+      // 後面才會從案件內部那一列讀出車輛與分隊（使用者 2026-09-13 指出結果顯示「車輛讀不到」）。
+      // 多張時無從確定是哪一張——沒鎖頭的點下去是編輯畫面、讀不到 TEMSIS——因此不猜。
+      ...(paired.recordCount === 1 ? { recordIndex: paired.pairs[0].recordIndex } : {}),
     };
   }
 
@@ -747,10 +751,16 @@ export async function promptTemsisList() {
  */
 export async function runUnlockFlow(session, options) {
   const { temsisList, range, dryRun = false, onCaseStart, onCaseDone } = options;
+  // 開頭這幾行要把**兩條解鎖路徑**都講到（使用者 2026-09-13 指出）：
+  // 只寫「會按下調整為未結案」的話，看的人不會知道它也可能去刪線上使用狀況的紀錄。
+  const unlockButton = UNLOCK.buttonTexts.unlock[0];
+  const usageMenu = UNLOCK.onlineUsage.menuText;
   if (dryRun) {
-    log.step(`試跑模式：只找出「該解哪一張」，不會按下「${UNLOCK.buttonTexts.unlock[0]}」`);
+    log.step(`試跑模式：只找出該怎麼解，不會按下「${unlockButton}」，也不會刪除「${usageMenu}」的紀錄`);
   } else {
-    log.step(`正式模式：定位到目標後會**實際按下**「${UNLOCK.buttonTexts.unlock[0]}」`);
+    log.step('正式模式：定位到目標後會**實際動手**');
+    log.info(`有鎖頭的案件：按下「${unlockButton}」`);
+    log.info(`沒鎖頭卻被佔用的案件：刪除「${usageMenu}」裡的那一列`);
     log.info('定位不明確的案件一律略過，不會亂解。每筆都會記下案件日期與出勤車輛供事後核對。');
   }
   log.info(`查詢期間：${range.start} ~ ${range.end}（${range.label}）`);
