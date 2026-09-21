@@ -143,18 +143,44 @@ service cloud.firestore {
     //
     // 號碼 H00T000 ~ H99T999（流水號 0 ~ 99999）全系統接續發放：
     //   - triageTagCounter/main：{ nextSerial } 下一個要發的流水號
-    //   - triageTagIssues/{起始流水號}：一次領取一筆 { startSerial, count, requestedBy, ... }
-    // 兩份文件必須在**同一個 transaction** 裡一起寫，規則用 getAfter 互相核對：
+    //   - triageTagIssues/{起始流水號}：一次領取一筆 { startSerial, count, unit, weekIndex, requestedBy, ... }
+    //   - triageTagUnitWeeks/{週序}_{單位}：某單位這一週已領幾張 { unit, weekIndex, used }（v1.22 起）
+    // 三份文件必須在**同一個 transaction** 裡一起寫，規則用 getAfter 互相核對：
     //   - 領取紀錄的起始號＝計數器原本的下一號（不能自己挑號碼、不能重複領）
     //   - 計數器往後推的張數＝領取紀錄的張數（不能偷跳號，也不能只推計數器不留紀錄）
+    //   - 單位本週用量加上的張數＝領取紀錄的張數，且不超過每週上限 20 張
+    //   - 單位必須是「兩個中文字＋分隊」，週序必須是伺服器時間的這一週
     // 三種角色（含解鎖專用）只要已核准都能領。
-    // ⚠️ 單次上限 100 須與 src/config/triageTag.ts 的 TRIAGE_TAG_MAX_PER_REQUEST 一致。
+    // ⚠️ 單次上限 100 須與 src/config/triageTag.ts 的 TRIAGE_TAG_MAX_PER_REQUEST 一致；
+    //    每週 20 張須與 TRIAGE_TAG_UNIT_WEEKLY_LIMIT 一致；單位格式須與 TRIAGE_TAG_UNIT_PATTERN 一致。
     function triageCounterPath() {
       return /databases/$(database)/documents/triageTagCounter/main;
     }
 
     function triageIssuePath(startSerial) {
       return /databases/$(database)/documents/triageTagIssues/$(string(startSerial));
+    }
+
+    function triageUnitWeekPath(weekIndex, unit) {
+      return /databases/$(database)/documents/triageTagUnitWeeks/$(string(weekIndex) + '_' + unit);
+    }
+
+    // 伺服器時間的「第幾週」（台灣時間 UTC+8、週一起算）。
+    // ⚠️ 須與 src/lib/triageTagNumber.ts 的 triageTagWeekIndex() 算法一致：
+    //    1970-01-01 是星期四，本地日序 + 3 再除以 7，剛好在每個週一跳號。
+    function triageWeekIndex() {
+      // math.floor 回傳的是小數（2960.0），組文件 ID 前一定要轉成整數，否則會變成「2960.0_大湳分隊」。
+      let localDay = int(math.floor((request.time.toMillis() + 28800000) / 86400000));
+      return int(math.floor((localDay + 3) / 7));
+    }
+
+    function triageUnitValid(unit) {
+      return unit is string && unit.matches('^\\p{Han}{2}分隊$');
+    }
+
+    // 這一筆寫入裡「新建」了起始號為 startSerial 的領取紀錄（原本不存在、寫完存在）。
+    function triageIssueCreatedWith(startSerial) {
+      return !exists(triageIssuePath(startSerial)) && existsAfter(triageIssuePath(startSerial));
     }
 
     // 這次寫入之前，計數器上的下一號（還沒有計數器＝從 0 開始）。
@@ -166,13 +192,14 @@ service cloud.firestore {
       allow read: if isApproved();
 
       // 只准往後推，而且同一筆寫入裡必須新建一張對得上的領取紀錄。
+      // 計數器自己的舊值直接用 resource（少一次文件讀取；規則每次寫入能讀的文件數有上限）。
       allow create, update: if isApproved()
         && counterId == 'main'
         && request.resource.data.nextSerial is int
-        && !exists(triageIssuePath(triageNextBefore()))
-        && existsAfter(triageIssuePath(triageNextBefore()))
+        && triageIssueCreatedWith(resource == null ? 0 : resource.data.nextSerial)
         && request.resource.data.nextSerial
-          == triageNextBefore() + getAfter(triageIssuePath(triageNextBefore())).data.count;
+          == (resource == null ? 0 : resource.data.nextSerial)
+            + getAfter(triageIssuePath(resource == null ? 0 : resource.data.nextSerial)).data.count;
 
       // 刪掉計數器等於號碼從頭再發一次，一律禁止。
       allow delete: if false;
@@ -185,6 +212,11 @@ service cloud.firestore {
 
       allow create: if isApproved()
         && request.resource.data.requestedBy == request.auth.uid
+        && triageUnitValid(request.resource.data.unit)
+        && request.resource.data.weekIndex == triageWeekIndex()
+        // 單位本週用量必須在同一筆寫入裡被「這一張」紀錄更新過（加量的核對在 triageTagUnitWeeks 那一條）
+        && getAfter(triageUnitWeekPath(triageWeekIndex(), request.resource.data.unit)).data.lastStartSerial
+          == request.resource.data.startSerial
         && request.resource.data.startSerial is int
         && request.resource.data.count is int
         && request.resource.data.count >= 1
@@ -195,8 +227,33 @@ service cloud.firestore {
         && getAfter(triageCounterPath()).data.nextSerial
           == request.resource.data.startSerial + request.resource.data.count;
 
-      // 領取紀錄是號碼發放的帳本，發出去就不改；誤領的由管理員刪除紀錄（號碼不回收）。
+      // 領取紀錄是號碼發放的帳本（單位週用量的核對寫在 triageTagUnitWeeks 那一條），發出去就不改；誤領的由管理員刪除紀錄（號碼不回收）。
       allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // 單位週用量：只能隨著一張新的領取紀錄一起往上加，而且加的量＝那張紀錄的張數，
+    // 加完不超過每週 20 張。文件 ID 必須是「這一週的週序_單位」，不能改寫別週或別單位。
+    // lastStartSerial＝這次一起建立的領取紀錄起始號：領取紀錄那一條靠它確認用量真的有被加上去
+    // （只寫紀錄不動用量＝繞過上限）。刻意不在這裡重讀計數器——
+    // 規則每筆寫入能讀的文件數有上限（批次寫入 20 次），三份文件互相核對很容易超過。
+    match /triageTagUnitWeeks/{usageId} {
+      allow read: if isApproved();
+
+      allow create, update: if isApproved()
+        && triageUnitValid(request.resource.data.unit)
+        && request.resource.data.weekIndex == triageWeekIndex()
+        && usageId == string(triageWeekIndex()) + '_' + request.resource.data.unit
+        && request.resource.data.used is int
+        && request.resource.data.used <= 20
+        && request.resource.data.lastStartSerial is int
+        && triageIssueCreatedWith(request.resource.data.lastStartSerial)
+        && getAfter(triageIssuePath(request.resource.data.lastStartSerial)).data.unit
+          == request.resource.data.unit
+        && request.resource.data.used
+          == (resource == null ? 0 : resource.data.used)
+            + getAfter(triageIssuePath(request.resource.data.lastStartSerial)).data.count;
+
       allow delete: if isAdmin();
     }
   }

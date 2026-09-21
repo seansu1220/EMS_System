@@ -32,6 +32,29 @@ export const TRIAGE_TAG_TOTAL = 10 ** (TRIAGE_TAG_NUMBER.headDigits + TRIAGE_TAG
 export const TRIAGE_TAG_MAX_PER_REQUEST = 100;
 
 /**
+ * 同一個單位每週最多領幾張（使用者 2026-09-21 指定）。
+ * 「一週」是台灣時間**週一 00:00 ～ 週日 23:59**，每週一重新計算。
+ * ⚠ 須與 `firebase/firestore.rules` 的 triageTagUnitWeeks 規則上限一致。
+ */
+export const TRIAGE_TAG_UNIT_WEEKLY_LIMIT = 20;
+
+/**
+ * 單位名稱的格式：**兩個中文字＋「分隊」**（例：`大湳分隊`），不是這個格式不給領。
+ * 格式固定，同一個分隊才不會因為寫法不同（「大湳」「大湳隊」）被算成不同單位而繞過每週上限。
+ * ⚠ 須與 `firebase/firestore.rules` 的 triageUnitPattern() 一致。
+ */
+export const TRIAGE_TAG_UNIT_PATTERN = /^\p{Script=Han}{2}分隊$/u;
+
+/** 單位格式不對時給使用者看的說明。 */
+export const TRIAGE_TAG_UNIT_HINT = '單位請填「OO分隊」（兩個中文字＋分隊，例：大湳分隊）';
+
+/**
+ * 計算「第幾週」用的時區位移（台灣 UTC+8）。
+ * 安全規則用伺服器時間算同一個數字，兩邊必須一致。
+ */
+export const TRIAGE_TAG_WEEK_UTC_OFFSET_HOURS = 8;
+
+/**
  * 印製版面（單位：公釐）。
  *
  * 一張 A4 直式左右並排兩張傷票；每張傷票放在 105 × 297 的格子裡，

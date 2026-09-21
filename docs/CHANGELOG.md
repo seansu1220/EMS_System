@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-09-21　v1.42.0 測試用傷票：必填單位（OO分隊）、同單位每週最多 20 張
+
+### 問題描述
+使用者試用 v1.41.0 後提出三點：
+1. 測試時弄掉了幾份，**號碼要重新從 H00T000 開始**。
+2. 多一個**單位**欄位，格式必須是「OO分隊」，不符不給過；**同一單位一週最多 20 張**。
+3. 列印方式第 4 點（先印一張確認對齊）不需要，刪掉。
+
+### 根本原因
+1. 測試資料留在正式資料庫，計數器已經往後推了。
+2. v1.41.0 只有全系統號碼一個限制，沒有以單位為單位的用量控管。
+3. 使用者判斷該點多餘。
+
+### 修改的檔案與內容
+- **`src/config/triageTag.ts`**：新增 `TRIAGE_TAG_UNIT_WEEKLY_LIMIT`（20）、`TRIAGE_TAG_UNIT_PATTERN`
+  （`^\p{Script=Han}{2}分隊$`）、格式提示字、週序用的時區位移（UTC+8）。
+- **`src/lib/triageTagNumber.ts`**：新增 `triageTagWeekIndex()`（台灣時間、週一起算的週序）、
+  `describeTriageTagWeek()`（顯示「9/21（一）～ 9/27（日）」）、`validateTriageTagUnit()`。
+- **`src/services/triageTagService.ts`**：transaction 內多讀寫 `triageTagUnitWeeks/{週序}_{單位}`，
+  超過每週上限就擋；`validateTriageTagCount()` 多一個參數（單位本週已領張數）；
+  新增 `subscribeTriageTagUnitUsage()`。
+- **`src/types/triageTag.ts`、`src/config/constants.ts`**：領取紀錄加 `unit`／`weekIndex`，
+  新增 `TriageTagUnitWeekUsage` 型別與集合名稱。
+- **`src/pages/TriageTagPage.tsx`**：新增單位欄位（格式錯誤當場提示、停用送出；記住上次填的單位），
+  即時顯示「本週 OO分隊 已領 N / 20 張」；領取紀錄加「單位」欄；列印方式刪去第 4 點。
+- **`firebase/firestore.rules`**：新增 `triageTagUnitWeeks` 規則，並讓領取紀錄與它互相核對
+  （單位格式、伺服器時間的週序、用量加上的量＝紀錄張數、≤ 20）。
+  過程中踩到兩個坑：
+  - **規則的 `math.floor` 回傳小數**：組文件 ID 時變成 `2960.0_大湳分隊`，和前端的 `2960_大湳分隊`
+    對不上，每一次領取都被拒。改成 `int(math.floor(...))`。
+  - **規則每筆批次寫入最多讀 20 份文件**：三份文件互相核對很容易超過；
+    改成計數器與用量的舊值直接用 `resource`，用量文件多記 `lastStartSerial` 讓領取紀錄只需讀一次就能確認用量有更新。
+- **`scripts/rules.test.mjs`**：傷票測試改寫為 26 項（新增單位格式、每週上限、少記用量、
+  不寫用量、記到別週等情形），全部 **79/79 通過**。
+- **`docs/SPEC.md`**：更新 2.9、資料模型、安全規則。
+- **`package.json`**：版本 1.16.0。
+
+### 號碼歸零
+正式資料庫的 `triageTagCounter`、`triageTagIssues` 需清空才會從 H00T000 重新開始
+（見本次交付說明；清空由使用者確認後執行）。
+
+---
+
 ## 2026-09-21　v1.41.0 新增「測試用傷票領取」：接續發號、下載可雙面列印的 PDF
 
 ### 問題描述

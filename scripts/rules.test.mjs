@@ -16,8 +16,9 @@
  * 4. 一般使用者不可自行把自己改成 approved 或 admin（不可自我提權）。
  * 5. **解鎖專用帳號**（role == 'unlocker'）讀不到任何業務資料，
  *    解鎖工單只讀得到自己送的、不可回寫結果、不可冒用他人名義申請。
- * 6. **測試用傷票**：號碼只能接續往下領（計數器與領取紀錄必須一起寫、互相對得上），
- *    不能挑號碼、跳號、超過單次上限或冒名；解鎖專用帳號只讀得到自己的領取紀錄。
+ * 6. **測試用傷票**：號碼只能接續往下領（計數器、領取紀錄、單位週用量必須一起寫、互相對得上），
+ *    不能挑號碼、跳號或冒名；單位須為「OO分隊」且同單位每週最多 20 張；
+ *    解鎖專用帳號只讀得到自己的領取紀錄。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -435,15 +436,43 @@ await check(
   ),
 );
 
-// ── 6. 測試用傷票（計數器 + 領取紀錄必須一起寫、互相對得上）──
+// ── 6. 測試用傷票（計數器 + 領取紀錄 + 單位週用量必須一起寫、互相對得上）──
 
-/** 模擬前端的一次領取：計數器往後推，同時建立一筆領取紀錄。 */
-function allocateTags(db, { before, startSerial = before, count, advanceTo = before + count, requestedBy }) {
+/** 與 src/lib/triageTagNumber.ts 的 triageTagWeekIndex() 同算法（台灣時間、週一起算）。 */
+const THIS_WEEK = Math.floor((Math.floor((Date.now() + 8 * 3_600_000) / 86_400_000) + 3) / 7);
+
+/**
+ * 模擬前端的一次領取：計數器往後推、單位本週用量加上去，同時建立一筆領取紀錄。
+ * 各欄位都可以單獨竄改，用來測試規則擋不擋得住。
+ */
+function allocateTags(db, options) {
+  const {
+    before,
+    count,
+    requestedBy,
+    unit = '大湳分隊',
+    unitUsedBefore = 0,
+    startSerial = before,
+    advanceTo = before + count,
+    usedAfter = unitUsedBefore + count,
+    weekIndex = THIS_WEEK,
+    writeUsage = true,
+  } = options;
   const batch = writeBatch(db);
   batch.set(doc(db, 'triageTagCounter/main'), { nextSerial: advanceTo });
+  if (writeUsage) {
+    batch.set(doc(db, `triageTagUnitWeeks/${weekIndex}_${unit}`), {
+      unit,
+      weekIndex,
+      used: usedAfter,
+      lastStartSerial: startSerial,
+    });
+  }
   batch.set(doc(db, `triageTagIssues/${startSerial}`), {
     startSerial,
     count,
+    unit,
+    weekIndex,
     requestedBy,
     requestedByName: requestedBy,
     requestedAt: '2026-09-21T01:00:00.000Z',
@@ -452,36 +481,70 @@ function allocateTags(db, { before, startSerial = before, count, advanceTo = bef
 }
 
 await check(
-  '解鎖專用帳號可領第一批傷票（H00T000 起 10 張）',
+  '解鎖專用帳號可領第一批傷票（H00T000 起 10 張，大湳分隊）',
   assertSucceeds(allocateTags(unlocker, { before: 0, count: 10, requestedBy: 'unlocker-uid' })),
 );
 await check(
-  '一般使用者可接續領（H00T010 起 2 張）',
-  assertSucceeds(allocateTags(member, { before: 10, count: 2, requestedBy: 'member-uid' })),
+  '一般使用者可接續領（H00T010 起 2 張，同單位累計 12 張）',
+  assertSucceeds(allocateTags(member, { before: 10, count: 2, unitUsedBefore: 10, requestedBy: 'member-uid' })),
+);
+await check(
+  '同單位一週超過 20 張會被擋（已 12 張再領 9 張）',
+  assertFails(allocateTags(member, { before: 12, count: 9, unitUsedBefore: 12, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可少記單位用量（用量沒加上這次的張數）',
+  assertFails(allocateTags(member, { before: 12, count: 9, unitUsedBefore: 12, usedAfter: 12, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可不寫單位用量就領（繞過每週上限）',
+  assertFails(allocateTags(member, { before: 12, count: 9, unitUsedBefore: 12, writeUsage: false, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可把用量記到別的週（避開本週上限）',
+  assertFails(allocateTags(member, { before: 12, count: 9, weekIndex: THIS_WEEK - 1, requestedBy: 'member-uid' })),
+);
+await check(
+  '單位格式不是「OO分隊」會被擋',
+  assertFails(allocateTags(member, { before: 12, count: 1, unit: '大湳', requestedBy: 'member-uid' })),
+);
+await check(
+  '單位格式三個字加分隊也會被擋',
+  assertFails(allocateTags(member, { before: 12, count: 1, unit: '大湳湳分隊', requestedBy: 'member-uid' })),
+);
+await check(
+  '同單位剛好領滿 20 張可以（已 12 張再領 8 張）',
+  assertSucceeds(allocateTags(member, { before: 12, count: 8, unitUsedBefore: 12, requestedBy: 'member-uid' })),
+);
+await check(
+  '別的單位不受影響（龜山分隊領 5 張）',
+  assertSucceeds(allocateTags(member, { before: 20, count: 5, unit: '龜山分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '不可自己挑號碼（起始號不等於計數器的下一號）',
-  assertFails(allocateTags(member, { before: 12, startSerial: 50, count: 2, advanceTo: 52, requestedBy: 'member-uid' })),
+  assertFails(
+    allocateTags(member, { before: 25, startSerial: 50, count: 2, advanceTo: 52, unit: '八德分隊', requestedBy: 'member-uid' }),
+  ),
 );
 await check(
   '不可偷跳號（計數器推進的張數與紀錄不符）',
-  assertFails(allocateTags(member, { before: 12, count: 2, advanceTo: 30, requestedBy: 'member-uid' })),
+  assertFails(allocateTags(member, { before: 25, count: 2, advanceTo: 40, unit: '八德分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '不可只推計數器不留領取紀錄',
-  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 20 })),
-);
-await check(
-  '一次不可超過 100 張',
-  assertFails(allocateTags(member, { before: 12, count: 101, requestedBy: 'member-uid' })),
+  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 40 })),
 );
 await check(
   '不可冒用他人名義領取',
-  assertFails(allocateTags(member, { before: 12, count: 1, requestedBy: 'unlocker-uid' })),
+  assertFails(allocateTags(member, { before: 25, count: 1, unit: '八德分隊', requestedBy: 'unlocker-uid' })),
 );
 await check(
   '待審核帳號不可領傷票',
-  assertFails(allocateTags(pending, { before: 12, count: 1, requestedBy: 'pending-uid' })),
+  assertFails(allocateTags(pending, { before: 25, count: 1, unit: '八德分隊', requestedBy: 'pending-uid' })),
+);
+await check(
+  '任何已核准帳號讀得到單位本週用量',
+  assertSucceeds(getDoc(doc(unlocker, `triageTagUnitWeeks/${THIS_WEEK}_大湳分隊`))),
 );
 await check(
   '解鎖專用帳號讀得到自己的領取紀錄',
@@ -505,6 +568,10 @@ await check(
   assertFails(updateDoc(doc(admin, 'triageTagIssues/0'), { count: 1 })),
 );
 await check('計數器不可刪除（管理員也不行）', assertFails(deleteDoc(doc(admin, 'triageTagCounter/main'))));
+await check(
+  '一般使用者不可刪除單位用量',
+  assertFails(deleteDoc(doc(member, `triageTagUnitWeeks/${THIS_WEEK}_大湳分隊`))),
+);
 await check('一般使用者不可刪除領取紀錄', assertFails(deleteDoc(doc(member, 'triageTagIssues/10'))));
 await check('管理員可刪除領取紀錄', assertSucceeds(deleteDoc(doc(admin, 'triageTagIssues/10'))));
 

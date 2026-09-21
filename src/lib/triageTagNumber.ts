@@ -2,7 +2,13 @@
  * 傷票號碼的純邏輯（流水號 ↔ `H00T000` 字串、區間展開）。
  * 不依賴 React、Firebase 或瀏覽器 API，方便獨立測試。
  */
-import { TRIAGE_TAG_NUMBER, TRIAGE_TAG_TOTAL } from '../config/triageTag';
+import {
+  TRIAGE_TAG_NUMBER,
+  TRIAGE_TAG_TOTAL,
+  TRIAGE_TAG_UNIT_HINT,
+  TRIAGE_TAG_UNIT_PATTERN,
+  TRIAGE_TAG_WEEK_UTC_OFFSET_HOURS,
+} from '../config/triageTag';
 
 const TAIL_BASE = 10 ** TRIAGE_TAG_NUMBER.tailDigits;
 
@@ -37,4 +43,35 @@ export function describeTriageTagRange(startSerial: number, count: number): stri
 /** 還剩幾個號碼可以發（下一個流水號之後到 `H99T999`）。 */
 export function remainingTriageTags(nextSerial: number): number {
   return Math.max(0, TRIAGE_TAG_TOTAL - nextSerial);
+}
+
+const MS_PER_DAY = 86_400_000;
+const WEEK_OFFSET_MS = TRIAGE_TAG_WEEK_UTC_OFFSET_HOURS * 3_600_000;
+
+/**
+ * 某個時間點屬於「第幾週」（台灣時間、週一起算）。
+ *
+ * 1970-01-01 是星期四，所以「本地日序 + 3」再除以 7 就剛好在每個週一跳號。
+ * 安全規則 `triageWeekIndex()` 用伺服器時間做一模一樣的計算，兩邊必須一致。
+ */
+export function triageTagWeekIndex(time: Date): number {
+  const localDay = Math.floor((time.getTime() + WEEK_OFFSET_MS) / MS_PER_DAY);
+  return Math.floor((localDay + 3) / 7);
+}
+
+/** 某一週的顯示文字，例：`9/21（一）～ 9/27（日）`。 */
+export function describeTriageTagWeek(weekIndex: number): string {
+  const monday = new Date((weekIndex * 7 - 3) * MS_PER_DAY);
+  const sunday = new Date(monday.getTime() + 6 * MS_PER_DAY);
+  // 這兩個 Date 本身就是「台灣日期的 00:00 UTC」，所以用 UTC 取值。
+  const label = (date: Date) => `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
+  return `${label(monday)}（一）～ ${label(sunday)}（日）`;
+}
+
+/**
+ * 檢查單位名稱格式（兩個中文字＋分隊）。
+ * @returns 錯誤訊息；沒問題回傳 null
+ */
+export function validateTriageTagUnit(unit: string): string | null {
+  return TRIAGE_TAG_UNIT_PATTERN.test(unit.trim()) ? null : TRIAGE_TAG_UNIT_HINT;
 }

@@ -1,5 +1,6 @@
 /**
- * 測試用傷票領取頁 `/triage-tags`：輸入張數 → 系統接續發號 → 下載可直接雙面列印的 PDF。
+ * 測試用傷票領取頁 `/triage-tags`：輸入單位與張數 → 系統接續發號 → 下載可直接雙面列印的 PDF。
+ * 單位格式必須是「OO分隊」，同一單位每週最多 20 張（台灣時間週一起算）。
  *
  * 三種角色都能用（含解鎖專用帳號）；解鎖專用帳號只看得到自己的領取紀錄。
  * 號碼一旦發出就不回收，PDF 弄丟了從下方紀錄「重新下載」，號碼不會變。
@@ -10,18 +11,45 @@ import {
   allocateTriageTags,
   subscribeTriageTagIssues,
   subscribeTriageTagNextSerial,
+  subscribeTriageTagUnitUsage,
   validateTriageTagCount,
 } from '../services/triageTagService';
 import { canSeeAllTriageTagIssues } from '../lib/permissions';
 import {
   describeTriageTagRange,
+  describeTriageTagWeek,
   expandTriageTagRange,
   formatTriageTagNumber,
   remainingTriageTags,
+  triageTagWeekIndex,
+  validateTriageTagUnit,
 } from '../lib/triageTagNumber';
-import { TRIAGE_TAG_MAX_PER_REQUEST, TRIAGE_TAG_TOTAL } from '../config/triageTag';
+import {
+  TRIAGE_TAG_TOTAL,
+  TRIAGE_TAG_UNIT_HINT,
+  TRIAGE_TAG_UNIT_WEEKLY_LIMIT,
+} from '../config/triageTag';
 import type { TriageTagIssue } from '../types/triageTag';
 import { Button, Card, CenteredSpinner, ErrorBanner, FieldLabel, INPUT_CLASS } from '../components/ui';
+
+/** 瀏覽器記住上次填的單位（同一台電腦通常是同一個分隊），不必每次重打。 */
+const LAST_UNIT_STORAGE_KEY = 'triageTag.lastUnit';
+
+function loadLastUnit(): string {
+  try {
+    return window.localStorage.getItem(LAST_UNIT_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function saveLastUnit(unit: string): void {
+  try {
+    window.localStorage.setItem(LAST_UNIT_STORAGE_KEY, unit);
+  } catch {
+    // 無痕視窗等情況存不了，不影響領取。
+  }
+}
 
 /** 把 ISO 時間字串轉成「YYYY/MM/DD HH:mm」；空字串回傳破折號。 */
 function formatMoment(iso: string): string {
@@ -68,7 +96,6 @@ function PrintGuide() {
           列印時選 <b>雙面列印 → 長邊翻轉</b>，縮放選 <b>實際大小（100%）</b>，不要選「符合頁面」。
         </li>
         <li>沿淺灰色虛線外框剪下，就是一張雙面傷票（左右兩張各自獨立）。</li>
-        <li>第一次印建議先印一張確認正反面有對齊，再印整批。</li>
       </ol>
     </Card>
   );
@@ -93,6 +120,7 @@ function IssueTable({
         <thead className="border-b border-slate-200 text-xs text-slate-500">
           <tr>
             <th className="py-2 pr-3 font-medium">領取時間</th>
+            <th className="py-2 pr-3 font-medium">單位</th>
             {showRequester && <th className="py-2 pr-3 font-medium">領取人</th>}
             <th className="py-2 pr-3 font-medium">號碼</th>
             <th className="py-2 pr-3 font-medium">張數</th>
@@ -103,6 +131,7 @@ function IssueTable({
           {issues.map((issue) => (
             <tr key={issue.id} className="border-b border-slate-100 last:border-0">
               <td className="py-2 pr-3 whitespace-nowrap text-slate-500">{formatMoment(issue.requestedAt)}</td>
+              <td className="py-2 pr-3 whitespace-nowrap">{issue.unit || '—'}</td>
               {showRequester && <td className="py-2 pr-3">{issue.requestedByName}</td>}
               <td className="py-2 pr-3 font-mono">{describeTriageTagRange(issue.startSerial, issue.count)}</td>
               <td className="py-2 pr-3">{issue.count}</td>
@@ -126,6 +155,9 @@ export function TriageTagPage() {
   const [nextSerial, setNextSerial] = useState<number | null>(null);
   const [issues, setIssues] = useState<TriageTagIssue[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [unitText, setUnitText] = useState(loadLastUnit);
+  /** 單位本週已領張數；單位格式不對或還在讀取時為 null。 */
+  const [unitUsed, setUnitUsed] = useState<number | null>(null);
   const [countText, setCountText] = useState('10');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
@@ -146,8 +178,21 @@ export function TriageTagPage() {
     );
   }, [user, seesAll]);
 
+  const unit = unitText.trim();
+  const unitProblem = validateTriageTagUnit(unit);
+  // 週序每次重新整理頁面才算一次；跨週時送出仍以送出當下為準（規則用伺服器時間核對）。
+  const [weekIndex] = useState(() => triageTagWeekIndex(new Date()));
+
+  useEffect(() => {
+    setUnitUsed(null);
+    if (unitProblem) return undefined;
+    return subscribeTriageTagUnitUsage(unit, weekIndex, setUnitUsed, (error) => setLoadError(error.message));
+  }, [unit, unitProblem, weekIndex]);
+
   const count = Number(countText);
-  const countProblem = nextSerial === null ? null : validateTriageTagCount(count, nextSerial);
+  const countProblem =
+    nextSerial === null || unitUsed === null ? null : validateTriageTagCount(count, nextSerial, unitUsed);
+  const canSubmit = !busy && nextSerial !== null && unitProblem === null && unitUsed !== null && countProblem === null;
 
   /** 產 PDF 的共用外殼：鎖住按鈕、顯示進度、錯誤統一顯示。 */
   async function runDownload(startSerial: number, tagCount: number, doneMessage: string) {
@@ -162,12 +207,13 @@ export function TriageTagPage() {
 
   async function handleAllocate(event: FormEvent) {
     event.preventDefault();
-    if (!user || countProblem) return;
+    if (!user || !canSubmit) return;
     setActionError(null);
     setNotice('');
     setBusy(true);
     try {
-      const allocated = await allocateTriageTags(user, count);
+      const allocated = await allocateTriageTags(user, unit, count);
+      saveLastUnit(unit);
       const range = describeTriageTagRange(allocated.startSerial, allocated.count);
       await runDownload(allocated.startSerial, allocated.count, `已領取 ${range}，PDF 已下載。`);
     } catch (error) {
@@ -200,7 +246,8 @@ export function TriageTagPage() {
       <div>
         <h1 className="text-xl font-bold text-slate-800">測試用傷票領取</h1>
         <p className="mt-1 text-sm text-slate-500">
-          輸入要幾張，系統會接續上一位同仁的號碼發給你，並產生可直接雙面列印的 PDF。
+          輸入單位與張數，系統會接續上一位同仁的號碼發給你，並產生可直接雙面列印的 PDF。
+          同一單位每週最多 {TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張（每週一重新計算）。
         </p>
       </div>
 
@@ -209,17 +256,35 @@ export function TriageTagPage() {
       <Card>
         <form className="space-y-4" onSubmit={handleAllocate}>
           <div className="max-w-xs">
+            <FieldLabel required>單位</FieldLabel>
+            <input
+              className={INPUT_CLASS}
+              value={unitText}
+              onChange={(event) => setUnitText(event.target.value)}
+              placeholder="例：大湳分隊"
+            />
+            {unit !== '' && unitProblem ? (
+              <p className="mt-1 text-xs text-red-600">{unitProblem}</p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">
+                {unit === '' || unitUsed === null
+                  ? TRIAGE_TAG_UNIT_HINT
+                  : `本週（${describeTriageTagWeek(weekIndex)}）${unit} 已領 ${unitUsed} / ${TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張`}
+              </p>
+            )}
+          </div>
+          <div className="max-w-xs">
             <FieldLabel required>張數</FieldLabel>
             <input
               className={INPUT_CLASS}
               type="number"
               min={1}
-              max={TRIAGE_TAG_MAX_PER_REQUEST}
+              max={TRIAGE_TAG_UNIT_WEEKLY_LIMIT}
               value={countText}
               onChange={(event) => setCountText(event.target.value)}
             />
             <p className="mt-1 text-xs text-slate-400">
-              一次最多 {TRIAGE_TAG_MAX_PER_REQUEST} 張（一張 A4 印兩張）
+              同一單位每週最多 {TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張（一張 A4 印兩張）
             </p>
           </div>
           {nextSerial !== null && (
@@ -237,7 +302,7 @@ export function TriageTagPage() {
           {countText !== '' && countProblem && <p className="text-sm text-red-600">{countProblem}</p>}
           <ErrorBanner message={actionError} />
           {notice && <p className="text-sm text-green-700">{notice}</p>}
-          <Button type="submit" disabled={busy || nextSerial === null || countProblem !== null}>
+          <Button type="submit" disabled={!canSubmit}>
             {progress || '領取並下載 PDF'}
           </Button>
         </form>
