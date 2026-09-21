@@ -357,6 +357,81 @@ function queryPage(params) {
     return { headers: [], matched: [] };
   }
 
+  if (params.mode === 'fileRows') {
+    // 案件內部「上傳」那張檔案清單，**一次把判定需要的四樣東西全部讀回來**：
+    // 檔案類型、上傳時間、備註、檔案連結。
+    //
+    // 為什麼要一次讀完，而不是像以前那樣只撈「檔案類型＝12導程」那幾列：
+    // 2026-09-21 起「案件影音」那幾列也要判（有人把 12 導程傳成案件影音），
+    // 到院後那幾列還要看備註。分三次進 DOM 撈，就要按三次「上傳」或
+    // 在三個地方各寫一份「哪張表才是檔案清單」的規則，改一處漏一處。
+    // 撈回來之後怎麼分類，全部交給 `ekgMedia.mjs` 的純函式，好寫測試。
+    //
+    // ⚠ 個資：只取這四欄，其餘儲存格一律不帶出去。其中：
+    //   - 檔案類型／上傳時間：遮蔽長數字（與其他模式一致）
+    //   - 備註：**不遮蔽、不截斷到 40 字**——它是人寫的理由，截掉就讀不懂了；
+    //     但仍有 `maxRemarkLength` 上限，避免有人貼一整篇進去
+    //   - 檔案連結的 href：**刻意不遮蔽**，遮了就抓不到檔案。
+    //     它只存在記憶體與 `out/internal/` 的內部清單，不印在終端機、不進 log。
+    const wantedType = params.typeColumns.map(normalize);
+    const textOfCell = (cell) => (cell?.textContent || '').replace(/\s+/g, ' ').trim();
+
+    for (const table of document.querySelectorAll('table')) {
+      const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+      if (!headerRow) continue;
+      const headers = [...headerRow.cells].map(textOfCell);
+
+      // 欄名以**完全相等**比對，與 rowsWithColumnValue 同一套規則。
+      const typeIndex = headers.findIndex((header) => wantedType.includes(normalize(header)));
+      // 依候選順序取第一個「包含」該字樣的欄（設定檔的順序就是優先順序）。
+      const indexOfFirst = (candidates) => {
+        for (const candidate of candidates) {
+          const index = headers.findIndex((header) => normalize(header).includes(normalize(candidate)));
+          if (index >= 0) return index;
+        }
+        return -1;
+      };
+      const timeIndex = indexOfFirst(params.timeColumns);
+      // 這兩欄**都要有**才是檔案清單。只認檔案類型的話，會命中上傳表單那張
+      // （欄位是 上傳檔案｜檔案說明／備註｜上傳檔案預覽｜確定上傳）而讀到空資料。
+      if (typeIndex < 0 || timeIndex < 0) continue;
+
+      const remarkIndex = indexOfFirst(params.remarkColumns);
+      const linkIndex = indexOfFirst(params.linkColumns);
+
+      const matched = [];
+      for (const row of table.rows) {
+        if (row === headerRow) continue;
+        const cells = [...row.cells];
+        const fileType = textOfCell(cells[typeIndex]);
+        const uploadTime = textOfCell(cells[timeIndex]);
+        // 兩欄都空＝版面用的空白列或「查無資料」那一列，不是檔案。
+        if (!fileType && !uploadTime) continue;
+
+        const linkCell = linkIndex >= 0 ? cells[linkIndex] : null;
+        const links = linkCell
+          ? [...linkCell.querySelectorAll('a[href]')].map((anchor) => ({
+            text: (anchor.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+            // 轉成絕對網址：抓檔案時要直接餵給 HTTP 用戶端，相對路徑接不起來。
+            href: new URL(anchor.getAttribute('href'), location.href).href,
+          }))
+          : [];
+
+        matched.push({
+          fileType: mask(fileType).slice(0, 40),
+          uploadTime: mask(uploadTime).slice(0, 40),
+          remark: remarkIndex >= 0
+            ? textOfCell(cells[remarkIndex]).slice(0, params.maxRemarkLength)
+            : '',
+          links,
+        });
+        if (matched.length >= params.maxRows) break;
+      }
+      return { headers, matched };
+    }
+    return { headers: [], matched: [] };
+  }
+
   if (params.mode === 'pageMarkers') {
     // 判斷「畫面上有沒有出現某一段系統訊息」，例如解鎖成功後左上角的紅字。
     //
@@ -821,6 +896,48 @@ export async function findRowsWithColumnValue(frame, columnCandidates, wantedHea
     wantedHeaders,
     valueMarkers: options.valueMarkers ?? [],
     maxRows: options.maxRows ?? 20,
+  });
+}
+
+/**
+ * @typedef {Object} FileRow 案件內部「上傳」清單的一列（一列一個檔案）
+ * @property {string} fileType 檔案類型欄的值（例如「12導程心電圖」「案件影音」）
+ * @property {string} uploadTime 上傳時間欄的原文
+ * @property {string} remark 檔案說明／備註欄的原文（人寫的字，未遮蔽）
+ * @property {{text: string, href: string}[]} links 檔案連結欄裡的下載連結（絕對網址）
+ */
+
+/**
+ * 讀取案件內部「上傳」那張檔案清單的每一列。
+ *
+ * 與 {@link findRowsWithColumnValue} 的分工：那一支是「把條件帶進 DOM 去篩」，
+ * 用在傳輸紀錄那種只要挑出特定列的場合；這一支是「整張表原樣讀回來」，
+ * 分類規則留在 Node 端的純函式裡（`ekgMedia.mjs`），因為檔案清單要判的事
+ * 有三件（是不是 12 導程、是不是案件影音、備註算不算補述），
+ * 而且每一件都要寫測試釘住——規則塞進 DOM 就測不到了。
+ *
+ * ⚠ 個資：只取四欄。其中檔案連結的網址**刻意不遮蔽**（遮了就抓不到檔案），
+ *   呼叫端必須確保它不進終端機、不進 log，只落在 `out/internal/`。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {Object} options
+ * @param {string[]} options.typeColumns 檔案類型欄的欄名候選（**完全相等**比對）
+ * @param {string[]} options.timeColumns 上傳時間欄的欄名候選（「包含」比對，依序）
+ * @param {string[]} options.remarkColumns 備註欄的欄名候選（「包含」比對，依序）
+ * @param {string[]} options.linkColumns 檔案連結欄的欄名候選（「包含」比對，依序）
+ * @param {number} [options.maxRows] 最多讀幾列（預設 40）
+ * @param {number} [options.maxRemarkLength] 備註最多留幾個字（預設 300）
+ * @returns {Promise<{headers: string[], matched: FileRow[]}>}
+ */
+export async function findFileRows(frame, options) {
+  return frame.evaluate(queryPage, {
+    mode: 'fileRows',
+    typeColumns: options.typeColumns,
+    timeColumns: options.timeColumns,
+    remarkColumns: options.remarkColumns,
+    linkColumns: options.linkColumns,
+    maxRows: options.maxRows ?? 40,
+    maxRemarkLength: options.maxRemarkLength ?? 300,
   });
 }
 

@@ -26,17 +26,31 @@ import { EXCLUDED_REASON, EXCLUDED_VERDICT } from './ekgExclude.mjs';
 import { resolveColumnByNames } from './aggregate.mjs';
 import { buildListSheet } from './ekgLists.mjs';
 import { log } from './logger.mjs';
-import { VERDICT } from './ekgVerify.mjs';
+import { countsAsNumerator } from './ekgVerify.mjs';
 import { parseDateTime } from './timeParse.mjs';
 
 /** 檔名前綴與大標（改名時兩個一起改）。 */
 const LEDGER = { prefix: '心電圖逐案判定', heading: '心電圖逐案判定表' };
 
-/** 欄位順序即輸出順序。 */
-const LEDGER_COLUMNS = [
+/**
+ * 欄位順序即輸出順序。
+ *
+ * **匯出是為了讓測試用欄名取值，不要再用寫死的序號**：2026-09-21 中間插進
+ * 「補述理由」一欄，三個用 `row[9]` 取依據的測試當場全掛，而那幾個測試
+ * 本來要釘的東西一個都沒變。
+ */
+export const LEDGER_COLUMNS = [
   '分隊', '案件日期', 'TEMSIS', '勾EKG檢查', '有12導程',
-  '到院時間', '上傳時間', '判定', '計入分子', '依據',
+  '到院時間', '上傳時間', '判定', '計入分子', '補述理由', '依據',
 ];
+
+/**
+ * 「補述理由」欄（2026-09-21 加）。
+ *
+ * 判定寫「到院後」、計入分子卻寫「是」的那幾列，一定要看得出**為什麼**——
+ * 不然分隊來對數字時，這張表本身就自相矛盾，而它存在的理由正是「查得出每一件算在哪」。
+ */
+const REMARK_COLUMN = '補述理由';
 
 /** 沒有 12 導程可查核時，「判定」欄要寫的話（不是判成到院後，是沒東西可判）。 */
 const NOT_VERIFIABLE = '沒有12導程，未查核';
@@ -127,7 +141,8 @@ export function buildDenominatorCases(ekgChecked, twelveLead, outcomes) {
       hasProcedure: checkedIndex.has(temsis),
       hasTwelveLead: twelveIndex.has(temsis),
       outcome,
-      counted: outcome?.verdict === VERDICT.before,
+      // 算不算進分子的規則只有一份（`countsAsNumerator`），與報表數字同一個來源。
+      counted: countsAsNumerator(outcome),
     };
   });
 }
@@ -153,6 +168,7 @@ function buildExcludedRows(excludedCases) {
     '(不適用)',
     EXCLUDED_VERDICT,
     '否',
+    '',
     EXCLUDED_REASON,
   ]);
 }
@@ -182,6 +198,7 @@ export function buildLedgerRows(ekgChecked, twelveLead, outcomes, excludedCases 
       item.outcome?.upload || '(讀不到)',
       verdict,
       item.counted ? '是' : '否',
+      item.outcome?.remark?.text ?? '',
       item.outcome?.reason
         ?? (item.hasTwelveLead ? '這次沒有查核到這一件' : '分母裡有這件，但沒有 12 導程可以查核上傳時間'),
     ];
@@ -217,7 +234,9 @@ const APPEAL_COLUMNS = ['分隊', '表上填的案件日期', 'TEMSIS', '處理�
 export function buildLedgerWorkbook(rows, monthRange, appealResults = []) {
   const workbook = new ExcelJS.Workbook();
   const title = `${monthRange.label}　${LEDGER.heading}`;
-  buildListSheet(workbook, '逐案判定', title, LEDGER_COLUMNS, rows, { wideColumns: ['依據'] });
+  buildListSheet(workbook, '逐案判定', title, LEDGER_COLUMNS, rows, {
+    wideColumns: ['依據', REMARK_COLUMN],
+  });
 
   if (appealResults.length > 0) {
     const appealRows = appealResults.map((result) => [

@@ -6,9 +6,14 @@
  *
  *   1. 以 TEMSIS 查回該筆案件
  *   2. 取得**到院時間**（依序試：匯出檔的欄 → 查詢結果那一列 → 救護紀錄表 PDF）
- *   3. 取得**12 導程的上傳時間**（依序試：查詢結果列的「傳輸紀錄」→
- *      案件內部的「傳輸紀錄」→ 案件內部的「上傳」）
- *   4. 上傳早於到院 → 這件算數；晚於到院 → 不算；看不出來 → 列入人工確認清單
+ *   3. 取得**12 導程的上傳時間**，依序試三條路：
+ *      a. 案件內部「上傳」清單裡**檔案類型寫著 12導程**的列
+ *      b. 還沒確定在到院前的話，把**「案件影音」的檔案抓回來判讀內容**，
+ *         確認是 12 導程的就算（使用者 2026-09-21 要求：有人把心電圖傳成案件影音）
+ *      c. 兩種都沒有，才回頭查查詢結果那一列的「傳輸紀錄」（量測時間，語意較弱）
+ *   4. 上傳早於到院 → 這件算數；看不出來 → 列入人工確認清單；
+ *      晚於到院 → 原則上不算，但**備註欄有補述原因的仍計入**
+ *      （使用者 2026-09-21 定的規則，見 `countsAsNumerator`）
  *
  * ⚠ 這個流程很慢（每件要開好幾個畫面），因此：
  *   - **每完成一件就寫一次進度檔**，中途失敗或關掉視窗都不必從頭跑
@@ -16,7 +21,8 @@
  *   - 可用 `--limit=N` 先試跑幾件，確認判斷正確再跑整個月
  *
  * ⚠ 個資原則：
- *   - 進度檔含 TEMSIS（續跑必需），只落在 `out/raw/`，與匯出明細一起刪除
+ *   - 進度檔含 TEMSIS（續跑必需）與影音檔的下載網址，只落在 `out/internal/`
+ *     （已 gitignore、不上雲），與其他產出一起用三個月的保留期限清掉（見 3.15）
  *   - 畫面與紀錄檔上的 TEMSIS 一律只顯示末 4 碼（`maskCode`）
  *   - 只從畫面取出「時間」這一種值，紀錄表全文用完即棄、不落檔
  */
@@ -40,11 +46,18 @@ import { gotoRecordQuery } from './navigation.mjs';
 import {
   clickMatch,
   findClickables,
+  findFileRows,
   findRowsWithColumnValue,
   groupByRow,
   listTableHeaders,
   readRowFields,
 } from './pageFinder.mjs';
+import {
+  MEDIA_KIND,
+  classifyFileRows,
+  inspectMediaFile,
+  isMeaningfulRemark,
+} from './ekgMedia.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import { extractLabeledValue, maskCode } from './sheetFields.mjs';
@@ -58,6 +71,23 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  */
 
 /**
+ * @typedef {Object} RemarkNote 到院後才傳、但有補述原因（使用者 2026-09-21 定的規則）
+ * @property {string} text 備註原文（人寫的理由，要列給使用者看）
+ * @property {string} from 這句話寫在哪一列（檔案類型 ＋ 檔名）
+ */
+
+/**
+ * @typedef {Object} MediaReview 程式判不出內容、要使用者自己點開看的影音檔
+ * @property {string} fileName 檔名
+ * @property {string} url 檔案下載網址。**只能寫進 out/internal/，不可印在終端機或 log**
+ * @property {string} uploadTime 上傳時間原文
+ * @property {'到院前'|'到院後'|'比不出來'} timing 這個檔案是在到院前還到院後傳的
+ * @property {string} kind 判讀結果（見 `MEDIA_KIND`）
+ * @property {string} why 判斷依據
+ * @property {string} remark 這一列的備註原文
+ */
+
+/**
  * @typedef {Object} VerifyOutcome
  * @property {string} temsis
  * @property {string} squad
@@ -67,10 +97,33 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {string|null} upload  讀到的上傳時間原文
  * @property {string} source 上傳時間是從哪個畫面讀到的
  * @property {string|null} [caseDate] 案件日期。判定不出來的案件要靠它才找得回原案
+ * @property {RemarkNote|null} [remark] 到院後但備註有補述原因；非 null 即計入分子
+ * @property {MediaReview[]} [mediaReviews] 判不出內容、要人工看的影音檔
+ * @property {number} [logicVersion] 這筆結論是用哪一版判定規則跑出來的（續跑時要比對）
  */
 
 /** 判定結果的三種值，集中定義避免各處字串打錯。 */
 export const VERDICT = { before: '到院前', after: '到院後', unknown: '無法判定' };
+
+/**
+ * 這一件算不算進分子。**分子的定義只有這一份**，
+ * 逐案彙總（`countVerifiedBySquad`）與逐案判定表（`ekgLedger`）都問它，
+ * 兩邊才不會各算各的——那會產出「報表寫 120 件、判定表數出來 118 件」這種對不起來的東西。
+ *
+ * 兩種情形算數：
+ *   1. 查核判定為**到院前**傳出
+ *   2. 判定為到院後，但**備註欄有補述原因**（使用者 2026-09-21 定的規則）
+ *
+ * 「無法判定」一律不算，改列人工確認清單（使用者 2026-08-03 的選擇）。
+ *
+ * @param {VerifyOutcome} outcome
+ * @returns {boolean}
+ */
+export function countsAsNumerator(outcome) {
+  if (!outcome) return false;
+  if (outcome.verdict === VERDICT.before) return true;
+  return outcome.verdict === VERDICT.after && Boolean(outcome.remark);
+}
 
 /**
  * 已經留過診斷的按鈕。
@@ -345,6 +398,123 @@ export function pickEarliestUploadTime(matched, timeContext, timeLabels = EKG.ve
 }
 
 /**
+ * 從上傳清單挑出「上傳時間最早」的那一列，**連同那一列本身一起回傳**。
+ *
+ * 為什麼要連列一起帶回來（而不是像 `pickEarliestUploadTime` 只回時間）：
+ * 2026-09-21 起，判成到院後時還要看**那一列的備註**有沒有補述原因，
+ * 只拿到時間的話就得再去猜「剛才那個時間是哪一列的」。
+ *
+ * 一件案子傳過好幾次（重傳、補傳）時取最早的一次：
+ * 只要曾經在到院前傳出去過，就算有做到到院前傳輸。
+ *
+ * @param {import('./pageFinder.mjs').FileRow[]} rows
+ * @param {{defaultYear?: number, defaultDate?: string}} timeContext
+ * @returns {{row: import('./pageFinder.mjs').FileRow,
+ *   time: import('./timeParse.mjs').ParsedTime}|null}
+ */
+export function pickEarliestFileRow(rows, timeContext) {
+  let earliest = null;
+  for (const row of rows ?? []) {
+    const time = parseDateTime(row?.uploadTime, timeContext);
+    if (!time) continue;
+    if (!earliest || time.epochMs < earliest.time.epochMs) earliest = { row, time };
+  }
+  return earliest;
+}
+
+/** 一列檔案清單的描述（寫進理由、清單用）。檔名可能夾帶編號，故截短。 */
+const describeFileRow = (row) => `${row?.fileType || '(未填類型)'}／${
+  row?.links?.[0]?.text || '(沒有檔案連結)'
+}`.slice(0, 60);
+
+/**
+ * 到院後才傳時，找出補述原因的那一句（使用者 2026-09-21 定的規則）。
+ *
+ * **不能只看判定所依據的那一列**：同一件案子可能傳了好幾個 12 導程檔案
+ * （重傳、補傳），判定取的是最早那一次，但人未必把原因寫在最早那一列上
+ * ——實務上更常寫在補傳的那一列。只看一列會讓明明寫了理由的案件被判成沒寫。
+ * 因此先看判定所依據的那一列，沒寫再看同一件案子的其他 12 導程／影音列。
+ *
+ * ⚠ 檔案類型是「案件影音」時視為**人工填寫**，不套用機器樣板過濾：
+ *   使用者 2026-09-21 說明，設備自動傳的檔案一律落在「12導程心電圖」那個類型，
+ *   會選到「案件影音」就代表是人自己上傳、自己打的字。
+ *
+ * @param {import('./pageFinder.mjs').FileRow|null} preferredRow 判定所依據的那一列
+ * @param {import('./pageFinder.mjs').FileRow[]} [candidates] 同一件案子的其他候選列
+ * @returns {RemarkNote|null}
+ */
+function remarkOf(preferredRow, candidates = []) {
+  if (!EKG.verify.remark.enabled) return null;
+  for (const row of [preferredRow, ...candidates].filter(Boolean)) {
+    const trustAsHuman = (EKG.verify.mediaMarkers ?? []).some((marker) =>
+      String(row.fileType ?? '').includes(marker));
+    if (!isMeaningfulRemark(row.remark, EKG.verify.remark, { trustAsHuman })) continue;
+    return { text: String(row.remark).trim(), from: describeFileRow(row) };
+  }
+  return null;
+}
+
+/**
+ * 判讀「案件影音」那幾列的檔案內容，找出其實是 12 導程心電圖的那些
+ * （使用者 2026-09-21 要求）。
+ *
+ * 為什麼需要：有人把 12 導程用「案件影音」的類型傳上去，
+ * 舊規則只認檔案類型欄寫著 12導程 的列，這種一律判成「沒有 12 導程」，
+ * 明明有做也在到院前傳了，分隊卻白白掉一件。
+ *
+ * 判不出內容的（照片）**不猜**，回傳到 `reviews` 讓使用者自己點開看。
+ *
+ * ⚠ 依上傳時間由早到晚只看前幾個（`maxFilesPerCase`）：有人會把整趟出勤的
+ *   十幾張照片全部傳上來，每一張都抓回來會讓本來就要跑一兩個小時的流程翻倍；
+ *   而要證明的是「到院前有傳」，早的那幾個才有意義。
+ *
+ * @param {import('playwright-core').APIRequestContext} request
+ * @param {import('./pageFinder.mjs').FileRow[]} mediaRows
+ * @param {{defaultYear?: number, defaultDate?: string}} timeContext
+ * @param {import('./timeParse.mjs').ParsedTime|null} arrival 到院時間（判斷前後用）
+ * @returns {Promise<{confirmed: import('./pageFinder.mjs').FileRow[], reviews: MediaReview[]}>}
+ */
+async function inspectMediaRows(request, mediaRows, timeContext, arrival) {
+  const withTime = mediaRows
+    .map((row) => ({ row, time: parseDateTime(row?.uploadTime, timeContext) }))
+    .sort((left, right) => (left.time?.epochMs ?? Infinity) - (right.time?.epochMs ?? Infinity))
+    .slice(0, EKG.verify.media.maxFilesPerCase);
+
+  const confirmed = [];
+  const reviews = [];
+  for (const { row, time } of withTime) {
+    const link = row.links?.[0];
+    const result = await inspectMediaFile(request, link ?? { text: '', href: '' }, EKG.verify.media);
+    // 檔名可能夾帶案件編號，畫面上只印類型與判讀結果。
+    log.info(`　案件影音（${row.uploadTime || '時間不明'}）：${result.kind}——${result.why}`);
+    if (result.kind === MEDIA_KIND.twelveLead) {
+      confirmed.push(row);
+      continue;
+    }
+    // 只有「程式讀不出來」與「讀取失敗」要人看；確定不是心電圖的不必浪費使用者的時間。
+    if (result.kind === MEDIA_KIND.unreadable || result.kind === MEDIA_KIND.failed) {
+      reviews.push({
+        fileName: link?.text || '(沒有檔案連結)',
+        url: link?.href || '',
+        uploadTime: row.uploadTime || '',
+        timing: describeTiming(time, arrival),
+        kind: result.kind,
+        why: result.why,
+        remark: row.remark || '',
+      });
+    }
+  }
+  return { confirmed, reviews };
+}
+
+/** 這個檔案是在到院前還是到院後傳的（兩個時間有一個讀不到就說「比不出來」，不猜）。 */
+function describeTiming(uploadTime, arrival) {
+  if (!uploadTime || !arrival) return '比不出來';
+  if (uploadTime.epochMs === arrival.epochMs) return '比不出來';
+  return uploadTime.epochMs < arrival.epochMs ? VERDICT.before : VERDICT.after;
+}
+
+/**
  * 開一次救護紀錄表，同時取得指派案號與到院時間。
  *
  * 兩個值都要用到，開兩次 PDF 太浪費（每次都是幾秒鐘的網路往返），故一次讀完。
@@ -446,7 +616,12 @@ export async function queryByTemsis(page, temsis, range) {
  * @returns {Promise<VerifyOutcome>}
  */
 async function verifyOneCase(context, page, target, range, timeContext) {
-  const base = { temsis: target.temsis, squad: target.squad };
+  // 每一筆結論都要記下「是用哪一版規則跑出來的」，否則規則改版後續跑會默默沿用舊結論。
+  const base = {
+    temsis: target.temsis,
+    squad: target.squad,
+    logicVersion: EKG.verify.logicVersion,
+  };
 
   const rowIndex = await queryByTemsis(page, target.temsis, range);
   if (rowIndex < 0) {
@@ -508,36 +683,48 @@ async function verifyOneCase(context, page, target, range, timeContext) {
       upload: null,
       source: '讀不到指派案號',
       caseDate,
+      remark: null,
+      mediaReviews: [],
     };
   }
   await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
 
-  let upload = null;
-  let source = '';
-  const uploadButtons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
-  log.info(`案件內部的「上傳」：${uploadButtons.length === 0 ? '這一頁沒有這個按鈕' : '點進去看'}`);
-  if (uploadButtons.length > 0) {
-    const panel = await openPanelRows(
-      context,
-      page,
-      EKG.verify.uploadButtons,
-      uploadButtons[0].index,
-      // 只認「檔案類型」欄寫著 12導程 的列（使用者 2026-08-05 指正）。
-      // 比對整列文字的話，備註欄的「ZOLL12導程附檔上傳(JSON檔)」也會命中。
-      (frame) => findRowsWithColumnValue(
-        frame,
-        EKG.verify.fileTypeColumns,
-        [...EKG.verify.uploadTimeLabels, ...EKG.verify.fileTypeColumns],
-        { valueMarkers: EKG.verify.twelveLeadMarkers },
-      ),
-    );
-    if (panel) {
-      upload = pickEarliestUploadTime(panel.matched, localContext);
-      if (upload) source = `案件內部的「上傳」（${panel.where}）`;
+  const arrival = parseDateTime(arrivalText, localContext);
+  const panel = await readUploadPanel(context, page);
+  const files = classifyFileRows(panel?.rows ?? []);
+  const where = panel?.where ?? '原本的畫面';
+
+  // ---- 1. 檔案類型欄就寫著 12 導程的那幾列（原本就有的主要路徑）----
+  let picked = pickEarliestFileRow(files.twelveLead, localContext);
+  let uploadFrom = '「上傳」清單裡檔案類型為 12 導程心電圖的那一列';
+  let source = picked ? `案件內部的「上傳」（${where}）` : '';
+
+  // ---- 2. 還沒確定在到院前，就把「案件影音」的檔案抓回來判讀內容 ----
+  //        （使用者 2026-09-21 要求：有人把 12 導程傳成案件影音）
+  let mediaReviews = [];
+  /** 到院後時可以拿來找補述的列（見 `remarkOf`：原因未必寫在最早那一列上）。 */
+  let remarkCandidates = [...files.twelveLead];
+  // ⚠ 判斷「已經確定在到院前」一定要用 `compareUploadToArrival`，不可以自己比大小：
+  //   那支還管著「兩邊都只有時分且差超過 12 小時＝可能跨日」「兩個時間相同」
+  //   這些會回「無法判定」的情形。自己比的話，那幾件會被當成已經過關而跳過影音判讀。
+  const alreadyBeforeArrival = Boolean(picked)
+    && compareUploadToArrival(picked.time, arrival).verdict === VERDICT.before;
+  if (EKG.verify.media.enabled && !alreadyBeforeArrival && files.media.length > 0) {
+    log.info(`「案件影音」有 ${files.media.length} 個檔案，抓回來判讀是不是 12 導程`);
+    const media = await inspectMediaRows(context.request, files.media, localContext, arrival);
+    mediaReviews = media.reviews;
+    remarkCandidates = [...remarkCandidates, ...media.confirmed];
+    const mediaPick = pickEarliestFileRow(media.confirmed, localContext);
+    // 比原本那一筆早才換：要證明的是「**曾經**在到院前傳出去過」，所以一律取最早的一次。
+    if (mediaPick && (!picked || mediaPick.time.epochMs < picked.time.epochMs)) {
+      picked = mediaPick;
+      uploadFrom = '「案件影音」的檔案，點開內容判讀為 12 導程心電圖';
+      source = `案件內部的「上傳」（${where}）`;
     }
   }
 
-  // ---- 上傳清單裡沒有 12 導程，才回頭查傳輸紀錄的 EKG 欄 ----
+  // ---- 3. 兩種上傳都沒有 12 導程，才回頭查傳輸紀錄的 EKG 欄 ----
+  let upload = picked ? { time: picked.time, from: uploadFrom } : null;
   if (!upload) {
     log.info(`上傳清單裡沒有「${EKG.verify.twelveLeadMarkers[0]}」，回頭查傳輸紀錄`);
     const transmission = await readTransmissionEkgTime(context, page, target.temsis, range, localContext);
@@ -552,26 +739,72 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     return {
       ...base,
       verdict: VERDICT.unknown,
-      reason: '案件內部的「上傳」與查詢結果的「傳輸紀錄」都找不到 12 導程的時間。'
+      reason: '案件內部的「上傳」（含案件影音）與查詢結果的「傳輸紀錄」都找不到 12 導程的時間。'
         + await describeClickableOptions(page),
       arrival: arrivalText,
       upload: null,
       source: '兩邊都找不到',
       caseDate,
+      remark: null,
+      mediaReviews,
     };
   }
 
-  const arrival = parseDateTime(arrivalText, localContext);
-  const { verdict, reason } = compareUploadToArrival(upload?.time ?? null, arrival);
+  const { verdict, reason } = compareUploadToArrival(upload.time, arrival);
+
+  // ---- 4. 到院後才傳，但備註欄有補述原因 → 仍算成到院前完成（使用者 2026-09-21 定的規則）----
+  //        只在**確定是到院後**時才看備註：「無法判定」是沒查出來，不是查出來晚了，
+  //        拿備註去救它等於把讀不到時間的案件全部放行。
+  const remark = verdict === VERDICT.after
+    ? remarkOf(picked?.row ?? null, remarkCandidates)
+    : null;
+  const remarkNote = remark ? `；備註有補述原因，依規則仍計入分子：「${remark.text}」` : '';
+
   return {
     ...base,
     verdict,
-    reason: upload ? `${reason}（上傳時間取自${upload.from}）` : reason,
+    reason: `${reason}（上傳時間取自${upload.from}）${remarkNote}`,
     arrival: arrivalText,
-    upload: upload?.time.matched ?? null,
+    upload: upload.time.matched ?? null,
     source: source || '未知',
     caseDate,
+    remark,
+    mediaReviews,
   };
+}
+
+/**
+ * 點開案件內部的「上傳」，把整張檔案清單讀回來。
+ *
+ * 2026-09-21 改成**整張表讀回來**、分類留在 Node 端（`ekgMedia.mjs` 的純函式）。
+ * 原本是把「檔案類型＝12導程」這個條件帶進 DOM 去篩，但現在同一張表要判三件事
+ * （是不是 12 導程、是不是案件影音、備註算不算補述），
+ * 分三次進 DOM 撈就要按三次「上傳」，還得在三個地方各寫一份
+ * 「哪張表才是檔案清單」的規則，改一處漏一處。
+ *
+ * @returns {Promise<{rows: import('./pageFinder.mjs').FileRow[], where: string}|null>}
+ */
+async function readUploadPanel(context, page) {
+  const buttons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
+  if (buttons.length === 0) {
+    log.info('案件內部的「上傳」：這一頁沒有這個按鈕');
+    return null;
+  }
+  log.info('案件內部的「上傳」：點進去看');
+  const panel = await openPanelRows(
+    context,
+    page,
+    EKG.verify.uploadButtons,
+    buttons[0].index,
+    (frame) => findFileRows(frame, {
+      // 時間欄沿用原本那組候選（`上傳時間` 排第一），系統改欄名時不必動程式。
+      typeColumns: EKG.verify.fileTypeColumns,
+      timeColumns: EKG.verify.uploadTimeLabels,
+      remarkColumns: EKG.verify.remarkColumns,
+      linkColumns: EKG.verify.fileLinkColumns,
+    }),
+  );
+  return panel ? { rows: panel.matched, where: panel.where } : null;
 }
 
 /**
@@ -591,7 +824,12 @@ async function verifyOneCase(context, page, target, range, timeContext) {
  * @returns {Promise<VerifyOutcome>}
  */
 async function verifyWithRetry(session, target, monthRange, timeContext) {
-  const base = { temsis: target.temsis, squad: target.squad };
+  // 每一筆結論都要記下「是用哪一版規則跑出來的」，否則規則改版後續跑會默默沿用舊結論。
+  const base = {
+    temsis: target.temsis,
+    squad: target.squad,
+    logicVersion: EKG.verify.logicVersion,
+  };
   let lastError = '';
 
   for (let attempt = 1; attempt <= EKG.verify.maxAttemptsPerCase; attempt += 1) {
@@ -616,6 +854,8 @@ async function verifyWithRetry(session, target, monthRange, timeContext) {
     upload: null,
     source: '執行失敗',
     caseDate: null,
+    remark: null,
+    mediaReviews: [],
   };
 }
 
@@ -666,11 +906,25 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
    */
   const settled = (temsis) => {
     const outcome = done.get(temsis);
-    return outcome !== undefined && outcome.verdict !== VERDICT.unknown;
+    if (outcome === undefined || outcome.verdict === VERDICT.unknown) return false;
+    /**
+     * ⚠ **判定規則改版後，舊結論不能沿用**（2026-09-21 加）。
+     *
+     * 不比版號的話，舊月份重跑會直接跳過所有已有結論的案件，
+     * 新規則（案件影音判讀、到院後補述）等於沒生效，而畫面上完全看不出來。
+     *
+     * 只重查「沒算進分子」的那些：新規則只會讓**更多**案件算進分子，
+     * 不會讓已經算進去的掉出去，重查判成到院前的那些只是白花一兩個小時。
+     */
+    const staleRules = (outcome.logicVersion ?? 1) < EKG.verify.logicVersion;
+    return !(staleRules && outcome.verdict !== VERDICT.before);
   };
   const retryable = planned.filter((item) => done.has(item.temsis) && !settled(item.temsis)).length;
   if (retryable > 0) {
-    log.info(`上次有 ${retryable} 件判定不出來，這次會重新查一遍（那多半是暫時性失敗）。`);
+    log.info(
+      `上次有 ${retryable} 件要重新查一遍：判定不出來的（多半是暫時性失敗），`
+        + `以及判定規則已改版（目前第 ${EKG.verify.logicVersion} 版）而結論還是舊規則跑的那些。`,
+    );
   }
 
   let consecutiveFailures = 0;
@@ -682,7 +936,7 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
     const outcome = await verifyWithRetry(session, target, monthRange, timeContext);
     done.set(target.temsis, outcome);
     consecutiveFailures = outcome.verdict === VERDICT.unknown ? consecutiveFailures + 1 : 0;
-    log[outcome.verdict === VERDICT.before ? 'ok' : 'warn'](`${outcome.verdict}：${outcome.reason}`);
+    log[countsAsNumerator(outcome) ? 'ok' : 'warn'](`${outcome.verdict}：${outcome.reason}`);
     // 每一件都存檔：跑幾百件的流程，任何一次中斷都不該讓前面的努力白費。
     await saveProgress(filePath, done).catch((error) => {
       log.warn(`進度存檔失敗（不影響本次結果）：${error instanceof Error ? error.message : String(error)}`);
@@ -709,10 +963,11 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
 }
 
 /**
- * 把查核結果彙總成「各分隊確認在到院前傳出去的件數」。
+ * 把查核結果彙總成「各分隊算進分子的件數」。
  *
- * **只有判定為「到院前」的才計入**：判定為到院後的不算（使用者的規則），
- * 無法判定的也不算，改列入人工確認清單（使用者 2026-08-03 選擇的處理方式）。
+ * 算不算進分子的規則只有一份，在 {@link countsAsNumerator}：
+ * 判定為到院前的，以及到院後但備註有補述原因的（使用者 2026-09-21 定的規則）。
+ * 無法判定的一律不算，改列入人工確認清單（使用者 2026-08-03 選擇的處理方式）。
  *
  * @param {VerifyOutcome[]} outcomes
  * @returns {Map<string, number>} 分隊 → 件數
@@ -720,7 +975,7 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
 export function countVerifiedBySquad(outcomes) {
   const counts = new Map();
   for (const outcome of outcomes) {
-    if (outcome.verdict !== VERDICT.before) continue;
+    if (!countsAsNumerator(outcome)) continue;
     const squad = String(outcome.squad ?? '').trim();
     if (!squad) continue;
     counts.set(squad, (counts.get(squad) ?? 0) + 1);

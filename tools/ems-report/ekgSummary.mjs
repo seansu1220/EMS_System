@@ -18,7 +18,7 @@ import { PATHS } from './config.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
-import { VERDICT } from './ekgVerify.mjs';
+import { VERDICT, countsAsNumerator } from './ekgVerify.mjs';
 
 /** 檔名前綴。 */
 const SUMMARY_PREFIX = '心電圖執行報告';
@@ -40,10 +40,24 @@ function describeCounts(counts) {
     .join('、');
 }
 
-/** 算出各種判定各幾件。 */
+/**
+ * 算出各種判定各幾件。
+ *
+ * 到院後**要拆成兩排**（2026-09-21）：備註有補述的計入分子、沒補述的不計入。
+ * 合成一排寫「到院後 / 計入分子：否」的話，報告上的數字會與正式報表對不起來，
+ * 而這份報告的用處正是「不必翻幾百行紀錄就看得懂這個月發生什麼事」。
+ */
 function countVerdicts(outcomes) {
   const of = (verdict) => outcomes.filter((item) => item.verdict === verdict).length;
-  return { before: of(VERDICT.before), after: of(VERDICT.after), unknown: of(VERDICT.unknown) };
+  const afterWithRemark = outcomes.filter(
+    (item) => item.verdict === VERDICT.after && countsAsNumerator(item),
+  ).length;
+  return {
+    before: of(VERDICT.before),
+    after: of(VERDICT.after) - afterWithRemark,
+    afterWithRemark,
+    unknown: of(VERDICT.unknown),
+  };
 }
 
 /**
@@ -60,6 +74,15 @@ function buildTodoList(outcomes, appeals) {
     todo.push(
       `**${pending.length} 件判定不出來**，目前不計入分子（比率會略低於實際）。`
         + '明細見「心電圖待人工確認」那份，核對後若確實在到院前傳出，請填進申訴表。',
+    );
+  }
+
+  const mediaCount = outcomes.reduce((total, item) => total + (item.mediaReviews?.length ?? 0), 0);
+  if (mediaCount > 0) {
+    todo.push(
+      `有 **${mediaCount} 個「案件影音」檔程式讀不出內容**（多半是照片），目前不計入分子。`
+        + '明細見「心電圖-案件影音待人工確認」那份（有檔案連結，點開就看得到）。'
+        + '確認是 12 導程的，填進申訴表，下次跑就會補進分子。',
     );
   }
 
@@ -149,6 +172,80 @@ function buildAppealSection(appeals) {
   return lines;
 }
 
+/**
+ * 到院後補述理由那一段（使用者 2026-09-21 要求：篩完把理由列出來看）。
+ *
+ * ⚠ 理由**原文照列，不摘要**。這一段的用途是讓使用者自己覆核
+ * 「這個理由算不算數」——摘要過的理由沒辦法拿來判斷，等於這一段白寫。
+ */
+function buildRemarkSection(outcomes, appeals) {
+  const fromUpload = outcomes.filter((item) => item.remark);
+  const fromAppeal = (appeals?.results ?? []).filter((item) => String(item.appeal?.remark ?? '').trim());
+  if (fromUpload.length === 0 && fromAppeal.length === 0) return [];
+
+  const lines = [
+    '## 到院後才傳、但有補述原因的案件',
+    '',
+    `共 ${fromUpload.length} 件是靠上傳清單的備註補回分子的`
+      + `${fromAppeal.length > 0 ? `，另有 ${fromAppeal.length} 件申訴表上寫了原因` : ''}。`,
+    '',
+    '依使用者 2026-09-21 定的規則：到院後才傳，只要備註欄補述了原因就算有在到院前完成；'
+      + '沒有補述的不算。**理由原文照列，請自己看一眼合不合理。**',
+    '',
+    '| 分隊 | 案件日期 | TEMSIS | 來源 | 補述理由 |',
+    '| --- | --- | --- | --- | --- |',
+  ];
+  for (const item of fromUpload) {
+    lines.push(
+      `| ${item.squad} | ${item.caseDate ?? '(讀不到)'} | ${maskCode(item.temsis)}`
+        + ` | 上傳清單的備註 | ${item.remark.text} |`,
+    );
+  }
+  for (const item of fromAppeal) {
+    lines.push(
+      `| ${item.appeal.squad} | ${item.appeal.caseDate} | ${maskCode(item.appeal.temsis) || '(沒填)'}`
+        + ` | 申訴表第 ${item.appeal.lineNumber} 列 | ${item.appeal.remark} |`,
+    );
+  }
+  lines.push('', '> 完整 TEMSIS 見「心電圖-到院後補述理由」那份。', '');
+  return lines;
+}
+
+/**
+ * 程式判不出內容的案件影音檔那一段。
+ *
+ * ⚠ 這裡**不寫檔案下載網址**：那串網址帶著案件資料夾編號，
+ * 而這份報告是拿來快速看狀況的。要點開看請開 Excel 那份（同樣在 out/internal/）。
+ */
+function buildMediaSection(outcomes) {
+  const reviews = outcomes.flatMap((item) =>
+    (item.mediaReviews ?? []).map((review) => ({ item, review })));
+  if (reviews.length === 0) return [];
+
+  const lines = [
+    '## 判不出內容的「案件影音」檔',
+    '',
+    `共 ${reviews.length} 個檔案。有人把 12 導程心電圖用「案件影音」這個類型傳上去，`
+      + '程式會把檔案抓回來判讀內容；**照片（jpg／png）讀不出來，一律不猜**，列在這裡請你自己看。',
+    '',
+    '| 分隊 | 案件日期 | TEMSIS | 上傳時間 | 傳的時候到院了沒 | 為什麼判不出來 |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const { item, review } of reviews) {
+    lines.push(
+      `| ${item.squad} | ${item.caseDate ?? '(讀不到)'} | ${maskCode(item.temsis)}`
+        + ` | ${review.uploadTime || '(讀不到)'} | ${review.timing} | ${review.why} |`,
+    );
+  }
+  lines.push(
+    '',
+    '> 檔案連結在「心電圖-案件影音待人工確認」那份 Excel 裡，點開就看得到原始檔案。',
+    '> 確認是 12 導程且在到院前傳的，填進分隊申訴表，下次跑就會補進分子。',
+    '',
+  );
+  return lines;
+}
+
 /** 判定不出來的那幾件，逐件列出來（這是使用者最常要追的）。 */
 function buildPendingSection(outcomes) {
   const pending = outcomes.filter((item) => item.verdict === VERDICT.unknown);
@@ -220,7 +317,8 @@ export async function writeRunSummary(input) {
     '| 判定 | 件數 | 計入分子 |',
     '| --- | --- | --- |',
     `| 到院前傳出 | ${verdicts.before} | 是 |`,
-    `| 到院後才傳 | ${verdicts.after} | 否 |`,
+    `| 到院後才傳，**備註有補述原因** | ${verdicts.afterWithRemark} | 是 |`,
+    `| 到院後才傳，備註沒有補述 | ${verdicts.after} | 否 |`,
     `| 判定不出來 | ${verdicts.unknown} | 否 |`,
     '',
     '## 要你確認的事',
@@ -235,6 +333,8 @@ export async function writeRunSummary(input) {
 
   lines.push(
     ...buildExcludedSection(input.excluded),
+    ...buildRemarkSection(outcomes, appeals),
+    ...buildMediaSection(outcomes),
     ...buildAppealSection(appeals),
     ...buildPendingSection(outcomes),
     '## 這次產出的檔案',

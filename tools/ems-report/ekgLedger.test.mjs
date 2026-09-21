@@ -7,10 +7,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLedgerRows, buildLedgerWorkbook } from './ekgLedger.mjs';
+import { buildLedgerRows, buildLedgerWorkbook, LEDGER_COLUMNS } from './ekgLedger.mjs';
 import { VERDICT } from './ekgVerify.mjs';
 
 const MONTH = { start: '2026-07-01', end: '2026-07-31', label: '2026-07' };
+
+/** 用欄名取值，不要寫死序號——中間插一欄就會全部錯位。 */
+const at = (row, columnName) => row[LEDGER_COLUMNS.indexOf(columnName)];
 
 const HEADERS = ['出勤單位', '受理時間', 'TEMSIS ID', '送達醫院時間'];
 const source = (rows) => ({
@@ -70,7 +73,7 @@ test('「沒有12導程所以沒得查」不可以跟「查了判到院後」混
   assert.equal(沒得查[4], '否', '有12導程欄應為否');
   assert.equal(沒得查[7], '沒有12導程，未查核');
   assert.equal(沒得查[8], '否', '不計入分子');
-  assert.match(String(沒得查[9]), /沒有 12 導程/);
+  assert.match(String(at(沒得查, '依據')), /沒有 12 導程/);
 
   const 到院後 = rowOf(rows, 'T-1702');
   assert.equal(到院後[4], '是', '這件是有12導程的');
@@ -112,7 +115,7 @@ test('有12導程卻沒查核到的案件，要說「沒查核到」而不是留
   const 未查核 = rowOf(rows, 'T-3701');
   assert.equal(未查核[7], '未查核');
   assert.equal(未查核[8], '否');
-  assert.match(String(未查核[9]), /沒有查核到/);
+  assert.match(String(at(未查核, '依據')), /沒有查核到/);
 });
 
 test('活頁簿：大標與欄名都在，TEMSIS 完整顯示', () => {
@@ -170,7 +173,7 @@ test('被排除的 OHCA 案件要留在表上，而且排在最前面', () => {
   assert.equal(rows[0][0], '三民分隊');
   assert.match(String(rows[0][7]), /排除.*CPR/, '判定欄要講明是為什麼被排除');
   assert.equal(rows[0][8], '否', '排除的一律不計入分子');
-  assert.match(String(rows[0][9]), /OHCA/, '依據要說得出是 OHCA');
+  assert.match(String(at(rows[0], '依據')), /OHCA/, '依據要說得出是 OHCA');
 });
 
 test('排除的案件要標出它原本出現在哪一份查詢結果裡', () => {
@@ -192,4 +195,26 @@ test('沒有排除的案件時，表上一列都不會多出來', () => {
   const rows = buildLedgerRows(source([只勾處置]), source([]), [], []);
   assert.equal(rows.length, 1);
   assert.equal(rows[0][2], 'T-2501');
+});
+
+test('到院後但備註有補述的，判定寫到院後、計入分子寫是，而且看得到理由', () => {
+  // ⚠ 這張表最怕的就是「判定寫到院後、計入分子寫是」卻說不出為什麼——
+  //   分隊來對數字時會覺得這張表自相矛盾，而它存在的理由正是「查得出每一件算在哪」。
+  const rows = buildLedgerRows(source([]), source([兩者都有_到院後]), [{
+    temsis: 'T-1702',
+    squad: '平鎮分隊',
+    verdict: VERDICT.after,
+    reason: '上傳時間晚於到院時間（上傳時間取自「上傳」清單…）',
+    arrival: '2026/07/19 12:41:53',
+    upload: '2026/07/19 12:55:00',
+    source: '案件內部的「上傳」',
+    caseDate: '2026/07/19 12:13:17',
+    remark: { text: '現場無訊號，回隊才傳成功', from: '12導程心電圖／CHFD_1.json' },
+    mediaReviews: [],
+  }]);
+
+  const 補述 = rowOf(rows, 'T-1702');
+  assert.equal(at(補述, '判定'), VERDICT.after, '判定要照實寫，不可以改成到院前');
+  assert.equal(at(補述, '計入分子'), '是');
+  assert.equal(at(補述, '補述理由'), '現場無訊號，回隊才傳成功');
 });

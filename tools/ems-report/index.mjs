@@ -69,11 +69,17 @@ import {
   resolveEkgColumns,
   buildCaseList,
   verifyEkgCases,
+  countsAsNumerator,
   countVerifiedBySquad,
   progressFilePath,
   VERDICT,
 } from './ekgVerify.mjs';
-import { writePendingList, writeMissingProcedureList } from './ekgLists.mjs';
+import {
+  writePendingList,
+  writeMissingProcedureList,
+  writeRemarkList,
+  writeMediaReviewList,
+} from './ekgLists.mjs';
 import {
   buildUnalertedCases,
   collectTemsis,
@@ -552,6 +558,7 @@ function applyCprExclusion(cprFilePath, ekgChecked, numerator) {
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} input.outcomes
  * @param {Object|null} input.appeals `applyAppealSheet()` 的回傳
  * @param {string} input.incomplete 非空字串代表這份數字不能當正式報表
+ * @param {unknown[][]} [input.remarkRows] 到院後補述理由清冊的資料列（使用者要求直接列在畫面上）
  */
 function printRunResult(input) {
   const sum = (counts) => [...(counts?.values() ?? [])].reduce((total, count) => total + count, 0);
@@ -571,7 +578,31 @@ function printRunResult(input) {
   log.info(`　已排除（處置勾CPR＝OHCA）：${input.excluded?.cases.length ?? 0} 件，分母分子都沒算`);
   if (pending > 0) log.warn(`　判定不出來：${pending} 件（不計入分子，比率會略低於實際）`);
   if (appealed > 0) log.info(`　申訴補回分子：${appealed} 件`);
+  printRemarkReasons(input.remarkRows ?? []);
   if (!input.incomplete) log.ok('　細節與待確認事項請看「心電圖執行報告」那份 .md。');
+}
+
+/**
+ * 把「到院後才傳、但備註有補述原因」的理由**直接印在畫面上**
+ * （使用者 2026-09-21 要求：篩完把理由列出來看）。
+ *
+ * 寫檔還不夠：這幾件是靠一句人寫的話才補進分子的，使用者要能當場掃一眼
+ * 判斷合不合理，而不是跑完兩個小時還要再去開一個檔案。
+ *
+ * ⚠ 個資：理由是同仁自己打的字，可能夾帶編號，因此**印之前先遮蔽 5 碼以上的數字**；
+ *   TEMSIS 一律只印末 4 碼（與全流程同一個標準）。完整內容請開 out/internal/ 那份。
+ *
+ * @param {unknown[][]} rows `buildRemarkRows()` 的輸出
+ */
+function printRemarkReasons(rows) {
+  if (rows.length === 0) return;
+  const maskDigits = (text) => String(text ?? '').replace(/\d{5,}/g, '#####');
+  log.step(`到院後才傳、但備註有補述原因的案件（${rows.length} 件，依規則已計入分子）`);
+  log.info('請掃一眼這些理由合不合理；覺得不該算的，把那一件從申訴表拿掉或回系統改備註。');
+  for (const [squad, caseDate, temsis, , , source, reason] of rows) {
+    log.info(`　${squad}　${caseDate}　${maskCode(String(temsis))}`);
+    log.info(`　　理由（${maskDigits(source)}）：${maskDigits(reason)}`);
+  }
 }
 
 /**
@@ -722,6 +753,24 @@ async function runEkgFlow(session, monthRange, options) {
     temsisColumn: denominatorColumns.twelveLead.temsis,
   }, monthRange, appealRows);
 
+  /**
+   * 2026-09-21 新增的兩份內部清單。
+   *
+   * ⚠ 只在「有跑查核、而且跑的是整個月」時才寫。兩份都是整月份的檔案，
+   *   `--no-verify`（沒有查核結果）或 `--squad`（只查一隊）時寫出去，
+   *   會把上一次完整跑出來的那份**蓋成殘缺版本，或因為這次沒有資料而整份刪掉**
+   *   ——與待人工確認清單同一個理由。
+   */
+  let remarkListPath = null;
+  let mediaListPath = null;
+  let remarkRows = [];
+  if (options.verify && !options.squad) {
+    const remarkList = await writeRemarkList(verifyOutcomes, appeals?.results ?? [], monthRange);
+    remarkListPath = remarkList.filePath;
+    remarkRows = remarkList.rows;
+    mediaListPath = (await writeMediaReviewList(verifyOutcomes, monthRange)).filePath;
+  }
+
   const denominatorCounts = mergeCounts(union.counts, appeals?.denominator);
   verifiedCounts = mergeCounts(verifiedCounts, appeals?.numerator);
 
@@ -770,6 +819,12 @@ async function runEkgFlow(session, monthRange, options) {
     produced.push(`${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
   }
   if (pendingPath) produced.push(`${path.basename(pendingPath)}（判定不出來，要你人工看）`);
+  if (remarkListPath) {
+    produced.push(`out/internal/${path.basename(remarkListPath)}（到院後補述的理由，**請你覆核**）`);
+  }
+  if (mediaListPath) {
+    produced.push(`out/internal/${path.basename(mediaListPath)}（案件影音判不出內容，要你點開看）`);
+  }
 
   // 執行報告放最後寫：它要把上面所有產出與待確認事項整理成一份給人看的摘要。
   if (!incomplete) {
@@ -801,6 +856,7 @@ async function runEkgFlow(session, monthRange, options) {
     outcomes: verifyOutcomes,
     appeals,
     incomplete,
+    remarkRows,
   });
 
   if (options.keepRaw) {
@@ -863,7 +919,7 @@ function printSquadOutcomes(outcomes, squad) {
       || String(left.caseDate ?? '').localeCompare(String(right.caseDate ?? '')),
   );
   for (const [position, item] of sorted.entries()) {
-    const counted = item.verdict === VERDICT.before;
+    const counted = countsAsNumerator(item);
     log[counted ? 'ok' : 'warn'](
       `${position + 1}. ${item.caseDate ?? '(讀不到日期)'}　${maskCode(item.temsis)}　${item.verdict}`
         + `${counted ? '（計入分子）' : '（不計入分子）'}`,
@@ -876,10 +932,22 @@ function printSquadOutcomes(outcomes, squad) {
 /** 逐案查核的結果摘要（只有件數，不列個案）。 */
 function printVerifySummary(outcomes, totalCases) {
   const countOf = (verdict) => outcomes.filter((item) => item.verdict === verdict).length;
+  // 到院後要拆成兩排：備註有補述的也計入分子（使用者 2026-09-21 定的規則）。
+  // 合成一排寫「不計入」的話，這裡的數字與正式報表對不起來。
+  const afterWithRemark = outcomes.filter(
+    (item) => item.verdict === VERDICT.after && countsAsNumerator(item),
+  ).length;
+  const mediaToReview = outcomes.reduce((total, item) => total + (item.mediaReviews?.length ?? 0), 0);
   log.step('逐案查核結果');
   log.info(`到院前傳出：${countOf(VERDICT.before)} 件（這些才計入分子）`);
-  log.info(`到院後才傳：${countOf(VERDICT.after)} 件（不計入）`);
+  if (afterWithRemark > 0) {
+    log.info(`到院後才傳但備註有補述：${afterWithRemark} 件（依規則計入分子）`);
+  }
+  log.info(`到院後才傳且沒有補述：${countOf(VERDICT.after) - afterWithRemark} 件（不計入）`);
   log.info(`判定不出來：${countOf(VERDICT.unknown)} 件（不計入，另外列清單）`);
+  if (mediaToReview > 0) {
+    log.warn(`另有 ${mediaToReview} 個「案件影音」檔程式判不出內容，已另外列清單請你點開看。`);
+  }
   if (outcomes.length < totalCases) {
     log.warn(`本次只查核了 ${outcomes.length} / ${totalCases} 件，其餘未查核的一律不計入分子。`);
   }

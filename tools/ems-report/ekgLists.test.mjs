@@ -10,8 +10,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildEkgOnlyWorkbook,
+  buildMediaReviewRows,
   buildMissingProcedureWorkbook,
   buildPendingWorkbook,
+  buildRemarkRows,
 } from './ekgLists.mjs';
 import { displayWidth } from './sheetLayout.mjs';
 
@@ -133,4 +135,73 @@ test('待人工確認清冊：標題兩列置中，TEMSIS 也完整顯示', () =
   // 這份也是拿著回系統把案件叫出來用的，遮起來反而不好對（使用者 2026-08-06 決定）。
   assert.equal(sheet.getCell(2, 3).value, 'TEMSIS');
   assert.equal(sheet.getCell(3, 3).value, '2026070910100310380401');
+});
+
+// ── 2026-09-21 新增的兩份清單 ────────────────────────────────────
+
+const 到院後有補述 = {
+  squad: '平鎮分隊',
+  caseDate: '2026/07/06',
+  temsis: '2026070610100310380201',
+  arrival: '2026/07/06 12:51:12',
+  upload: '2026/07/06 13:10:00',
+  verdict: '到院後',
+  remark: { text: '現場無訊號，回隊才傳成功', from: '12導程心電圖／CHFD_1.json' },
+  mediaReviews: [],
+};
+
+test('補述理由清冊：上傳備註與申訴表備註兩邊都要收', () => {
+  // 使用者 2026-09-21 指定「兩邊都要看，任一邊有寫就算」。
+  const rows = buildRemarkRows([到院後有補述], [{
+    appeal: { squad: '三民分隊', caseDate: '2026/07/12', temsis: 'T-9', remark: '平板當機', lineNumber: 7 },
+    outcome: '補進分子',
+  }]);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0][6], '現場無訊號，回隊才傳成功');
+  assert.match(String(rows[0][5]), /上傳清單/);
+  assert.equal(rows[1][6], '平板當機');
+  assert.match(String(rows[1][5]), /第 7 列/, '要指得出申訴表第幾列，人才回得去改');
+});
+
+test('補述理由清冊：沒填備註的申訴不會生出一列空的', () => {
+  const rows = buildRemarkRows([], [{
+    appeal: { squad: '三民分隊', caseDate: '2026/07/12', temsis: 'T-9', remark: '  ', lineNumber: 7 },
+    outcome: '補進分子',
+  }]);
+  assert.equal(rows.length, 0);
+});
+
+test('補述理由清冊：理由要原文照列，不可以截斷或摘要', () => {
+  const 長理由 = '救護車上平板當機無法連線，返隊後以電腦補傳，已通報資訊室處理，後續改以備用機操作';
+  const rows = buildRemarkRows([{ ...到院後有補述, remark: { text: 長理由, from: 'x' } }], []);
+  assert.equal(rows[0][6], 長理由, '使用者要自己判斷合不合理，摘要過就沒辦法判斷');
+});
+
+test('影音待確認清冊：帶得出檔案連結與「傳的時候到院了沒」', () => {
+  const rows = buildMediaReviewRows([{
+    squad: '平鎮分隊',
+    caseDate: '2026/07/06',
+    temsis: '2026070610100310380201',
+    arrival: '2026/07/06 12:51:12',
+    mediaReviews: [{
+      fileName: 'IMG_0001.jpg',
+      url: 'https://emsdt.tyfd.gov.tw/AppFileExplorer/download/2026/07/9/IMG_0001.jpg',
+      uploadTime: '2026/07/06 12:40:45',
+      timing: '到院前',
+      kind: '程式讀不出內容',
+      why: 'jpg 是圖片，程式讀不出內容，請自己點開看',
+      remark: '心電圖',
+    }],
+  }]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][4], 'IMG_0001.jpg');
+  assert.equal(rows[0][6], '到院前', '使用者要先看得出這個檔案是不是到院前傳的');
+  assert.match(String(rows[0][10]), /^https:\/\//, '沒有連結就得自己回系統翻，這份清單等於白做');
+});
+
+test('影音待確認清冊：沒有要人看的檔案時一列都不產生', () => {
+  assert.deepEqual(buildMediaReviewRows([{ squad: '平鎮分隊', mediaReviews: [] }]), []);
+  assert.deepEqual(buildMediaReviewRows([]), []);
 });

@@ -34,6 +34,7 @@ import { parseDateTime } from './timeParse.mjs';
  * @property {number|null} epochMs 案件日期換算成毫秒（只有日期時為當天 00:00）
  * @property {boolean} hasTime 表上有沒有填時分。沒填時後備比對改成「同一天」
  * @property {string} place 發生地點（**只在記憶體比對，不輸出**）
+ * @property {string} remark 表上寫的原因（使用者 2026-09-21 要求列出來看；沒有這一欄時為空字串）
  * @property {number} lineNumber 試算表列號，供人回表上找那一列
  */
 
@@ -121,8 +122,12 @@ function columnIndexOf(headers, candidates) {
  * 找出申訴表的四個關鍵欄。缺任何一欄就中止並列出實際欄名——
  * 猜錯欄位會產出看起來正常但完全錯誤的調整。
  *
+ * 另外找 `EKG.appeal.optionalColumns` 裡那些**有更好、沒有也能跑**的欄
+ * （目前只有備註）。它們找不到時回傳 -1，**絕不中止**：
+ * 純顯示用的一欄不該讓整個申訴比對停擺。
+ *
  * @param {string[][]} rows 含標題列的試算表內容
- * @returns {{temsis: number, caseDate: number, carNumber: number, place: number}}
+ * @returns {{temsis: number, caseDate: number, carNumber: number, place: number, remark: number}}
  */
 export function resolveAppealColumns(rows) {
   const headers = rows[0] ?? [];
@@ -132,6 +137,9 @@ export function resolveAppealColumns(rows) {
     const index = columnIndexOf(headers, candidates);
     if (index < 0) missing.push(`${key}（試過：${candidates.join('、')}）`);
     resolved[key] = index;
+  }
+  for (const [key, candidates] of Object.entries(EKG.appeal.optionalColumns ?? {})) {
+    resolved[key] = columnIndexOf(headers, candidates);
   }
   if (missing.length > 0) {
     throw new Error(
@@ -191,6 +199,8 @@ export function parseAppeals(rows, monthRange) {
       epochMs: parsed.epochMs,
       hasTime: parsed.hasTime,
       place: String(row[columns.place] ?? '').trim(),
+      // 沒有備註欄時 columns.remark 是 -1，`row[-1]` 讀出 undefined，正好變成空字串。
+      remark: String(row[columns.remark] ?? '').trim(),
       lineNumber,
     });
   }

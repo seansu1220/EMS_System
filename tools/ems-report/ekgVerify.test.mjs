@@ -10,7 +10,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCaseList,
+  countsAsNumerator,
   countVerifiedBySquad,
+  pickEarliestFileRow,
   pickEarliestUploadTime,
   resolveEkgColumns,
   VERDICT,
@@ -263,4 +265,62 @@ test('取差集允許兩份檔案的鍵欄名不同，且不改動原始順序',
   const rows = [{ 編號: 'B2' }, { 編號: 'B1' }, { 編號: 'A1' }];
   const other = [{ TEMSIS: 'A1' }];
   assert.deepEqual(rowsNotIn(rows, '編號', other, 'TEMSIS').map((r) => r.編號), ['B2', 'B1']);
+});
+
+// ── 2026-09-21 新增的兩條規則 ────────────────────────────────────
+
+const outcome = (verdict, extra = {}) => ({
+  temsis: 'T-1', squad: '平鎮分隊', verdict, reason: '', arrival: null, upload: null, source: '',
+  remark: null, mediaReviews: [], ...extra,
+});
+
+test('分子的定義只有一份：到院前，以及到院後但備註有補述', () => {
+  assert.equal(countsAsNumerator(outcome(VERDICT.before)), true);
+  assert.equal(countsAsNumerator(outcome(VERDICT.after)), false);
+  assert.equal(
+    countsAsNumerator(outcome(VERDICT.after, { remark: { text: '設備故障', from: '案件影音／a.jpg' } })),
+    true,
+    '到院後但有補述原因的，依使用者 2026-09-21 的規則要計入',
+  );
+});
+
+test('「無法判定」有備註也不算——那是沒查出來，不是查出來晚了', () => {
+  // 拿備註去救判不出來的案件，等於把所有讀不到時間的案件全部放行。
+  assert.equal(
+    countsAsNumerator(outcome(VERDICT.unknown, { remark: { text: '設備故障', from: 'x' } })),
+    false,
+  );
+  assert.equal(countsAsNumerator(null), false);
+});
+
+test('分隊彙總要把「到院後但有補述」的那幾件算進去', () => {
+  const counts = countVerifiedBySquad([
+    outcome(VERDICT.before, { squad: '平鎮分隊' }),
+    outcome(VERDICT.after, { squad: '平鎮分隊', remark: { text: '現場無訊號', from: 'x' } }),
+    outcome(VERDICT.after, { squad: '平鎮分隊' }),
+    outcome(VERDICT.unknown, { squad: '三民分隊' }),
+  ]);
+  assert.equal(counts.get('平鎮分隊'), 2);
+  assert.equal(counts.get('三民分隊'), undefined);
+});
+
+test('pickEarliestFileRow 取最早那一次，並把整列帶回來（備註要用）', () => {
+  const rows = [
+    { fileType: '12導程心電圖', uploadTime: '2026/07/02 13:10:00', remark: '補傳', links: [] },
+    { fileType: '12導程心電圖', uploadTime: '2026/07/02 12:44:08', remark: '第一次', links: [] },
+  ];
+  const picked = pickEarliestFileRow(rows, CONTEXT);
+  assert.equal(picked.time.matched, '2026/07/02 12:44:08');
+  assert.equal(picked.row.remark, '第一次', '要帶得出是哪一列，否則讀不到那一列的備註');
+});
+
+test('pickEarliestFileRow：時間讀不出來的列直接跳過，不會誤當成最早', () => {
+  const rows = [
+    { fileType: '12導程心電圖', uploadTime: '', remark: '', links: [] },
+    { fileType: '12導程心電圖', uploadTime: '0001/01/01 00:00:00', remark: '', links: [] },
+    { fileType: '12導程心電圖', uploadTime: '2026/07/02 12:44:08', remark: '真的', links: [] },
+  ];
+  // `0001/01/01 00:00:00` 是系統的空值哨兵，不是時間（見 timeParse 的年份下限）。
+  assert.equal(pickEarliestFileRow(rows, CONTEXT).row.remark, '真的');
+  assert.equal(pickEarliestFileRow([], CONTEXT), null);
 });
