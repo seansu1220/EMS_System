@@ -1,0 +1,258 @@
+/**
+ * 測試用傷票領取頁 `/triage-tags`：輸入張數 → 系統接續發號 → 下載可直接雙面列印的 PDF。
+ *
+ * 三種角色都能用（含解鎖專用帳號）；解鎖專用帳號只看得到自己的領取紀錄。
+ * 號碼一旦發出就不回收，PDF 弄丟了從下方紀錄「重新下載」，號碼不會變。
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { useAuth } from '../hooks/useAuth';
+import {
+  allocateTriageTags,
+  subscribeTriageTagIssues,
+  subscribeTriageTagNextSerial,
+  validateTriageTagCount,
+} from '../services/triageTagService';
+import { canSeeAllTriageTagIssues } from '../lib/permissions';
+import {
+  describeTriageTagRange,
+  expandTriageTagRange,
+  formatTriageTagNumber,
+  remainingTriageTags,
+} from '../lib/triageTagNumber';
+import { TRIAGE_TAG_MAX_PER_REQUEST, TRIAGE_TAG_TOTAL } from '../config/triageTag';
+import type { TriageTagIssue } from '../types/triageTag';
+import { Button, Card, CenteredSpinner, ErrorBanner, FieldLabel, INPUT_CLASS } from '../components/ui';
+
+/** 把 ISO 時間字串轉成「YYYY/MM/DD HH:mm」；空字串回傳破折號。 */
+function formatMoment(iso: string): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * 產生 PDF 並觸發下載。PDF 模組（含 jsPDF、QR code、條碼）很大，
+ * 只有真的要下載時才載入，不拖慢其他頁面。
+ */
+async function downloadTriageTagPdf(
+  startSerial: number,
+  count: number,
+  onProgress: (text: string) => void,
+): Promise<void> {
+  const { buildTriageTagPdf, triageTagPdfFileName } = await import('../lib/triageTagPdf');
+  const tagNumbers = expandTriageTagRange(startSerial, count);
+  const blob = await buildTriageTagPdf(tagNumbers, ({ donePages, totalPages }) =>
+    onProgress(`產生 PDF 中… ${donePages} / ${totalPages} 頁`),
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = triageTagPdfFileName(tagNumbers);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // 給瀏覽器一點時間開始下載再釋放。
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** 列印說明（照這樣印，正反面才會對齊）。 */
+function PrintGuide() {
+  return (
+    <Card className="bg-slate-50">
+      <h2 className="mb-2 font-semibold text-slate-700">列印方式</h2>
+      <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-600">
+        <li>一張 A4 印兩張傷票，PDF 是「正面、背面」交錯排好的。</li>
+        <li>
+          列印時選 <b>雙面列印 → 長邊翻轉</b>，縮放選 <b>實際大小（100%）</b>，不要選「符合頁面」。
+        </li>
+        <li>沿淺灰色虛線外框剪下，就是一張雙面傷票（左右兩張各自獨立）。</li>
+        <li>第一次印建議先印一張確認正反面有對齊，再印整批。</li>
+      </ol>
+    </Card>
+  );
+}
+
+/** 領取紀錄表格（每一列可重新下載同一批號碼）。 */
+function IssueTable({
+  issues,
+  showRequester,
+  busy,
+  onRedownload,
+}: {
+  issues: TriageTagIssue[];
+  showRequester: boolean;
+  busy: boolean;
+  onRedownload: (issue: TriageTagIssue) => void;
+}) {
+  if (issues.length === 0) return <p className="text-sm text-slate-400">還沒有領取紀錄。</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-slate-200 text-xs text-slate-500">
+          <tr>
+            <th className="py-2 pr-3 font-medium">領取時間</th>
+            {showRequester && <th className="py-2 pr-3 font-medium">領取人</th>}
+            <th className="py-2 pr-3 font-medium">號碼</th>
+            <th className="py-2 pr-3 font-medium">張數</th>
+            <th className="py-2 font-medium" />
+          </tr>
+        </thead>
+        <tbody>
+          {issues.map((issue) => (
+            <tr key={issue.id} className="border-b border-slate-100 last:border-0">
+              <td className="py-2 pr-3 whitespace-nowrap text-slate-500">{formatMoment(issue.requestedAt)}</td>
+              {showRequester && <td className="py-2 pr-3">{issue.requestedByName}</td>}
+              <td className="py-2 pr-3 font-mono">{describeTriageTagRange(issue.startSerial, issue.count)}</td>
+              <td className="py-2 pr-3">{issue.count}</td>
+              <td className="py-2 text-right">
+                <Button variant="secondary" disabled={busy} onClick={() => onRedownload(issue)}>
+                  重新下載
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function TriageTagPage() {
+  const { user } = useAuth();
+  const seesAll = canSeeAllTriageTagIssues(user);
+
+  const [nextSerial, setNextSerial] = useState<number | null>(null);
+  const [issues, setIssues] = useState<TriageTagIssue[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [countText, setCountText] = useState('10');
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => subscribeTriageTagNextSerial(setNextSerial, (error) => setLoadError(error.message)), []);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    return subscribeTriageTagIssues(
+      { uid: user.uid, onlyMine: !seesAll },
+      (list) => {
+        setIssues(list);
+        setLoadError(null);
+      },
+      (error) => setLoadError(error.message),
+    );
+  }, [user, seesAll]);
+
+  const count = Number(countText);
+  const countProblem = nextSerial === null ? null : validateTriageTagCount(count, nextSerial);
+
+  /** 產 PDF 的共用外殼：鎖住按鈕、顯示進度、錯誤統一顯示。 */
+  async function runDownload(startSerial: number, tagCount: number, doneMessage: string) {
+    setProgress('準備中…');
+    try {
+      await downloadTriageTagPdf(startSerial, tagCount, setProgress);
+      setNotice(doneMessage);
+    } finally {
+      setProgress('');
+    }
+  }
+
+  async function handleAllocate(event: FormEvent) {
+    event.preventDefault();
+    if (!user || countProblem) return;
+    setActionError(null);
+    setNotice('');
+    setBusy(true);
+    try {
+      const allocated = await allocateTriageTags(user, count);
+      const range = describeTriageTagRange(allocated.startSerial, allocated.count);
+      await runDownload(allocated.startSerial, allocated.count, `已領取 ${range}，PDF 已下載。`);
+    } catch (error) {
+      setActionError(
+        `${(error as Error).message}　（若號碼已經領到但 PDF 沒下載成功，可以從下方紀錄重新下載。）`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRedownload(issue: TriageTagIssue) {
+    setActionError(null);
+    setNotice('');
+    setBusy(true);
+    try {
+      const range = describeTriageTagRange(issue.startSerial, issue.count);
+      await runDownload(issue.startSerial, issue.count, `已重新下載 ${range}（號碼不變）。`);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (nextSerial === null && !loadError) return <CenteredSpinner />;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-bold text-slate-800">測試用傷票領取</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          輸入要幾張，系統會接續上一位同仁的號碼發給你，並產生可直接雙面列印的 PDF。
+        </p>
+      </div>
+
+      <ErrorBanner message={loadError} />
+
+      <Card>
+        <form className="space-y-4" onSubmit={handleAllocate}>
+          <div className="max-w-xs">
+            <FieldLabel required>張數</FieldLabel>
+            <input
+              className={INPUT_CLASS}
+              type="number"
+              min={1}
+              max={TRIAGE_TAG_MAX_PER_REQUEST}
+              value={countText}
+              onChange={(event) => setCountText(event.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              一次最多 {TRIAGE_TAG_MAX_PER_REQUEST} 張（一張 A4 印兩張）
+            </p>
+          </div>
+          {nextSerial !== null && (
+            <p className="text-sm text-slate-600">
+              {remainingTriageTags(nextSerial) > 0 ? (
+                <>
+                  下一張從 <span className="font-mono font-semibold">{formatTriageTagNumber(nextSerial)}</span> 開始，
+                  還剩 {remainingTriageTags(nextSerial).toLocaleString()} / {TRIAGE_TAG_TOTAL.toLocaleString()} 張可發。
+                </>
+              ) : (
+                '號碼已全部發完。'
+              )}
+            </p>
+          )}
+          {countText !== '' && countProblem && <p className="text-sm text-red-600">{countProblem}</p>}
+          <ErrorBanner message={actionError} />
+          {notice && <p className="text-sm text-green-700">{notice}</p>}
+          <Button type="submit" disabled={busy || nextSerial === null || countProblem !== null}>
+            {progress || '領取並下載 PDF'}
+          </Button>
+        </form>
+      </Card>
+
+      <PrintGuide />
+
+      <Card>
+        <h2 className="mb-3 font-semibold text-slate-700">{seesAll ? '所有人的領取紀錄' : '我的領取紀錄'}</h2>
+        {issues === null ? (
+          <p className="text-sm text-slate-400">載入中…</p>
+        ) : (
+          <IssueTable issues={issues} showRequester={seesAll} busy={busy} onRedownload={handleRedownload} />
+        )}
+      </Card>
+    </div>
+  );
+}

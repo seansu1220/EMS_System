@@ -58,6 +58,10 @@ export function Layout() {
             <NavLink to="/unlock" className={navItemClass}>
               解鎖工單
             </NavLink>
+            {/* 測試用傷票領取：同樣三種角色都用得到。 */}
+            <NavLink to="/triage-tags" className={navItemClass}>
+              測試用傷票領取
+            </NavLink>
             {/* 使用者管理僅管理員可見（權限最終防線仍在 Firestore 規則）。 */}
             {isAdmin && (
               <NavLink to="/users" className={navItemClass}>

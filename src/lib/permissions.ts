@@ -90,3 +90,12 @@ export function isUnlockOnly(user: AppUser | null): boolean {
 export function canSeeAllUnlockRequests(user: AppUser | null): boolean {
   return canUseTaskSystem(user);
 }
+
+/**
+ * 是否看得到**所有人**的測試用傷票領取紀錄（規則同解鎖工單）。
+ *
+ * 領傷票三種角色都可以；解鎖專用帳號只看得到自己領的那幾批。
+ */
+export function canSeeAllTriageTagIssues(user: AppUser | null): boolean {
+  return canUseTaskSystem(user);
+}

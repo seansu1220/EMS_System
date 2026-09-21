@@ -16,6 +16,8 @@
  * 4. 一般使用者不可自行把自己改成 approved 或 admin（不可自我提權）。
  * 5. **解鎖專用帳號**（role == 'unlocker'）讀不到任何業務資料，
  *    解鎖工單只讀得到自己送的、不可回寫結果、不可冒用他人名義申請。
+ * 6. **測試用傷票**：號碼只能接續往下領（計數器與領取紀錄必須一起寫、互相對得上），
+ *    不能挑號碼、跳號、超過單次上限或冒名；解鎖專用帳號只讀得到自己的領取紀錄。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -34,6 +36,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 
 const ADMIN_EMAIL = 'seansu1220@gmail.com';
@@ -432,7 +435,80 @@ await check(
   ),
 );
 
-// ── 6. 未登入者 ──
+// ── 6. 測試用傷票（計數器 + 領取紀錄必須一起寫、互相對得上）──
+
+/** 模擬前端的一次領取：計數器往後推，同時建立一筆領取紀錄。 */
+function allocateTags(db, { before, startSerial = before, count, advanceTo = before + count, requestedBy }) {
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'triageTagCounter/main'), { nextSerial: advanceTo });
+  batch.set(doc(db, `triageTagIssues/${startSerial}`), {
+    startSerial,
+    count,
+    requestedBy,
+    requestedByName: requestedBy,
+    requestedAt: '2026-09-21T01:00:00.000Z',
+  });
+  return batch.commit();
+}
+
+await check(
+  '解鎖專用帳號可領第一批傷票（H00T000 起 10 張）',
+  assertSucceeds(allocateTags(unlocker, { before: 0, count: 10, requestedBy: 'unlocker-uid' })),
+);
+await check(
+  '一般使用者可接續領（H00T010 起 2 張）',
+  assertSucceeds(allocateTags(member, { before: 10, count: 2, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可自己挑號碼（起始號不等於計數器的下一號）',
+  assertFails(allocateTags(member, { before: 12, startSerial: 50, count: 2, advanceTo: 52, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可偷跳號（計數器推進的張數與紀錄不符）',
+  assertFails(allocateTags(member, { before: 12, count: 2, advanceTo: 30, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可只推計數器不留領取紀錄',
+  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 20 })),
+);
+await check(
+  '一次不可超過 100 張',
+  assertFails(allocateTags(member, { before: 12, count: 101, requestedBy: 'member-uid' })),
+);
+await check(
+  '不可冒用他人名義領取',
+  assertFails(allocateTags(member, { before: 12, count: 1, requestedBy: 'unlocker-uid' })),
+);
+await check(
+  '待審核帳號不可領傷票',
+  assertFails(allocateTags(pending, { before: 12, count: 1, requestedBy: 'pending-uid' })),
+);
+await check(
+  '解鎖專用帳號讀得到自己的領取紀錄',
+  assertSucceeds(getDoc(doc(unlocker, 'triageTagIssues/0'))),
+);
+await check(
+  '解鎖專用帳號讀不到別人的領取紀錄',
+  assertFails(getDoc(doc(unlocker, 'triageTagIssues/10'))),
+);
+await check(
+  '解鎖專用帳號帶上自己的條件可以查清單',
+  assertSucceeds(getDocs(query(collection(unlocker, 'triageTagIssues'), where('requestedBy', '==', 'unlocker-uid')))),
+);
+await check(
+  '解鎖專用帳號不帶條件查全部會被擋',
+  assertFails(getDocs(collection(unlocker, 'triageTagIssues'))),
+);
+await check('一般使用者可看全部領取紀錄', assertSucceeds(getDocs(collection(member, 'triageTagIssues'))));
+await check(
+  '領取紀錄不可修改',
+  assertFails(updateDoc(doc(admin, 'triageTagIssues/0'), { count: 1 })),
+);
+await check('計數器不可刪除（管理員也不行）', assertFails(deleteDoc(doc(admin, 'triageTagCounter/main'))));
+await check('一般使用者不可刪除領取紀錄', assertFails(deleteDoc(doc(member, 'triageTagIssues/10'))));
+await check('管理員可刪除領取紀錄', assertSucceeds(deleteDoc(doc(admin, 'triageTagIssues/10'))));
+
+// ── 7. 未登入者 ──
 const anon = testEnv.unauthenticatedContext().firestore();
 await check('未登入者不可讀業務', assertFails(getDoc(doc(anon, 'tasks/task-1'))));
 await check(

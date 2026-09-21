@@ -1,7 +1,7 @@
 {
   "name": "ems-system",
   "private": true,
-  "version": "1.14.0",
+  "version": "1.15.0",
   "type": "module",
   "description": "救護科業務管理系統 - 業務 CRUD、期限提醒、進度管理、屬性分類、跨裝置雲端同步",
   "scripts": {
@@ -23,12 +23,16 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "firebase": "^11.3.1",
+    "jsbarcode": "^3.12.3",
+    "jspdf": "^4.2.1",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.6",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",

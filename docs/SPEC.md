@@ -1,6 +1,10 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.20.0　建立日期：2026-07-22　最後更新：2026-09-11
+> 版本：v1.21.0　建立日期：2026-07-22　最後更新：2026-09-21
+> v1.21.0：新增**測試用傷票領取頁 `/triage-tags`**——輸入張數，號碼 `H00T000 ~ H99T999`
+> 　　　　 全系統接續發放，下載一張 A4 印兩張、可直接雙面列印的 PDF；三種角色都能用
+> 　　　　 （解鎖專用帳號的第二個入口）。新增 `triageTagCounter`／`triageTagIssues`
+> 　　　　 兩個集合與對應安全規則（見 2.9、3）
 > v1.20.0：解鎖工單新增狀態 **`usageCleared`（已解除佔用）**——案件本來就是未結案，
 > 　　　　 但紀錄表還被某台裝置線上使用中，救護科電腦會自動去刪掉那筆佔用紀錄（見 2.8）
 > v1.19.2：`/tools` 的「到院前預警比率」補上**增減試算表逐列對帳**的說明
@@ -258,13 +262,15 @@
 | `/holidays` | （v1.12.2 起併入屬性管理）自動導向 `/categories` | 同上 |
 | `/tools` | 小工具（說明頁；工具本身在本機執行，見 TOOLS_SPEC.md） | 需登入且已核准 |
 | `/unlock` | **解鎖工單**（提出申請、查看結果） | 需登入且已核准（**三種角色都可以**） |
+| `/triage-tags` | **測試用傷票領取**（v1.21，輸入張數 → 下載 PDF） | 需登入且已核准（**三種角色都可以**） |
 | `/users` | 使用者管理 | 僅管理員 |
 
 未核准的登入者不論進入哪個受保護路徑，一律顯示「等待管理員核准」畫面。
 
-**「解鎖專用」帳號**（v1.17 起）除了 `/unlock` 以外，進任何路徑都會被導回 `/unlock`。
+**「解鎖專用」帳號**（v1.17 起）除了 `/unlock` 與 `/triage-tags`（v1.21）以外，
+進任何路徑都會被導回 `/unlock`。導覽列只看得到「解鎖工單」與「測試用傷票領取」兩個標題。
 守衛做法：`ProtectedRoute` 多一個 `requireTaskSystem` 參數（預設 true），
-`/unlock` 那條路由設為 false，其餘全部沿用預設。
+`/unlock`、`/triage-tags` 兩條路由設為 false，其餘全部沿用預設。
 前端擋下只是為了不讓人看到一頁載不出資料的畫面，真正的防線仍是 Firestore 規則。
 
 ### 2.8 解鎖工單頁 `/unlock`（v1.17）
@@ -330,6 +336,49 @@
 > 因此網頁只負責申請與查結果，實際動手的是救護科電腦上的本機工具
 > （完整原因與流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章）。
 
+### 2.9 測試用傷票領取頁 `/triage-tags`（v1.21）
+
+給同仁領取「大量傷患檢傷追蹤卡」測試用傷票（使用者 2026-09-21 指定）。
+**三種角色都能用**，解鎖專用帳號登入後導覽列上的第二個標題就是這一頁。
+
+**號碼規則。** 格式 `H` + 2 碼 + `T` + 3 碼，範圍 `H00T000 ~ H99T999`，共 10 萬張。
+內部用流水號 0 ~ 99999 記帳（`H01T234` ＝ 1234），**全系統接續發放**：
+A 領 10 張拿到 `H00T000 ~ H00T009`，下一個人領 2 張就是 `H00T010`、`H00T011`。
+號碼一旦發出**不回收**（同紙本傷票，印壞了就作廢）。一次最多 100 張
+（`TRIAGE_TAG_MAX_PER_REQUEST`，防手殘多打一個 0；規則層同步限制）。
+
+**畫面。**
+- 上半：輸入張數 → 「領取並下載 PDF」。旁邊即時顯示「下一張從 H00T0xx 開始、還剩幾張」。
+  按下後先發號、再在瀏覽器裡產生 PDF 並下載，按鈕上顯示「產生 PDF 中… 3 / 10 頁」。
+- 中間：列印方式說明（見下）。
+- 下半：領取紀錄（新的排前面）。管理員與一般使用者看得到全部（多一欄「領取人」），
+  解鎖專用帳號只看得到自己的。每一列都有「重新下載」——**號碼不變、不會再發新號**，
+  PDF 弄丟或當時產生失敗都從這裡補。
+
+**PDF 版面。** 照紙本傷票重畫（`src/lib/triageTagDraw.ts`），一張 A4 直式左右並排兩張，
+每張 95 × 285 mm、外框畫淺灰虛線當裁切線：
+
+| 面 | 內容 |
+| --- | --- |
+| 正面 | 掛繩孔、「檢傷追蹤」、右上可撕的「後送存根」斜角（QR code＋號碼）、姓名（不詳）、男/女/不明、約＿歲、補充說明框 |
+| 背面 | 左上可撕斜角（直立號碼、時間/醫院/車輛灰底欄、四色小方格）、「檢傷追蹤」＋ QR code、人形圖正面/背面、時間/呼吸/脈搏/血壓表（3 列） |
+| 兩面共用 | 0（黑，內含 Code128 條碼＋號碼）／ I（紅）／ II（黃）／ III（綠）四條色帶，色帶間畫撕線；最底下灰色存根條（直書「檢傷沿線撕下」＋ QR code；正面右側性別年齡、背面右側「檢傷存根」） |
+
+QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
+
+**雙面對齊。** PDF 頁序為「正面、背面」交錯；**背面頁的左右是對調的**——
+印表機選「雙面列印 → 長邊翻轉」時紙翻過來左右互換，正面左邊那張的背面要畫在背面頁右邊才會疊在一起。
+張數為奇數時最後一張 A4 只有一張：正面在左、背面在右。
+列印須選「實際大小（100%）」，不可「符合頁面」，否則正反面會錯位。
+
+**實作。** 每一頁先用 canvas 畫（中文字用瀏覽器現成字型，不必在 PDF 嵌入字型檔），
+以 250dpi JPEG 放進 jsPDF（每頁約 320 KB）。PDF 模組（jsPDF、qrcode、jsbarcode）**只在按下載時才載入**，
+不拖慢其他頁面。尺寸、解析度、色碼、上限集中在 `src/config/triageTag.ts`。
+
+**發號的一致性。** 「讀計數器 → 往後推 → 寫領取紀錄」包在同一個 Firestore transaction
+（`triageTagService.allocateTriageTags`），兩人同時按也不會拿到同一批號碼；
+安全規則再用 `getAfter` 互相核對兩份文件（見第 3 章安全規則）。
+
 ---
 
 ## 3. 資料模型（Firestore）
@@ -349,6 +398,10 @@
   原因與完整流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章。
   ⚠ 這是「個案編號上雲」的**唯一例外**（只有編號、事由與結果，沒有任何病患資料），
   取捨說明見 TOOLS_SPEC 0.3。
+- `triageTagCounter/main`（v1.21 新增）：{ nextSerial（下一個要發的流水號，0 ~ 100000）, updatedAt }
+  ——全系統只有這一份，測試用傷票的號碼從這裡接續往下發（見 2.9）。
+- `triageTagIssues/{起始流水號}`（v1.21 新增）：{ startSerial, count, requestedBy, requestedByName, requestedAt }
+  ——一次領取一筆，文件 ID 就是起始流水號（不補零，例 `10` ＝ `H00T010` 起），天生不重複。
 
 ### 安全規則（v1.8 改版）
 - 管理員以 `request.auth.token.email` 比對白名單認定（**不讀資料庫欄位**，避免竄改文件提權）；
@@ -367,10 +420,18 @@
   - 更新（回寫結果，以及管理員的「重新送單」）：僅 `isStaff()`，
     且不可竄改 `temsis`／`reason`／`requestedBy`／`requestedAt`。
   - 刪除：僅管理員。
+- `triageTagCounter` / `triageTagIssues`（v1.21 起）：
+  - 讀：計數器任何已核准帳號可讀；領取紀錄 `isStaff()` 看全部，其他已核准帳號只讀得到自己的
+    （同解鎖工單，查詢須帶 `where('requestedBy','==',uid)`）。
+  - 領取：任何已核准帳號（含解鎖專用），但**計數器與領取紀錄必須在同一筆寫入裡一起寫**，
+    規則用 `getAfter` 互相核對：紀錄的起始號＝計數器原本的下一號（不能挑號碼、不能重複領）、
+    計數器推進的張數＝紀錄的張數（不能跳號、不能只推計數器不留紀錄）、
+    `requestedBy == 自己`、張數 1 ~ 100、不超過 `H99T999`。
+  - 領取紀錄不可修改，刪除僅管理員（號碼不回收）；計數器**任何人都不可刪除**（刪了號碼會從頭重發）。
 - `users`：本人可讀自己的文件、可改自己的一般欄位，但 **role 與 status 不可自行變更**（不可自我核准/提權）；
   列出全部帳號與變更他人狀態僅限管理員；建立時強制
   `role/status == (管理員 email ? admin/approved : member/pending)`。
-- 規則測試腳本置於 `scripts/rules.test.mjs`，執行 `npm run test:rules`（v1.18.3 起 **53/53 通過**）。
+- 規則測試腳本置於 `scripts/rules.test.mjs`，執行 `npm run test:rules`（v1.21 起 **70/70 通過**，含測試用傷票 17 項）。
   啟動器 `scripts/run-rules-test.mjs` 會自動找出 JDK 21 以上的安裝並只在該次執行插入 PATH——
   因為 firebase-tools 是直接呼叫 PATH 上的 `java`（不看 JAVA_HOME），而本機另有舊版 Java 8 排在前面。
   測試套件 `@firebase/rules-unit-testing` 刻意不列入 devDependencies（避免 peer 版本衝突），
@@ -411,20 +472,24 @@
 ```
 EMS_System/
 ├─ src/
-│  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts、holiday.ts
+│  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts、holiday.ts、
+│  │                unlockRequest.ts、triageTag.ts
 │  ├─ config/       constants.ts（提醒工作日 7/30/3、工作日星期、預設屬性、集合名稱、ADMIN_EMAILS）、
-│  │                holidays.ts（內建 2026/2027 國定假日清單）
+│  │                holidays.ts（內建 2026/2027 國定假日清單）、
+│  │                triageTag.ts（測試用傷票的號碼格式、單次上限、版面尺寸、色碼）
 │  ├─ lib/          firebase.ts、taskLogic.ts、workday.ts（工作日計算）、holidayCsv.ts（日曆表解析）、
-│  │                recurrence.ts、checklistLogic.ts、permissions.ts
+│  │                recurrence.ts、checklistLogic.ts、permissions.ts、
+│  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
-│  │                userService、holidayService
+│  │                userService、holidayService、unlockRequestService、triageTagService
 │  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
 │  │                CompletionSection、ui
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
-│                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage
+│                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、
+│                   UnlockPage、TriageTagPage
 ├─ tools/           本機小工具（規格見 TOOLS_SPEC.md），不參與建置與部署
 │  └─ ems-report/   救護紀錄表查詢；out/ 為產出目錄，含個案明細，已 gitignore
 ├─ 捷徑/            雙擊執行的批次檔（啟動系統、救護預警統計、設定登入帳密…）

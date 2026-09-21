@@ -138,5 +138,66 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    // ── 測試用傷票（v1.21 起）──
+    //
+    // 號碼 H00T000 ~ H99T999（流水號 0 ~ 99999）全系統接續發放：
+    //   - triageTagCounter/main：{ nextSerial } 下一個要發的流水號
+    //   - triageTagIssues/{起始流水號}：一次領取一筆 { startSerial, count, requestedBy, ... }
+    // 兩份文件必須在**同一個 transaction** 裡一起寫，規則用 getAfter 互相核對：
+    //   - 領取紀錄的起始號＝計數器原本的下一號（不能自己挑號碼、不能重複領）
+    //   - 計數器往後推的張數＝領取紀錄的張數（不能偷跳號，也不能只推計數器不留紀錄）
+    // 三種角色（含解鎖專用）只要已核准都能領。
+    // ⚠️ 單次上限 100 須與 src/config/triageTag.ts 的 TRIAGE_TAG_MAX_PER_REQUEST 一致。
+    function triageCounterPath() {
+      return /databases/$(database)/documents/triageTagCounter/main;
+    }
+
+    function triageIssuePath(startSerial) {
+      return /databases/$(database)/documents/triageTagIssues/$(string(startSerial));
+    }
+
+    // 這次寫入之前，計數器上的下一號（還沒有計數器＝從 0 開始）。
+    function triageNextBefore() {
+      return exists(triageCounterPath()) ? get(triageCounterPath()).data.nextSerial : 0;
+    }
+
+    match /triageTagCounter/{counterId} {
+      allow read: if isApproved();
+
+      // 只准往後推，而且同一筆寫入裡必須新建一張對得上的領取紀錄。
+      allow create, update: if isApproved()
+        && counterId == 'main'
+        && request.resource.data.nextSerial is int
+        && !exists(triageIssuePath(triageNextBefore()))
+        && existsAfter(triageIssuePath(triageNextBefore()))
+        && request.resource.data.nextSerial
+          == triageNextBefore() + getAfter(triageIssuePath(triageNextBefore())).data.count;
+
+      // 刪掉計數器等於號碼從頭再發一次，一律禁止。
+      allow delete: if false;
+    }
+
+    match /triageTagIssues/{issueId} {
+      // 業務人員看得到全部；其他已核准帳號（解鎖專用）只看得到自己領的。
+      allow read: if isStaff()
+        || (isApproved() && resource.data.requestedBy == request.auth.uid);
+
+      allow create: if isApproved()
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.startSerial is int
+        && request.resource.data.count is int
+        && request.resource.data.count >= 1
+        && request.resource.data.count <= 100
+        && request.resource.data.startSerial == triageNextBefore()
+        && issueId == string(request.resource.data.startSerial)
+        && request.resource.data.startSerial + request.resource.data.count <= 100000
+        && getAfter(triageCounterPath()).data.nextSerial
+          == request.resource.data.startSerial + request.resource.data.count;
+
+      // 領取紀錄是號碼發放的帳本，發出去就不改；誤領的由管理員刪除紀錄（號碼不回收）。
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
   }
 }

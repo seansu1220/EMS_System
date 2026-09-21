@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-09-21　v1.41.0 新增「測試用傷票領取」：接續發號、下載可雙面列印的 PDF
+
+### 問題描述
+使用者提供紙本大傷傷票（檢傷追蹤卡）範本，希望：
+
+1. 系統能自動產生可以直接影印的傷票，**一張 A4 印兩張、雙面**，印完裁切就能用。
+   號碼格式 `H00T000 ~ H99T999`，共 10 萬張，**接續往下發**：A 要 10 張給
+   `H00T000 ~ H00T009`，下一個人要 2 張就給 `H00T010`、`H00T011`。
+2. 做成線上版：解鎖專用帳號登入後，第二個標題是「測試用傷票領取」，
+   同仁輸入要幾張就拿到檔案直接印。
+
+### 根本原因
+新功能。要解決的有三件事：
+- **號碼不能重複**：多人同時領時要保證拿到不同批號碼 → 計數器放在 Firestore，
+  用 transaction 發號，安全規則再核對一次。
+- **雙面要對齊**：長邊翻轉時紙的左右會互換，所以背面頁的左右要對調。
+- **PDF 裡的中文字**：在 PDF 內嵌中文字型檔很大，改成每頁先用 canvas（瀏覽器現成字型）畫好再放進 PDF。
+
+### 修改的檔案與內容
+- **`src/config/triageTag.ts`（新檔）**：號碼格式、總數 10 萬、單次上限 100、
+  A4 版面（每張 95 × 285 mm）、250dpi、四條色帶色碼、字型。
+- **`src/lib/triageTagNumber.ts`（新檔）**：流水號 ↔ `H00T000` 換算、區間展開與顯示（純函式）。
+- **`src/lib/triageTagDraw.ts`（新檔）**：照紙本重畫正面與背面（QR code、Code128 條碼、
+  人形圖、生命徵象表、0/I/II/III 色帶、存根條、裁切虛線）。座標一律用公釐。
+- **`src/lib/triageTagPdf.ts`（新檔）**：兩張一組排成 A4，頁序正面、背面交錯，背面左右對調；
+  產生時逐頁回報進度。只在按下載時才載入（jsPDF 等套件不拖慢其他頁面）。
+- **`src/types/triageTag.ts`、`src/services/triageTagService.ts`（新檔）**：
+  `triageTagCounter/main` 計數器 + `triageTagIssues/{起始流水號}` 領取紀錄；
+  transaction 發號、訂閱下一號與領取紀錄。
+- **`src/pages/TriageTagPage.tsx`（新檔）**：輸入張數 → 領取並下載 PDF；列印方式說明；
+  領取紀錄（可「重新下載」，號碼不變）。
+- **`src/App.tsx`、`src/components/Layout.tsx`、`src/components/ProtectedRoute.tsx`**：
+  新增 `/triage-tags` 路由（與 `/unlock` 同區，解鎖專用帳號進得去）與導覽列「測試用傷票領取」。
+- **`src/lib/permissions.ts`**：新增 `canSeeAllTriageTagIssues()`。
+- **`src/config/constants.ts`**：`COLLECTIONS` 加入兩個集合。
+- **`firebase/firestore.rules`**：新增兩個集合的規則——計數器與領取紀錄必須同一筆寫入、
+  用 `getAfter` 互相核對（不能挑號、跳號、冒名、超過 100 張），計數器不可刪除。
+- **`scripts/rules.test.mjs`**：新增 17 項傷票規則測試，全部 **70/70 通過**。
+- **`package.json`**：新增 `jspdf`、`qrcode`、`jsbarcode`（與 `@types/qrcode`）；版本 1.15.0。
+- **`docs/SPEC.md`**：新增 2.9 節，更新路由表、資料模型、安全規則、目錄結構。
+
+### 驗證
+- 以瀏覽器實際產生 3 張（H00T010 ~ H00T012）的 PDF 截圖核對：正面／背面版面與紙本一致，
+  背面左右對調正確，奇數張時最後一張 A4 正面在左、背面在右。
+- `npm run build` 通過；`npm run test:rules` 70/70。
+
+---
+
 ## 2026-09-21　v1.40.0 照片讀得出來了，而且判定可以回填給程式
 
 ### 問題描述

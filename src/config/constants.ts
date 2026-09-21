@@ -32,6 +32,10 @@ export const COLLECTIONS = {
   holidays: 'holidays',
   /** 解鎖工單（網頁申請 → 本機工具執行 → 結果回寫）。 */
   unlockRequests: 'unlockRequests',
+  /** 測試用傷票的發號計數器（只有一份文件 `main`）。 */
+  triageTagCounter: 'triageTagCounter',
+  /** 測試用傷票的領取紀錄（一次領取一筆，文件 ID＝起始流水號）。 */
+  triageTagIssues: 'triageTagIssues',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */

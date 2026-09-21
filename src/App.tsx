@@ -11,6 +11,7 @@ import { CategoriesPage } from './pages/CategoriesPage';
 import { ChecklistTemplatesPage } from './pages/ChecklistTemplatesPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { UnlockPage } from './pages/UnlockPage';
+import { TriageTagPage } from './pages/TriageTagPage';
 import { UsersPage } from './pages/UsersPage';
 
 export default function App() {
@@ -20,7 +21,7 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
 
       {/*
-        解鎖工單頁自成一區：**「解鎖專用」帳號唯一進得去的地方**。
+        解鎖工單頁與測試用傷票領取頁自成一區：**「解鎖專用」帳號唯一進得去的地方**。
         其餘所有頁面都屬於業務管理系統，那種帳號一律被導回這裡。
       */}
       <Route
@@ -31,6 +32,8 @@ export default function App() {
         }
       >
         <Route path="unlock" element={<UnlockPage />} />
+        {/* 測試用傷票領取：同樣三種角色都能用（解鎖專用帳號的第二個入口）。 */}
+        <Route path="triage-tags" element={<TriageTagPage />} />
       </Route>
 
       <Route
