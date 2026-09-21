@@ -42,8 +42,9 @@
 - **`package.json`**：版本 1.16.0。
 
 ### 號碼歸零
-正式資料庫的 `triageTagCounter`、`triageTagIssues` 需清空才會從 H00T000 重新開始
-（見本次交付說明；清空由使用者確認後執行）。
+使用者同意後，2026-09-21 以 `firebase firestore:delete --recursive` 清空正式資料庫的
+`triageTagCounter`、`triageTagIssues`、`triageTagUnitWeeks`，並用 Firestore REST API 確認三者皆為 0 筆。
+下一位領取者從 H00T000 重新開始。
 
 ---
 
