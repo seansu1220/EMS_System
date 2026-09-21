@@ -19,6 +19,7 @@ import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 import { VERDICT, countsAsNumerator } from './ekgVerify.mjs';
+import { DECISION, REVIEW_COLUMN } from './ekgReview.mjs';
 
 /** 檔名前綴。 */
 const SUMMARY_PREFIX = '心電圖執行報告';
@@ -73,16 +74,17 @@ function buildTodoList(outcomes, appeals) {
   if (pending.length > 0) {
     todo.push(
       `**${pending.length} 件判定不出來**，目前不計入分子（比率會略低於實際）。`
-        + '明細見「心電圖待人工確認」那份，核對後若確實在到院前傳出，請填進申訴表。',
+        + `請開「心電圖-人工判定」那份，看完在「${REVIEW_COLUMN}」欄填`
+        + `「${DECISION.count}」或「${DECISION.skip}」，存檔後再跑一次這個月，`
+        + '程式就會照你的判定重算。（「心電圖待人工確認」那份是同一批案件的唯讀版本。）',
     );
   }
 
   const mediaCount = outcomes.reduce((total, item) => total + (item.mediaReviews?.length ?? 0), 0);
   if (mediaCount > 0) {
     todo.push(
-      `有 **${mediaCount} 個「案件影音」檔程式讀不出內容**（多半是照片），目前不計入分子。`
-        + '明細見「心電圖-案件影音待人工確認」那份（有檔案連結，點開就看得到）。'
-        + '確認是 12 導程的，填進申訴表，下次跑就會補進分子。',
+      `有 **${mediaCount} 個「案件影音」檔程式讀不出內容**（照片辨識認不出導程名稱），目前不計入分子。`
+        + '明細見「心電圖-人工判定」那份（有檔案連結，點開就看得到）。',
     );
   }
 
@@ -291,6 +293,8 @@ export async function writeRunSummary(input) {
   const numerator = sum(numeratorCounts);
   const ratio = denominator === 0 ? '—' : `${((numerator / denominator) * 100).toFixed(1)}%`;
   const verdicts = countVerdicts(outcomes);
+  const manualCounted = outcomes.filter((item) => item.manual?.decision === DECISION.count).length;
+  const manualSkipped = outcomes.filter((item) => item.manual?.decision === DECISION.skip).length;
   const todo = buildTodoList(outcomes, appeals);
 
   const lines = [
@@ -321,6 +325,14 @@ export async function writeRunSummary(input) {
     `| 到院後才傳，備註沒有補述 | ${verdicts.after} | 否 |`,
     `| 判定不出來 | ${verdicts.unknown} | 否 |`,
     '',
+    ...(manualCounted + manualSkipped > 0
+      ? [
+        `其中 **${manualCounted + manualSkipped} 件是依你在人工判定清單上填的結果**`
+          + `（「${DECISION.count}」${manualCounted} 件、「${DECISION.skip}」${manualSkipped} 件）。`
+          + '人工判定會蓋掉程式的判定，逐案判定表的「依據」欄看得到是哪幾件。',
+        '',
+      ]
+      : []),
     '## 要你確認的事',
     '',
   ];

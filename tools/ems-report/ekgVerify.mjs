@@ -58,6 +58,9 @@ import {
   inspectMediaFile,
   isMeaningfulRemark,
 } from './ekgMedia.mjs';
+// 人工判定的兩個值。`ekgReview.mjs` 不反過來 import 本檔，因此沒有循環相依。
+import { DECISION as MANUAL_DECISION } from './ekgReview.mjs';
+import { readImageText, closeOcr } from './ekgOcr.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import { extractLabeledValue, maskCode } from './sheetFields.mjs';
@@ -99,6 +102,8 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {string|null} [caseDate] 案件日期。判定不出來的案件要靠它才找得回原案
  * @property {RemarkNote|null} [remark] 到院後但備註有補述原因；非 null 即計入分子
  * @property {MediaReview[]} [mediaReviews] 判不出內容、要人工看的影音檔
+ * @property {{decision: string, note: string}|null} [manual]
+ *   使用者在人工判定清單上填的（見 `ekgReview.mjs`）。**蓋掉程式的判定**
  * @property {number} [logicVersion] 這筆結論是用哪一版判定規則跑出來的（續跑時要比對）
  */
 
@@ -110,17 +115,22 @@ export const VERDICT = { before: '到院前', after: '到院後', unknown: '無�
  * 逐案彙總（`countVerifiedBySquad`）與逐案判定表（`ekgLedger`）都問它，
  * 兩邊才不會各算各的——那會產出「報表寫 120 件、判定表數出來 118 件」這種對不起來的東西。
  *
- * 兩種情形算數：
- *   1. 查核判定為**到院前**傳出
- *   2. 判定為到院後，但**備註欄有補述原因**（使用者 2026-09-21 定的規則）
+ * 依優先順序：
+ *   1. **使用者在人工判定清單上填的**（見 `ekgReview.mjs`）——**最高權威**，
+ *      蓋掉程式的任何判定。會走到那一步就是因為程式判不準，
+ *      人看過原始檔案之後的結論不該再被程式推翻。
+ *   2. 查核判定為**到院前**傳出
+ *   3. 判定為到院後，但**備註欄有補述原因**（使用者 2026-09-21 定的規則）
  *
- * 「無法判定」一律不算，改列人工確認清單（使用者 2026-08-03 的選擇）。
+ * 「無法判定」且沒有人工判定的一律不算（使用者 2026-08-03 的選擇）。
  *
  * @param {VerifyOutcome} outcome
  * @returns {boolean}
  */
 export function countsAsNumerator(outcome) {
   if (!outcome) return false;
+  if (outcome.manual?.decision === MANUAL_DECISION.count) return true;
+  if (outcome.manual?.decision === MANUAL_DECISION.skip) return false;
   if (outcome.verdict === VERDICT.before) return true;
   return outcome.verdict === VERDICT.after && Boolean(outcome.remark);
 }
@@ -468,13 +478,14 @@ function remarkOf(preferredRow, candidates = []) {
  *   十幾張照片全部傳上來，每一張都抓回來會讓本來就要跑一兩個小時的流程翻倍；
  *   而要證明的是「到院前有傳」，早的那幾個才有意義。
  *
- * @param {import('playwright-core').APIRequestContext} request
+ * @param {import('playwright-core').BrowserContext} context
+ *   檔案用 `context.request` 抓（共用登入 Cookie）；照片辨識要借它開分頁做影像處理
  * @param {import('./pageFinder.mjs').FileRow[]} mediaRows
  * @param {{defaultYear?: number, defaultDate?: string}} timeContext
  * @param {import('./timeParse.mjs').ParsedTime|null} arrival 到院時間（判斷前後用）
  * @returns {Promise<{confirmed: import('./pageFinder.mjs').FileRow[], reviews: MediaReview[]}>}
  */
-async function inspectMediaRows(request, mediaRows, timeContext, arrival) {
+async function inspectMediaRows(context, mediaRows, timeContext, arrival) {
   const withTime = mediaRows
     .map((row) => ({ row, time: parseDateTime(row?.uploadTime, timeContext) }))
     .sort((left, right) => (left.time?.epochMs ?? Infinity) - (right.time?.epochMs ?? Infinity))
@@ -484,7 +495,14 @@ async function inspectMediaRows(request, mediaRows, timeContext, arrival) {
   const reviews = [];
   for (const { row, time } of withTime) {
     const link = row.links?.[0];
-    const result = await inspectMediaFile(request, link ?? { text: '', href: '' }, EKG.verify.media);
+    const result = await inspectMediaFile(
+      context.request,
+      link ?? { text: '', href: '' },
+      EKG.verify.media,
+      // 照片辨識要用到瀏覽器，因此用注入的方式給進去——`ekgMedia.mjs` 才能維持
+      // 「純函式 ＋ 一個 fetch」，不必為了測試而開瀏覽器。
+      { readImageText: (bytes, mimeType, shouldStop) => readImageText(context, bytes, mimeType, shouldStop) },
+    );
     // 檔名可能夾帶案件編號，畫面上只印類型與判讀結果。
     log.info(`　案件影音（${row.uploadTime || '時間不明'}）：${result.kind}——${result.why}`);
     if (result.kind === MEDIA_KIND.twelveLead) {
@@ -711,7 +729,7 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     && compareUploadToArrival(picked.time, arrival).verdict === VERDICT.before;
   if (EKG.verify.media.enabled && !alreadyBeforeArrival && files.media.length > 0) {
     log.info(`「案件影音」有 ${files.media.length} 個檔案，抓回來判讀是不是 12 導程`);
-    const media = await inspectMediaRows(context.request, files.media, localContext, arrival);
+    const media = await inspectMediaRows(context, files.media, localContext, arrival);
     mediaReviews = media.reviews;
     remarkCandidates = [...remarkCandidates, ...media.confirmed];
     const mediaPick = pickEarliestFileRow(media.confirmed, localContext);
@@ -929,28 +947,35 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
 
   let consecutiveFailures = 0;
   let aborted = false;
-  for (const [position, target] of planned.entries()) {
-    if (settled(target.temsis)) continue;
+  try {
+    for (const [position, target] of planned.entries()) {
+      if (settled(target.temsis)) continue;
 
-    log.step(`第 ${position + 1} / ${planned.length} 件：${target.squad}　${maskCode(target.temsis)}`);
-    const outcome = await verifyWithRetry(session, target, monthRange, timeContext);
-    done.set(target.temsis, outcome);
-    consecutiveFailures = outcome.verdict === VERDICT.unknown ? consecutiveFailures + 1 : 0;
-    log[countsAsNumerator(outcome) ? 'ok' : 'warn'](`${outcome.verdict}：${outcome.reason}`);
-    // 每一件都存檔：跑幾百件的流程，任何一次中斷都不該讓前面的努力白費。
-    await saveProgress(filePath, done).catch((error) => {
-      log.warn(`進度存檔失敗（不影響本次結果）：${error instanceof Error ? error.message : String(error)}`);
-    });
+      log.step(`第 ${position + 1} / ${planned.length} 件：${target.squad}　${maskCode(target.temsis)}`);
+      const outcome = await verifyWithRetry(session, target, monthRange, timeContext);
+      done.set(target.temsis, outcome);
+      consecutiveFailures = outcome.verdict === VERDICT.unknown ? consecutiveFailures + 1 : 0;
+      log[countsAsNumerator(outcome) ? 'ok' : 'warn'](`${outcome.verdict}：${outcome.reason}`);
+      // 每一件都存檔：跑幾百件的流程，任何一次中斷都不該讓前面的努力白費。
+      await saveProgress(filePath, done).catch((error) => {
+        log.warn(`進度存檔失敗（不影響本次結果）：${error instanceof Error ? error.message : String(error)}`);
+      });
 
-    if (consecutiveFailures >= EKG.verify.abortAfterConsecutiveFailures) {
-      log.warn(
-        `連續 ${consecutiveFailures} 件都判定不出來，先停下來讓你看錯誤訊息`
-          + '（畫面可能已改版）。已完成的進度都留著，修好之後再跑一次會從這裡接著跑。',
-      );
-      aborted = true;
-      break;
+      if (consecutiveFailures >= EKG.verify.abortAfterConsecutiveFailures) {
+        log.warn(
+          `連續 ${consecutiveFailures} 件都判定不出來，先停下來讓你看錯誤訊息`
+            + '（畫面可能已改版）。已完成的進度都留著，修好之後再跑一次會從這裡接著跑。',
+        );
+        aborted = true;
+        break;
+      }
+      await session.page.waitForTimeout(EKG.verify.settleMs);
     }
-    await session.page.waitForTimeout(EKG.verify.settleMs);
+  } finally {
+    // ⚠ 一定要收掉照片辨識的背景執行緒，否則整支程式跑完不會結束
+    //   （與 `pdfText.mjs` 要 destroy loadingTask 同一個道理）。
+    //   放在 finally 是因為中途中止（連續失敗、Ctrl+C 以外的例外）也要收。
+    await closeOcr();
   }
 
   // 只回傳這次計畫要跑的那些案件的結果，避免上次進度檔裡的舊案件混進來。

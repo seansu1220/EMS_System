@@ -199,8 +199,15 @@ export function buildLedgerRows(ekgChecked, twelveLead, outcomes, excludedCases 
       verdict,
       item.counted ? '是' : '否',
       item.outcome?.remark?.text ?? '',
-      item.outcome?.reason
-        ?? (item.hasTwelveLead ? '這次沒有查核到這一件' : '分母裡有這件，但沒有 12 導程可以查核上傳時間'),
+      // 人工判定會蓋掉程式的判定，因此一定要寫在依據裡：
+      // 不寫的話，這一列會出現「判定＝到院後、計入分子＝是」卻說不出為什麼。
+      [
+        item.outcome?.reason
+          ?? (item.hasTwelveLead ? '這次沒有查核到這一件' : '分母裡有這件，但沒有 12 導程可以查核上傳時間'),
+        item.outcome?.manual
+          ? `【人工判定：${item.outcome.manual.decision}】${item.outcome.manual.note || ''}`.trim()
+          : '',
+      ].filter(Boolean).join('　'),
     ];
   });
 

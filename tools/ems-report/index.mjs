@@ -74,12 +74,16 @@ import {
   progressFilePath,
   VERDICT,
 } from './ekgVerify.mjs';
+import { writePendingList, writeMissingProcedureList, writeRemarkList } from './ekgLists.mjs';
 import {
-  writePendingList,
-  writeMissingProcedureList,
-  writeRemarkList,
-  writeMediaReviewList,
-} from './ekgLists.mjs';
+  readDecisions,
+  applyDecisions,
+  buildReviewRows,
+  mergeReviewRows,
+  writeReviewList,
+  DECISION,
+  REVIEW_COLUMN,
+} from './ekgReview.mjs';
 import {
   buildUnalertedCases,
   collectTemsis,
@@ -559,6 +563,8 @@ function applyCprExclusion(cprFilePath, ekgChecked, numerator) {
  * @param {Object|null} input.appeals `applyAppealSheet()` 的回傳
  * @param {string} input.incomplete 非空字串代表這份數字不能當正式報表
  * @param {unknown[][]} [input.remarkRows] 到院後補述理由清冊的資料列（使用者要求直接列在畫面上）
+ * @param {string|null} [input.reviewListPath] 人工判定清單的路徑
+ * @param {number} [input.reviewPending] 人工判定清單上還沒填的件數
  */
 function printRunResult(input) {
   const sum = (counts) => [...(counts?.values() ?? [])].reduce((total, count) => total + count, 0);
@@ -579,7 +585,47 @@ function printRunResult(input) {
   if (pending > 0) log.warn(`　判定不出來：${pending} 件（不計入分子，比率會略低於實際）`);
   if (appealed > 0) log.info(`　申訴補回分子：${appealed} 件`);
   printRemarkReasons(input.remarkRows ?? []);
+  if (input.reviewPending > 0 && input.reviewListPath) {
+    log.warn(`　還有 ${input.reviewPending} 件要你自己看：${path.basename(input.reviewListPath)}`);
+    log.info(`　　在「${REVIEW_COLUMN}」欄填「${DECISION.count}」或「${DECISION.skip}」，存檔後再跑一次這個月，`);
+    log.info('　　程式就會照你的判定重算，產出最終版本的統計數字。');
+  }
   if (!input.incomplete) log.ok('　細節與待確認事項請看「心電圖執行報告」那份 .md。');
+}
+
+/**
+ * 報告「這次套用了使用者的哪些人工判定」。
+ *
+ * **非印不可**：人工判定會直接改動報表數字，而它來自一個使用者上次填的檔案。
+ * 不講的話，數字為什麼和上次不一樣就完全查不出來。
+ *
+ * @param {ReturnType<typeof applyDecisions>} manual
+ * @param {string[]} unreadable 填了但程式看不懂的那幾件
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ */
+function printManualDecisions(manual, unreadable, monthRange) {
+  if (manual.applied === 0 && unreadable.length === 0 && manual.missing.length === 0) return;
+
+  log.step('人工判定（你上次在人工判定清單上填的）');
+  if (manual.counted > 0) log.ok(`　填「${DECISION.count}」：${manual.counted} 件，已計入分子`);
+  if (manual.skipped > 0) log.info(`　填「${DECISION.skip}」：${manual.skipped} 件，不計入分子`);
+
+  // ⚠ 看不懂的寫法**一定要講**。默默忽略的話，使用者辛苦看完填了一整份卻完全沒生效，
+  //   而畫面上一切正常——那是最難發現的一種錯。
+  if (unreadable.length > 0) {
+    log.warn(
+      `　有 ${unreadable.length} 件的「${REVIEW_COLUMN}」看不懂寫法，這次沒有生效：`
+        + unreadable.map(maskCode).join('、'),
+    );
+    log.warn(`　　請改成「${DECISION.count}」或「${DECISION.skip}」（欄位有下拉選單可以點）。`);
+  }
+  if (manual.missing.length > 0) {
+    log.warn(
+      `　有 ${manual.missing.length} 件填了判定，但這次的查核結果裡沒有這件案子`
+        + `（${manual.missing.map(maskCode).join('、')}）。`,
+    );
+    log.info(`　　多半是查詢期間換了，或那件案子已不在 ${monthRange.label} 的母體內。`);
+  }
 }
 
 /**
@@ -664,6 +710,8 @@ async function runEkgFlow(session, monthRange, options) {
 
   let verifiedCounts = numerator.counts;
   let pendingPath = null;
+  /** 上一輪使用者填的人工判定（沒跑查核時為空）。 */
+  let reviewDecisions = { decisions: new Map(), rows: new Map(), unreadable: [] };
   /** 逐案查核結果，逐案判定表要用（沒查核時為空陣列）。 */
   let verifyOutcomes = [];
   /** 分子不完整的原因；非空字串代表這份數字不能當正式報表。 */
@@ -681,16 +729,28 @@ async function runEkgFlow(session, monthRange, options) {
     const cases = options.squad ? onlySquad(allCases, options.squad) : allCases;
 
     const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
-    verifyOutcomes = result.outcomes;
-    verifiedCounts = countVerifiedBySquad(result.outcomes);
-    printVerifySummary(result.outcomes, cases.length);
+
+    /**
+     * ---- 套用使用者上次填的人工判定（使用者 2026-09-21 要求）----
+     *
+     * 一定要在**這裡**做，早於後面每一段：分隊彙總、申訴比對、逐案判定表
+     * 都要看得到最終的「這件算不算」。晚一步做的話，申訴比對會把已經人工算進去的
+     * 案件當成「還沒算進去」而重複處理。
+     */
+    reviewDecisions = await readDecisions(monthRange);
+    const manual = applyDecisions(result.outcomes, reviewDecisions.decisions);
+    verifyOutcomes = manual.outcomes;
+    printManualDecisions(manual, reviewDecisions.unreadable, monthRange);
+
+    verifiedCounts = countVerifiedBySquad(verifyOutcomes);
+    printVerifySummary(verifyOutcomes, cases.length);
     if (options.squad) {
       // 只查一個分隊時，重點就是「哪一件被判成什麼」，逐件印出來比寫檔有用。
-      printSquadOutcomes(result.outcomes, options.squad);
+      printSquadOutcomes(verifyOutcomes, options.squad);
       incomplete = `只查核了「${options.squad}」的 ${cases.length} 件`;
     } else {
       // 待人工確認清單是整月的；只查一個分隊時寫出去會把整月那份蓋成殘缺版本。
-      pendingPath = await writePendingList(result.outcomes, monthRange, VERDICT.unknown);
+      pendingPath = await writePendingList(verifyOutcomes, monthRange, VERDICT.unknown);
     }
     if (result.aborted) {
       incomplete = '查核中途被中止（連續多件判定不出來）';
@@ -762,13 +822,26 @@ async function runEkgFlow(session, monthRange, options) {
    *   ——與待人工確認清單同一個理由。
    */
   let remarkListPath = null;
-  let mediaListPath = null;
+  let reviewListPath = null;
+  let reviewPending = 0;
   let remarkRows = [];
   if (options.verify && !options.squad) {
     const remarkList = await writeRemarkList(verifyOutcomes, appeals?.results ?? [], monthRange);
     remarkListPath = remarkList.filePath;
     remarkRows = remarkList.rows;
-    mediaListPath = (await writeMediaReviewList(verifyOutcomes, monthRange)).filePath;
+
+    // 人工判定清單要**合併**上一輪填過的判定再寫回去，不能直接覆蓋——
+    // 覆蓋等於把使用者填的東西丟了。
+    const reviewList = await writeReviewList(
+      mergeReviewRows(
+        buildReviewRows(verifyOutcomes, VERDICT.unknown),
+        reviewDecisions.rows,
+        reviewDecisions.decisions,
+      ),
+      monthRange,
+    );
+    reviewListPath = reviewList.filePath;
+    reviewPending = reviewList.pending;
   }
 
   const denominatorCounts = mergeCounts(union.counts, appeals?.denominator);
@@ -822,8 +895,12 @@ async function runEkgFlow(session, monthRange, options) {
   if (remarkListPath) {
     produced.push(`out/internal/${path.basename(remarkListPath)}（到院後補述的理由，**請你覆核**）`);
   }
-  if (mediaListPath) {
-    produced.push(`out/internal/${path.basename(mediaListPath)}（案件影音判不出內容，要你點開看）`);
+  if (reviewListPath) {
+    produced.push(
+      `out/internal/${path.basename(reviewListPath)}`
+        + `（**程式判不出來的，要你看完在「${REVIEW_COLUMN}」欄填「${DECISION.count}」或「${DECISION.skip}」**，`
+        + '填完存檔再跑一次這個月就會照你的判定算）',
+    );
   }
 
   // 執行報告放最後寫：它要把上面所有產出與待確認事項整理成一份給人看的摘要。
@@ -857,6 +934,8 @@ async function runEkgFlow(session, monthRange, options) {
     appeals,
     incomplete,
     remarkRows,
+    reviewListPath,
+    reviewPending,
   });
 
   if (options.keepRaw) {

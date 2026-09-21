@@ -15,10 +15,11 @@
  * 設計原則：
  *   - **判讀規則全部是純函式**（輸入文字 → 輸出結論），可單獨測試；
  *     只有 `inspectMediaFile` 會碰網路。
- *   - **判不出來就明講判不出來**，絕不猜。照片（jpg/png）程式讀不出內容，
- *     一律列給使用者自己點開看（使用者 2026-09-21 選擇），
- *     硬猜的話兩種錯都會發生：把現場照片當成心電圖而灌水，
- *     或把心電圖照片漏掉而讓分隊掉一件。
+ *   - **判不出來就明講判不出來，絕不猜。** 照片走 OCR（`ekgOcr.mjs`），
+ *     辨識得出導程名稱就算數；**辨識失敗一律回「讀不出來」而不是「不是心電圖」**
+ *     ——拍糊了不代表那不是心電圖。讀不出來的列進人工判定清單（`ekgReview.mjs`），
+ *     使用者點開看一眼就能補回來。硬猜的話兩種錯都會發生：
+ *     把現場照片當成心電圖而灌水，或把心電圖照片漏掉而讓分隊掉一件。
  *
  * ⚠ 個資原則：檔案內容**只存在記憶體**，判讀完即丟——不落檔、不寫進 log、
  *   不印在終端機。對外只回傳「是不是心電圖」與一句判斷依據。
@@ -167,10 +168,52 @@ export function looksLikeTwelveLead(text, config = EKG.verify.media) {
 }
 
 /**
+ * 把 OCR 讀出來的字整理成可以比對的形式。
+ *
+ * OCR 對心電圖上的小字有幾種固定的讀法差異（2026-09-21 實測）：
+ * 大小寫不一致（`avR`）、把 `aVF` 讀成 `aVvF`（中間多一個 V）、字與字之間多空白。
+ * 不整理的話，`AVVF` 不含 `AVF`，明明讀對了卻比不到。
+ *
+ * ⚠ 只做這三件事，**不做猜測性的修正**。OCR 常把 `V4` 讀成 `VA`、`V6` 讀成 `VE`，
+ *   但把 `VA` 當成 `V4` 的規則會讓任何含 `VA` 的文件都往 12 導程靠，
+ *   而導程名稱本來就要湊滿四個才算數，漏掉一兩個不影響結論。
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function normalizeOcrText(text) {
+  return String(text ?? '')
+    .toUpperCase()
+    .replace(/[\s　]+/g, '')
+    // `AVVR` → `AVR`：只收斂 A 後面連續的 V，不動其他地方。
+    .replace(/AV{2,}/g, 'AV');
+}
+
+/**
+ * 這個檔案該用什麼 MIME 型別交給瀏覽器。
+ *
+ * 系統回的 `content-type` 有時候是 `application/octet-stream`（什麼都沒說），
+ * 那時候要靠副檔名補，否則瀏覽器載不進來、OCR 就整批失敗。
+ *
+ * @param {string} fileName
+ * @param {string} [headerValue] 回應的 content-type
+ * @returns {string}
+ */
+export function mimeTypeOf(fileName, headerValue = '') {
+  const declared = String(headerValue).split(';')[0].trim().toLowerCase();
+  if (declared.startsWith('image/')) return declared;
+  const extension = fileExtension(fileName);
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  return extension ? `image/${extension}` : 'application/octet-stream';
+}
+
+/**
  * 依副檔名決定「這個檔案要怎麼處理」。
  *
  * 抽成純函式是為了能單獨測——這是整段判讀的第一個岔路，
  * 走錯的話後面全錯（把影片抓回來解析、把照片硬判成不是心電圖）。
+ *
+ * `image` 走 OCR（見 `ekgOcr.mjs`）；`text` 走抽文字；`skip` 連抓都不抓。
  *
  * @param {string} fileName
  * @param {typeof EKG.verify.media} [config]
@@ -203,6 +246,45 @@ export async function bytesToText(bytes, fileName) {
 }
 
 /**
+ * 判讀一張照片：先 OCR，再比對字樣。
+ *
+ * **OCR 讀不出來一律回 `unreadable`，不可以回 `notEcg`**：
+ * 辨識失敗不代表那不是心電圖（可能是拍糊了、光線太暗、角度太斜）。
+ * 判成「不是」等於把一件案子永久判死；判成「讀不出來」則會進人工判定清單，
+ * 使用者點開看一眼就能補回來。
+ *
+ * @param {Buffer} bytes
+ * @param {string} fileName
+ * @param {string} mimeType
+ * @param {typeof EKG.verify.media} config
+ * @param {(bytes: Buffer, mimeType: string, shouldStop: (text: string) => boolean)
+ *   => Promise<{text: string, rounds: number}>} readImageText 由 `ekgOcr.mjs` 注入
+ * @returns {Promise<{kind: string, why: string}>}
+ */
+async function inspectImage(bytes, fileName, mimeType, config, readImageText) {
+  const pleaseLook = '請自己點開看，確認是 12 導程就在人工判定欄填「算」';
+  // 認出足夠字樣就不必再換門檻重跑，多數照片第一輪就會停。
+  const shouldStop = (soFar) => looksLikeTwelveLead(normalizeOcrText(soFar), config).is;
+  const { text, rounds } = await readImageText(bytes, mimeType, shouldStop);
+
+  if (!text.trim()) {
+    return {
+      kind: MEDIA_KIND.unreadable,
+      why: rounds === 0
+        ? `照片辨識沒有啟用或準備失敗，${pleaseLook}`
+        : `照片辨識試了 ${rounds} 輪都讀不出任何字（可能拍糊、光線不足或角度太斜），${pleaseLook}`,
+    };
+  }
+
+  const verdict = looksLikeTwelveLead(normalizeOcrText(text), config);
+  if (verdict.is) return { kind: MEDIA_KIND.twelveLead, why: `照片辨識：${verdict.why}` };
+  return {
+    kind: MEDIA_KIND.unreadable,
+    why: `照片辨識讀到字了，但認不出是 12 導程（${verdict.why}），${pleaseLook}`,
+  };
+}
+
+/**
  * 抓一個檔案回來判讀內容。**這是本檔唯一碰網路的函式。**
  *
  * 用 Playwright 的 `context.request`（與瀏覽器共用登入 Cookie）直接 GET 檔案網址，
@@ -214,19 +296,23 @@ export async function bytesToText(bytes, fileName) {
  * @param {import('playwright-core').APIRequestContext} request `session.context.request`
  * @param {{text: string, href: string}} link 檔案連結（絕對網址）
  * @param {typeof EKG.verify.media} [config]
+ * @param {{readImageText?: Function}} [options]
+ *   `readImageText`＝照片辨識函式（由 `ekgOcr.mjs` 注入）。
+ *   刻意用注入而不是直接 import：那一支要用到瀏覽器，
+ *   直接相依會讓這裡的純函式測試也得開瀏覽器。
  * @returns {Promise<{kind: string, why: string}>}
  */
-export async function inspectMediaFile(request, link, config = EKG.verify.media) {
+export async function inspectMediaFile(request, link, config = EKG.verify.media, options = {}) {
   const fileName = link?.text || link?.href || '';
   const handling = mediaHandling(fileName, config);
-  if (handling === 'image') {
-    return {
-      kind: MEDIA_KIND.unreadable,
-      why: `${fileExtension(fileName) || '無副檔名'} 是圖片，程式讀不出內容，請自己點開看`,
-    };
-  }
   if (handling === 'skip') {
     return { kind: MEDIA_KIND.notEcg, why: `${fileExtension(fileName)} 是影音或壓縮檔，不是心電圖` };
+  }
+  if (handling === 'image' && typeof options.readImageText !== 'function') {
+    return {
+      kind: MEDIA_KIND.unreadable,
+      why: `${fileExtension(fileName) || '無副檔名'} 是照片，這次沒有啟用照片辨識，請自己點開看`,
+    };
   }
   if (!link?.href) return { kind: MEDIA_KIND.failed, why: '這一列的檔案連結沒有網址' };
 
@@ -258,12 +344,16 @@ export async function inspectMediaFile(request, link, config = EKG.verify.media)
     if (bytes.length > config.maxBytes) {
       return { kind: MEDIA_KIND.notEcg, why: '檔案超過大小上限，當成影音不判讀' };
     }
+    if (handling === 'image') {
+      const mimeType = mimeTypeOf(fileName, response.headers()['content-type']);
+      return inspectImage(bytes, fileName, mimeType, config, options.readImageText);
+    }
     const text = await bytesToText(bytes, fileName);
     const verdict = looksLikeTwelveLead(text, config);
     return { kind: verdict.is ? MEDIA_KIND.twelveLead : MEDIA_KIND.notEcg, why: verdict.why };
   } catch (error) {
     // 讀不動不代表不是心電圖（可能是加密 PDF、壞檔）。**回「讀取失敗」而不是「不是」**，
-    // 這樣它會進待人工確認清單，而不是默默被當成沒做。
+    // 這樣它會進人工判定清單，而不是默默被當成沒做。
     return {
       kind: MEDIA_KIND.failed,
       why: `檔案抓回來了但解析不了：${error instanceof Error ? error.message : String(error)}`,

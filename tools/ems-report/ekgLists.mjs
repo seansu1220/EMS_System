@@ -5,10 +5,12 @@
  *   2. `有處置未勾選清冊`　有上傳心電圖、但急救處置漏勾的案件，**用來提醒同仁記得點處置**
  *   3. `有EKG處置無12導程清冊`　反過來的那一邊，只有診斷指令會產出（見 `ekgDiagnose.mjs`）
  *   4. `到院後補述理由清冊`　到院後才傳、但備註寫了原因而仍計入分子的案件（2026-09-21 加）
- *   5. `案件影音待人工確認清冊`　程式讀不出內容的影音檔，請使用者自己點開看（2026-09-21 加）
  *
- * 第 4、5 兩份落在 `out/internal/`（不是 `out/report/`）：一份是同仁自己打的字，
- * 一份帶著檔案下載網址，都不該跟要發給分隊的報表放在一起。
+ * 第 4 份落在 `out/internal/`（不是 `out/report/`）：裡面是同仁自己打的字，
+ * 不該跟要發給分隊的報表放在一起。
+ *
+ * **要使用者看完回填判定的那一份不在這裡**，在 `ekgReview.mjs`——
+ * 那一份要讀得回來、而且有填過判定的列永遠不能刪，性質與這幾份完全不同。
  *
  * 版面比照正式報表：標題與欄名兩列置中，欄寬**依實際內容**計算
  * （只看欄名的話，「案件日期」這種短欄名配上長日期就會被截掉）。
@@ -380,24 +382,18 @@ export async function writeEkgOnlyList(rows, columns, monthRange) {
 }
 
 /**
- * 兩份 2026-09-21 新增的內部清單。
+ * 到院後補述理由清冊（2026-09-21 新增）。
  *
- * ⚠ 兩份都落在 `out/internal/`（**不是** `out/report/`）：
- *   - 補述理由是同仁自己打的字，原封不動列出來給使用者覆核用的
- *   - 影音待確認那份帶著**檔案下載網址**，點下去就是原始檔案
- *   兩者都不該跟要發給分隊的報表放在一起。
+ * ⚠ 落在 `out/internal/`（**不是** `out/report/`）：裡面是同仁自己打的字，
+ *   原封不動列出來給使用者覆核用的，不該跟要發給分隊的報表放在一起。
+ *
+ * 「程式判不出來、要使用者看完回填」的那一份不在這裡，
+ * 在 `ekgReview.mjs`——那一份要讀得回來，性質不同。
  */
 const REMARK_LIST = { prefix: '心電圖-到院後補述理由', heading: '到院後補述理由清冊' };
-const MEDIA_LIST = { prefix: '心電圖-案件影音待人工確認', heading: '案件影音待人工確認清冊' };
 
 /** 補述理由清冊的欄位（順序即輸出順序）。 */
 const REMARK_COLUMNS = ['分隊', '案件日期', 'TEMSIS', '到院時間', '上傳時間', '補述來源', '補述理由'];
-
-/** 影音待確認清冊的欄位。 */
-const MEDIA_COLUMNS = [
-  '分隊', '案件日期', 'TEMSIS', '到院時間', '檔案名稱', '上傳時間',
-  '傳的時候到院了沒', '程式判讀結果', '判讀依據', '該列備註', '檔案連結（點開看）',
-];
 
 /**
  * 把「到院後才傳、但有補述原因」的案件整理成一張表（純函式，不碰檔案）。
@@ -474,73 +470,5 @@ export async function writeRemarkList(outcomes, appealResults, monthRange) {
   );
   await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行；查核結果已存進度檔，不需要重跑。');
   log.ok(`到院後補述理由已列出 ${rows.length} 件：${path.relative(process.cwd(), filePath)}`);
-  return { filePath, rows };
-}
-
-/**
- * 把「程式判不出內容的案件影音檔」整理成一張表（純函式，不碰檔案）。
- *
- * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
- * @returns {unknown[][]} 與 {@link MEDIA_COLUMNS} 同順序的資料列
- */
-export function buildMediaReviewRows(outcomes) {
-  const rows = [];
-  for (const item of outcomes ?? []) {
-    for (const review of item?.mediaReviews ?? []) {
-      rows.push([
-        item.squad,
-        item.caseDate || '(讀不到)',
-        item.temsis,
-        item.arrival || '(讀不到)',
-        review.fileName,
-        review.uploadTime || '(讀不到)',
-        review.timing,
-        review.kind,
-        review.why,
-        review.remark,
-        review.url,
-      ]);
-    }
-  }
-  return rows;
-}
-
-/**
- * 寫出「案件影音待人工確認」清冊（使用者 2026-09-21 選擇的處理方式）。
- *
- * 照片（jpg/png）程式讀不出內容，**一律不猜**：猜的話兩種錯都會發生——
- * 把現場照片當成心電圖而灌水，或把心電圖照片漏掉而讓分隊掉一件。
- * 因此把連結整理出來，讓使用者自己點開看一眼，
- * 確認是 12 導程的就填進分隊申訴表，下次跑就會補進分子。
- *
- * ⚠ 這份含**檔案下載網址**（帶案件資料夾編號），只落在 `out/internal/`，
- *   終端機上只報件數，不印網址。
- *
- * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
- * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {Promise<{filePath: string|null, rows: unknown[][]}>}
- */
-export async function writeMediaReviewList(outcomes, monthRange) {
-  const rows = buildMediaReviewRows(outcomes);
-  const filePath = path.join(PATHS.internalDir, monthlyFileName(monthRange, MEDIA_LIST.prefix, 'xlsx'));
-  if (rows.length === 0) {
-    const removed = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
-    if (removed) log.info('這次沒有判不出來的案件影音；先前留下的清冊已一併清掉。');
-    return { filePath: null, rows };
-  }
-
-  await fs.mkdir(PATHS.internalDir, { recursive: true });
-  const workbook = new ExcelJS.Workbook();
-  buildListSheet(
-    workbook,
-    '案件影音待確認',
-    `${monthRange.label}　${MEDIA_LIST.heading}`,
-    MEDIA_COLUMNS,
-    rows,
-    { wideColumns: ['判讀依據', '該列備註', '檔案連結（點開看）'] },
-  );
-  await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行；查核結果已存進度檔，不需要重跑。');
-  log.warn(`有 ${rows.length} 個案件影音檔程式判不出內容：${path.relative(process.cwd(), filePath)}`);
-  log.info('請自己點開看一眼。確認是 12 導程的，填進分隊申訴表，下次跑就會補進分子。');
   return { filePath, rows };
 }

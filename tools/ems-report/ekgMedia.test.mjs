@@ -19,6 +19,8 @@ import {
   isMeaningfulRemark,
   looksLikeTwelveLead,
   mediaHandling,
+  mimeTypeOf,
+  normalizeOcrText,
 } from './ekgMedia.mjs';
 import { EKG } from './config.mjs';
 
@@ -124,7 +126,7 @@ const okResponse = (body, headers = {}) => ({
   body: async () => Buffer.from(body, 'utf8'),
 });
 
-test('圖片一律回「程式讀不出內容」，絕不自己猜', async () => {
+test('圖片在沒有辨識功能時回「程式讀不出內容」，絕不自己猜', async () => {
   // 猜的話兩種錯都會發生：把現場照片當成心電圖而灌水，
   // 或把心電圖照片漏掉而讓分隊掉一件。使用者 2026-09-21 選擇列清單人工看。
   const result = await inspectMediaFile(fakeRequest(null), { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' });
@@ -181,4 +183,82 @@ test('超過大小上限的不抓進記憶體，當成影音', async () => {
 test('沒有網址的那一列回「讀取失敗」，不會拿 undefined 去抓', async () => {
   const result = await inspectMediaFile(fakeRequest(null), { text: 'a.json', href: '' });
   assert.equal(result.kind, MEDIA_KIND.failed);
+});
+
+// ── 照片 OCR（v1.40.0）────────────────────────────────────────
+
+test('OCR 文字正規化：大小寫、空白、aVvF 這種重複 V 都要收斂', () => {
+  // 2026-09-21 實測 OCR 讀心電圖會讀成 `avR`、`aVvF`。
+  // 不收斂的話 `AVVF` 不含 `AVF`，明明讀對了卻比不到。
+  assert.equal(normalizeOcrText('I avR v1 v4'), 'IAVRV1V4');
+  assert.equal(normalizeOcrText('aVvF'), 'AVF');
+  assert.ok(normalizeOcrText('m aVvF v3 ve').includes('AVF'));
+});
+
+test('OCR 正規化不做猜測性修正——VA 不會被當成 V4', () => {
+  // 把 VA 當成 V4 的規則會讓任何含 VA 的文件都往 12 導程靠。
+  assert.equal(normalizeOcrText('VA VE'), 'VAVE');
+});
+
+test('實測那段 OCR 結果要判得出是 12 導程', () => {
+  // 這就是 2026-09-21 對模擬心電圖二值化後 OCR 出來的原文。
+  const real = '12-Lead ECG 2026-07-06 12:40\nI avR v1 v4\n1 avL v2 V5\nmn aVvF v3 v6\n';
+  assert.equal(looksLikeTwelveLead(normalizeOcrText(real)).is, true);
+});
+
+test('二值化之前那種格線雜訊，不可以被判成 12 導程', () => {
+  // 沒先去格線時 OCR 讀出來長這樣——一個導程名稱都沒有，結論必須是「判不出來」。
+  const noise = 'EB 0 0 6 0 1 0 5\nEB A = BB = PB\nBE TT 1 7 0\n';
+  assert.equal(looksLikeTwelveLead(normalizeOcrText(noise)).is, false);
+});
+
+test('MIME 型別：系統沒講清楚時要靠副檔名補', () => {
+  assert.equal(mimeTypeOf('a.jpg', 'application/octet-stream'), 'image/jpeg');
+  assert.equal(mimeTypeOf('a.JPEG', ''), 'image/jpeg');
+  assert.equal(mimeTypeOf('a.png', 'image/png; charset=binary'), 'image/png');
+  assert.equal(mimeTypeOf('沒有副檔名', ''), 'application/octet-stream');
+});
+
+test('照片：OCR 認得出導程名稱就自動判成 12 導程', async () => {
+  const ocr = async () => ({ text: '12-Lead ECG\nI avR v1 v4\nII avL v2 v5', rounds: 1 });
+  const result = await inspectMediaFile(
+    fakeRequest(okResponse('（假裝是照片位元組）')),
+    { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' },
+    EKG.verify.media,
+    { readImageText: ocr },
+  );
+  assert.equal(result.kind, MEDIA_KIND.twelveLead);
+  assert.match(result.why, /照片辨識/);
+});
+
+test('照片：OCR 讀不出來一律回「讀不出來」，絕不回「不是心電圖」', async () => {
+  // ⚠ 辨識失敗不代表那不是心電圖（可能拍糊了、光線太暗）。
+  //   判成「不是」＝把一件案子永久判死；判成「讀不出來」＝進人工判定清單，救得回來。
+  const 讀不到字 = await inspectMediaFile(
+    fakeRequest(okResponse('x')),
+    { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' },
+    EKG.verify.media,
+    { readImageText: async () => ({ text: '', rounds: 3 }) },
+  );
+  assert.equal(讀不到字.kind, MEDIA_KIND.unreadable);
+  assert.match(讀不到字.why, /3 輪/);
+
+  const 讀到字但不是 = await inspectMediaFile(
+    fakeRequest(okResponse('x')),
+    { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' },
+    EKG.verify.media,
+    { readImageText: async () => ({ text: '現場 照片 車禍', rounds: 1 }) },
+  );
+  assert.equal(讀到字但不是.kind, MEDIA_KIND.unreadable, '讀到字但認不出導程，仍然是「讀不出來」');
+});
+
+test('照片：沒接上辨識功能時要講明，不可以裝作判過了', async () => {
+  const result = await inspectMediaFile(
+    fakeRequest(null),
+    { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' },
+    EKG.verify.media,
+    {},
+  );
+  assert.equal(result.kind, MEDIA_KIND.unreadable);
+  assert.match(result.why, /沒有啟用照片辨識/);
 });

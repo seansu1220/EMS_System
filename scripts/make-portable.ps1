@@ -199,7 +199,10 @@ Write-Host ''
 Write-Host '[2/5] 準備套件清單'
 $rootPackage = Get-Content (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json
 # firebase 是「線上解鎖工單」用的（拿工單、回寫結果），少了它 unlock-online／unlock-watch 會直接掛掉。
-$needed = @('playwright-core', 'pdfjs-dist', 'exceljs', 'xlsx', 'firebase')
+# tesseract.js 是心電圖「案件影音」照片辨識用的（見 TOOLS_SPEC 3.4.2）。
+# 少了它不會掛掉，但所有照片都會變成「要你自己點開看」——
+# 那是**靜悄悄地少做一件事**，可攜版的人不會知道自己少了什麼功能。
+$needed = @('playwright-core', 'pdfjs-dist', 'exceljs', 'xlsx', 'firebase', 'tesseract.js')
 $dependencyLines = foreach ($name in $needed) {
   $version = $rootPackage.devDependencies.$name
   if ($null -eq $version) { $version = $rootPackage.dependencies.$name }
