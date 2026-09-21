@@ -521,26 +521,46 @@ await check(
   assertSucceeds(allocateTags(member, { before: 20, count: 5, unit: '龜山分隊', requestedBy: 'member-uid' })),
 );
 await check(
+  '一般使用者不可選救護科',
+  assertFails(allocateTags(member, { before: 25, count: 1, unit: '救護科', requestedBy: 'member-uid' })),
+);
+await check(
+  '管理員可選救護科，且不受每週 20 張上限（一次 30 張）',
+  assertSucceeds(allocateTags(admin, { before: 25, count: 30, unit: '救護科', requestedBy: 'admin-uid' })),
+);
+await check(
+  '管理員的救護科可以累計超過 20 張（已 30 張再領 50 張）',
+  assertSucceeds(allocateTags(admin, { before: 55, count: 50, unit: '救護科', unitUsedBefore: 30, requestedBy: 'admin-uid' })),
+);
+await check(
+  '管理員選一般分隊仍受每週 20 張上限',
+  assertFails(allocateTags(admin, { before: 105, count: 21, unit: '八德分隊', requestedBy: 'admin-uid' })),
+);
+await check(
+  '救護科單次仍不可超過 100 張',
+  assertFails(allocateTags(admin, { before: 105, count: 101, unit: '救護科', unitUsedBefore: 80, requestedBy: 'admin-uid' })),
+);
+await check(
   '不可自己挑號碼（起始號不等於計數器的下一號）',
   assertFails(
-    allocateTags(member, { before: 25, startSerial: 50, count: 2, advanceTo: 52, unit: '八德分隊', requestedBy: 'member-uid' }),
+    allocateTags(member, { before: 105, startSerial: 150, count: 2, advanceTo: 152, unit: '八德分隊', requestedBy: 'member-uid' }),
   ),
 );
 await check(
   '不可偷跳號（計數器推進的張數與紀錄不符）',
-  assertFails(allocateTags(member, { before: 25, count: 2, advanceTo: 40, unit: '八德分隊', requestedBy: 'member-uid' })),
+  assertFails(allocateTags(member, { before: 105, count: 2, advanceTo: 120, unit: '八德分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '不可只推計數器不留領取紀錄',
-  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 40 })),
+  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 120 })),
 );
 await check(
   '不可冒用他人名義領取',
-  assertFails(allocateTags(member, { before: 25, count: 1, unit: '八德分隊', requestedBy: 'unlocker-uid' })),
+  assertFails(allocateTags(member, { before: 105, count: 1, unit: '八德分隊', requestedBy: 'unlocker-uid' })),
 );
 await check(
   '待審核帳號不可領傷票',
-  assertFails(allocateTags(pending, { before: 25, count: 1, unit: '八德分隊', requestedBy: 'pending-uid' })),
+  assertFails(allocateTags(pending, { before: 105, count: 1, unit: '八德分隊', requestedBy: 'pending-uid' })),
 );
 await check(
   '任何已核准帳號讀得到單位本週用量',

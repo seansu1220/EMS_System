@@ -26,14 +26,15 @@ import { COLLECTIONS } from '../config/constants';
 import {
   TRIAGE_TAG_MAX_PER_REQUEST,
   TRIAGE_TAG_TOTAL,
-  TRIAGE_TAG_UNIT_WEEKLY_LIMIT,
 } from '../config/triageTag';
 import {
   formatTriageTagNumber,
   remainingTriageTags,
   triageTagWeekIndex,
+  triageTagWeeklyLimitFor,
   validateTriageTagUnit,
 } from '../lib/triageTagNumber';
+import { isAdmin } from '../lib/permissions';
 import type { AppUser } from '../types/user';
 import type { TriageTagIssue } from '../types/triageTag';
 
@@ -71,17 +72,24 @@ function mapIssue(snapshot: QueryDocumentSnapshot<DocumentData>): TriageTagIssue
  * 檢查要領的張數（純函式）。
  *
  * @param unitUsed 這個單位本週已經領了幾張
+ * @param weeklyLimit 這個單位每週上限；null＝不限（管理員的救護科）
  * @returns 錯誤訊息；沒問題回傳 null
  */
-export function validateTriageTagCount(count: number, nextSerial: number, unitUsed: number): string | null {
+export function validateTriageTagCount(
+  count: number,
+  nextSerial: number,
+  unitUsed: number,
+  weeklyLimit: number | null,
+): string | null {
   if (!Number.isInteger(count) || count < 1) return '請輸入要領幾張（至少 1 張）。';
   if (count > TRIAGE_TAG_MAX_PER_REQUEST) {
     return `一次最多領 ${TRIAGE_TAG_MAX_PER_REQUEST} 張，要更多請分次領。`;
   }
-  const unitRemaining = Math.max(0, TRIAGE_TAG_UNIT_WEEKLY_LIMIT - unitUsed);
-  if (count > unitRemaining) {
-    return `同一單位每週最多 ${TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張，本週已領 ${unitUsed} 張，`
-      + `最多還能領 ${unitRemaining} 張。`;
+  if (weeklyLimit !== null) {
+    const unitRemaining = Math.max(0, weeklyLimit - unitUsed);
+    if (count > unitRemaining) {
+      return `同一單位每週最多 ${weeklyLimit} 張，本週已領 ${unitUsed} 張，最多還能領 ${unitRemaining} 張。`;
+    }
   }
   const remaining = remainingTriageTags(nextSerial);
   if (count > remaining) return `號碼只剩 ${remaining} 張可以發（到 ${formatTriageTagNumber(TRIAGE_TAG_TOTAL - 1)} 為止）。`;
@@ -100,7 +108,7 @@ export async function allocateTriageTags(
   count: number,
 ): Promise<{ startSerial: number; count: number }> {
   const unit = rawUnit.trim();
-  const unitProblem = validateTriageTagUnit(unit);
+  const unitProblem = validateTriageTagUnit(unit, isAdmin(user));
   if (unitProblem) throw new Error(unitProblem);
   const weekIndex = triageTagWeekIndex(new Date());
   const counterRef = doc(db, COLLECTIONS.triageTagCounter, COUNTER_DOC_ID);
@@ -111,7 +119,7 @@ export async function allocateTriageTags(
       const usageSnapshot = await transaction.get(usageRef);
       const startSerial = counterSnapshot.exists() ? Number(counterSnapshot.data().nextSerial ?? 0) : 0;
       const unitUsed = usageSnapshot.exists() ? Number(usageSnapshot.data().used ?? 0) : 0;
-      const problem = validateTriageTagCount(count, startSerial, unitUsed);
+      const problem = validateTriageTagCount(count, startSerial, unitUsed, triageTagWeeklyLimitFor(unit));
       if (problem) throw new Error(problem);
       transaction.set(counterRef, { nextSerial: startSerial + count, updatedAt: serverTimestamp() });
       // lastStartSerial：安全規則靠它確認「這一張紀錄」真的有把用量加上去。

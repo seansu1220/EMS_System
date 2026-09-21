@@ -68,6 +68,13 @@ export const TRIAGE_TAG_BRIGADES: readonly { name: string; squads: readonly stri
 /** 所有允許的單位（攤平）。 */
 export const TRIAGE_TAG_UNITS: readonly string[] = TRIAGE_TAG_BRIGADES.flatMap((brigade) => brigade.squads);
 
+/**
+ * 管理員專用的單位（使用者 2026-09-21 指定）：只有管理員選得到，**不受每週上限**。
+ * 單次仍受 `TRIAGE_TAG_MAX_PER_REQUEST` 限制（PDF 太大瀏覽器會卡），要更多就分次領。
+ * ⚠ 須與 `firebase/firestore.rules` 的 triageUnitValid() / triageTagUnitWeeks 規則一致。
+ */
+export const TRIAGE_TAG_ADMIN_UNIT = '救護科';
+
 /** 單位不在名單時給使用者看的說明。 */
 export const TRIAGE_TAG_UNIT_HINT = '請從清單選擇分隊（只限月報表上的分隊）';
 

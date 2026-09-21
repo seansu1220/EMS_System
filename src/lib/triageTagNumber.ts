@@ -5,7 +5,9 @@
 import {
   TRIAGE_TAG_NUMBER,
   TRIAGE_TAG_TOTAL,
+  TRIAGE_TAG_ADMIN_UNIT,
   TRIAGE_TAG_UNIT_HINT,
+  TRIAGE_TAG_UNIT_WEEKLY_LIMIT,
   TRIAGE_TAG_UNITS,
   TRIAGE_TAG_WEEK_UTC_OFFSET_HOURS,
 } from '../config/triageTag';
@@ -69,9 +71,16 @@ export function describeTriageTagWeek(weekIndex: number): string {
 }
 
 /**
- * 檢查單位是不是月報表上的分隊。
+ * 檢查單位：月報表上的分隊都可以；「救護科」只有管理員可以選。
  * @returns 錯誤訊息；沒問題回傳 null
  */
-export function validateTriageTagUnit(unit: string): string | null {
-  return TRIAGE_TAG_UNITS.includes(unit.trim()) ? null : TRIAGE_TAG_UNIT_HINT;
+export function validateTriageTagUnit(unit: string, isAdminUser: boolean): string | null {
+  const trimmed = unit.trim();
+  if (trimmed === TRIAGE_TAG_ADMIN_UNIT) return isAdminUser ? null : `「${TRIAGE_TAG_ADMIN_UNIT}」只有管理員可以選。`;
+  return TRIAGE_TAG_UNITS.includes(trimmed) ? null : TRIAGE_TAG_UNIT_HINT;
+}
+
+/** 這個單位每週最多幾張；null＝不限（管理員的救護科）。 */
+export function triageTagWeeklyLimitFor(unit: string): number | null {
+  return unit.trim() === TRIAGE_TAG_ADMIN_UNIT ? null : TRIAGE_TAG_UNIT_WEEKLY_LIMIT;
 }

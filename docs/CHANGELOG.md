@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-09-21　v1.44.0 傷票新增管理員專用單位「救護科」，不限張數
+
+### 問題描述
+使用者希望以管理員帳號登入時，單位可以選「救護科」，而且領取量不受限制。
+
+### 根本原因
+v1.43.0 的單位只有月報表 41 個分隊，每個都受每週 20 張上限，科內自己要大量印時沒有管道。
+
+### 修改的檔案與內容
+- **`src/config/triageTag.ts`**：新增 `TRIAGE_TAG_ADMIN_UNIT = '救護科'`。
+- **`src/lib/triageTagNumber.ts`**：`validateTriageTagUnit(unit, isAdminUser)`（救護科只給管理員）；
+  新增 `triageTagWeeklyLimitFor(unit)`（救護科回傳 null＝不限）。
+- **`src/services/triageTagService.ts`**：`validateTriageTagCount()` 多一個 `weeklyLimit` 參數（null 時不檢查每週上限）；
+  領取時依登入者是否管理員檢查單位。
+- **`src/pages/TriageTagPage.tsx`**：管理員的下拉選單多「科內（管理員）→ 救護科（不限張數）」；
+  選救護科時提示改為「不限張數，但一次最多 100 張」。
+- **`firebase/firestore.rules`**：`triageUnitValid()` 允許 `isAdmin()` 用「救護科」；
+  單位週用量的 ≤ 20 對救護科不適用。
+- **`scripts/rules.test.mjs`**：新增 5 項（一般使用者不可選救護科、管理員救護科可超過 20 張、
+  管理員選一般分隊仍受限、救護科單次仍 ≤ 100），並把後續「應被擋」的測試改到正確的計數器位置，**84/84 通過**。
+- **`docs/SPEC.md`**：更新 2.9、安全規則；`package.json` 版本 1.18.0。
+
+### 設計取捨
+「不限」指不受每週上限；單次 100 張的上限保留，因為那是 PDF 大小的限制（100 張約 100 頁、32 MB），
+不是配額。要更多就連續領幾次，號碼照樣接續。
+
+---
+
 ## 2026-09-21　v1.43.0 傷票單位改為月報表分隊名單；領取紀錄拿掉重新下載
 
 ### 問題描述

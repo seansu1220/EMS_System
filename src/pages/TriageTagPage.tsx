@@ -23,10 +23,13 @@ import {
   formatTriageTagNumber,
   remainingTriageTags,
   triageTagWeekIndex,
+  triageTagWeeklyLimitFor,
   validateTriageTagUnit,
 } from '../lib/triageTagNumber';
 import {
+  TRIAGE_TAG_ADMIN_UNIT,
   TRIAGE_TAG_BRIGADES,
+  TRIAGE_TAG_MAX_PER_REQUEST,
   TRIAGE_TAG_TOTAL,
   TRIAGE_TAG_UNIT_HINT,
   TRIAGE_TAG_UNIT_WEEKLY_LIMIT,
@@ -42,7 +45,8 @@ function loadLastUnit(): string {
   try {
     const saved = window.localStorage.getItem(LAST_UNIT_STORAGE_KEY) ?? '';
     // 舊版允許自由輸入，存下來的可能不在名單上，這種就不要帶入。
-    return TRIAGE_TAG_UNITS.includes(saved) ? saved : '';
+    // 救護科只有管理員選得到，由畫面另外判斷，這裡一併放行。
+    return TRIAGE_TAG_UNITS.includes(saved) || saved === TRIAGE_TAG_ADMIN_UNIT ? saved : '';
   } catch {
     return '';
   }
@@ -138,7 +142,7 @@ function IssueTable({ issues, showRequester }: { issues: TriageTagIssue[]; showR
 }
 
 export function TriageTagPage() {
-  const { user } = useAuth();
+  const { user, isAdmin: isAdminUser } = useAuth();
   const seesAll = canSeeAllTriageTagIssues(user);
 
   const [nextSerial, setNextSerial] = useState<number | null>(null);
@@ -173,7 +177,9 @@ export function TriageTagPage() {
   }, [user, seesAll]);
 
   const unit = unitText.trim();
-  const unitProblem = validateTriageTagUnit(unit);
+  const unitProblem = validateTriageTagUnit(unit, isAdminUser);
+  /** 這個單位每週上限；null＝不限（管理員的救護科）。 */
+  const weeklyLimit = triageTagWeeklyLimitFor(unit);
   // 週序每次重新整理頁面才算一次；跨週時送出仍以送出當下為準（規則用伺服器時間核對）。
   const [weekIndex] = useState(() => triageTagWeekIndex(new Date()));
 
@@ -185,7 +191,7 @@ export function TriageTagPage() {
 
   const count = Number(countText);
   const countProblem =
-    nextSerial === null || unitUsed === null ? null : validateTriageTagCount(count, nextSerial, unitUsed);
+    nextSerial === null || unitUsed === null ? null : validateTriageTagCount(count, nextSerial, unitUsed, weeklyLimit);
   const canSubmit = !busy && nextSerial !== null && unitProblem === null && unitUsed !== null && countProblem === null;
 
   /** 產 PDF 的共用外殼：鎖住按鈕、顯示進度、錯誤統一顯示。 */
@@ -256,6 +262,12 @@ export function TriageTagPage() {
             <FieldLabel required>單位</FieldLabel>
             <select className={INPUT_CLASS} value={unitText} onChange={(event) => setUnitText(event.target.value)}>
               <option value="">請選擇分隊</option>
+              {/* 救護科只給管理員：不受每週上限（使用者 2026-09-21 指定）。 */}
+              {isAdminUser && (
+                <optgroup label="科內（管理員）">
+                  <option value={TRIAGE_TAG_ADMIN_UNIT}>{TRIAGE_TAG_ADMIN_UNIT}（不限張數）</option>
+                </optgroup>
+              )}
               {TRIAGE_TAG_BRIGADES.map((brigade) => (
                 <optgroup key={brigade.name} label={brigade.name}>
                   {brigade.squads.map((squad) => (
@@ -272,7 +284,9 @@ export function TriageTagPage() {
               <p className="mt-1 text-xs text-slate-400">
                 {unit === '' || unitUsed === null
                   ? TRIAGE_TAG_UNIT_HINT
-                  : `本週（${describeTriageTagWeek(weekIndex)}）${unit} 已領 ${unitUsed} / ${TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張`}
+                  : weeklyLimit === null
+                    ? `本週（${describeTriageTagWeek(weekIndex)}）${unit} 已領 ${unitUsed} 張，不限張數`
+                    : `本週（${describeTriageTagWeek(weekIndex)}）${unit} 已領 ${unitUsed} / ${weeklyLimit} 張`}
               </p>
             )}
           </div>
@@ -282,12 +296,14 @@ export function TriageTagPage() {
               className={INPUT_CLASS}
               type="number"
               min={1}
-              max={TRIAGE_TAG_UNIT_WEEKLY_LIMIT}
+              max={weeklyLimit ?? TRIAGE_TAG_MAX_PER_REQUEST}
               value={countText}
               onChange={(event) => setCountText(event.target.value)}
             />
             <p className="mt-1 text-xs text-slate-400">
-              同一單位每週最多 {TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張（一張 A4 印兩張）
+              {weeklyLimit === null
+                ? `不限張數，但一次最多 ${TRIAGE_TAG_MAX_PER_REQUEST} 張（檔案太大瀏覽器會卡），要更多請分次領`
+                : `同一單位每週最多 ${weeklyLimit} 張（一張 A4 印兩張）`}
             </p>
           </div>
           {nextSerial !== null && (
