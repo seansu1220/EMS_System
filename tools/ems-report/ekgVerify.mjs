@@ -71,6 +71,9 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {string} temsis 要查回系統的 TEMSIS
  * @property {string} squad  出勤單位（分隊）
  * @property {string} arrivalText 匯出檔上的到院時間原文（沒有這一欄時為空字串）
+ * @property {boolean} [mediaOnly] 有勾 EKG 檢查、但紀錄表上**沒選 12 導程**的案件
+ *   （2026-09-22 起也要查，見 `verifyOneCase` 的說明）。只認得上傳清單裡的檔案，
+ *   **不走傳輸紀錄那條後備路**
  */
 
 /**
@@ -105,10 +108,21 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {{decision: string, note: string}|null} [manual]
  *   使用者在人工判定清單上填的（見 `ekgReview.mjs`）。**蓋掉程式的判定**
  * @property {number} [logicVersion] 這筆結論是用哪一版判定規則跑出來的（續跑時要比對）
+ * @property {boolean} [mediaOnly] 紀錄表上沒選 12 導程、只看上傳清單的案件
  */
 
 /** 判定結果的三種值，集中定義避免各處字串打錯。 */
-export const VERDICT = { before: '到院前', after: '到院後', unknown: '無法判定' };
+export const VERDICT = {
+  before: '到院前',
+  after: '到院後',
+  unknown: '無法判定',
+  /**
+   * 紀錄表上沒選 12 導程的案件，進去看了也**確實沒有 12 導程檔案**（2026-09-22 加）。
+   * 這是結論，不是失敗：不計入分子、也不進人工判定清單——
+   * 否則每個月幾十件「本來就沒做」的案件全部要人看，清單就沒人會看了。
+   */
+  none: '沒有12導程檔案',
+};
 
 /**
  * 這一件算不算進分子。**分子的定義只有這一份**，
@@ -639,6 +653,7 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     temsis: target.temsis,
     squad: target.squad,
     logicVersion: EKG.verify.logicVersion,
+    mediaOnly: Boolean(target.mediaOnly),
   };
 
   const rowIndex = await queryByTemsis(page, target.temsis, range);
@@ -743,6 +758,29 @@ async function verifyOneCase(context, page, target, range, timeContext) {
 
   // ---- 3. 兩種上傳都沒有 12 導程，才回頭查傳輸紀錄的 EKG 欄 ----
   let upload = picked ? { time: picked.time, from: uploadFrom } : null;
+
+  /**
+   * ⚠ 紀錄表上沒選 12 導程的案件**不走傳輸紀錄**（2026-09-22）。
+   * 傳輸紀錄的 EKG 欄只代表監視器量過心電圖，可能只是一般的心律監測，
+   * 不是 12 導程。對原本就選了 12 導程的案件，它是「時間」的後備來源；
+   * 但對這群案件，它會變成「有沒有做 12 導程」的證據，那就灌水了。
+   */
+  if (!upload && target.mediaOnly) {
+    return {
+      ...base,
+      verdict: mediaReviews.length > 0 ? VERDICT.unknown : VERDICT.none,
+      reason: mediaReviews.length > 0
+        ? '紀錄表上沒選 12 導程；案件影音有檔案，但程式判不出是不是 12 導程，請看人工判定清單'
+        : '紀錄表上沒選 12 導程，案件內部的上傳清單（含案件影音）也沒有 12 導程檔案',
+      arrival: arrivalText,
+      upload: null,
+      source: '上傳清單',
+      caseDate,
+      remark: null,
+      mediaReviews,
+    };
+  }
+
   if (!upload) {
     log.info(`上傳清單裡沒有「${EKG.verify.twelveLeadMarkers[0]}」，回頭查傳輸紀錄`);
     const transmission = await readTransmissionEkgTime(context, page, target.temsis, range, localContext);
@@ -847,6 +885,7 @@ async function verifyWithRetry(session, target, monthRange, timeContext) {
     temsis: target.temsis,
     squad: target.squad,
     logicVersion: EKG.verify.logicVersion,
+    mediaOnly: Boolean(target.mediaOnly),
   };
   let lastError = '';
 

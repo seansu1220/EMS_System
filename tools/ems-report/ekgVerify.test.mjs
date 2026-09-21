@@ -324,3 +324,13 @@ test('pickEarliestFileRow：時間讀不出來的列直接跳過，不會誤當�
   assert.equal(pickEarliestFileRow(rows, CONTEXT).row.remark, '真的');
   assert.equal(pickEarliestFileRow([], CONTEXT), null);
 });
+
+test('紀錄表沒選 12 導程、也確實沒有檔案的，不計入分子', () => {
+  // 這是結論（進去看過了，就是沒有），不是失敗；也不該被人工判定以外的任何規則救回來。
+  assert.equal(countsAsNumerator(outcome(VERDICT.none, { mediaOnly: true })), false);
+  assert.equal(
+    countsAsNumerator(outcome(VERDICT.before, { mediaOnly: true })),
+    true,
+    '在上傳清單找到 12 導程（例如案件影音）且在到院前的，照樣計入',
+  );
+});

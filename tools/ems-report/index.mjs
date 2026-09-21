@@ -720,12 +720,37 @@ async function runEkgFlow(session, monthRange, options) {
     const columns = denominatorColumns.twelveLead;
     for (const note of columns.notes) log.info(note);
 
-    const allCases = buildCaseList(numerator.table.rows, {
+    const twelveLeadCases = buildCaseList(numerator.table.rows, {
       temsis: columns.temsis,
       squad: numerator.column,
       arrival: columns.arrival,
     });
-    log.info(`可逐案查核的案件：${allCases.length} 件（匯出檔共 ${numerator.table.rows.length} 列）`);
+    log.info(`可逐案查核的案件：${twelveLeadCases.length} 件（匯出檔共 ${numerator.table.rows.length} 列）`);
+
+    /**
+     * ---- 有勾 EKG 檢查、但紀錄表上沒選 12 導程的案件，也要進去看（2026-09-22）----
+     *
+     * 用「案件影音」傳心電圖的，多半就是這一群：當下系統或設備出問題沒照正常流程走，
+     * 紀錄表上也就沒選 12 導程。不查它們的話，案件影音判讀這個功能根本碰不到
+     * 最需要它的案件（2026-08 就有 31 件）。
+     *
+     * 它們只認上傳清單裡的檔案，**不走傳輸紀錄**（見 `verifyOneCase`）。
+     */
+    const ekgOnlyCases = EKG.verify.media.checkEkgOnlyCases
+      ? buildCaseList(
+        rowsNotIn(
+          ekgChecked.table.rows,
+          denominatorColumns.ekg.temsis,
+          numerator.table.rows,
+          denominatorColumns.twelveLead.temsis,
+        ),
+        { temsis: denominatorColumns.ekg.temsis, squad: ekgChecked.column, arrival: denominatorColumns.ekg.arrival },
+      ).map((item) => ({ ...item, mediaOnly: true }))
+      : [];
+    if (ekgOnlyCases.length > 0) {
+      log.info(`另有 ${ekgOnlyCases.length} 件勾了 EKG 檢查但紀錄表沒選 12 導程，也進去看有沒有 12 導程檔案`);
+    }
+    const allCases = [...twelveLeadCases, ...ekgOnlyCases];
     const cases = options.squad ? onlySquad(allCases, options.squad) : allCases;
 
     const result = await verifyEkgCases(session, cases, monthRange, { limit: options.limit });
@@ -1024,6 +1049,14 @@ function printVerifySummary(outcomes, totalCases) {
   }
   log.info(`到院後才傳且沒有補述：${countOf(VERDICT.after) - afterWithRemark} 件（不計入）`);
   log.info(`判定不出來：${countOf(VERDICT.unknown)} 件（不計入，另外列清單）`);
+  const ekgOnly = outcomes.filter((item) => item.mediaOnly);
+  if (ekgOnly.length > 0) {
+    const found = ekgOnly.filter((item) => countsAsNumerator(item)).length;
+    log.info(
+      `　（其中 ${ekgOnly.length} 件是紀錄表沒選 12 導程的：${found} 件在上傳清單找到 12 導程而計入，`
+        + `${countOf(VERDICT.none)} 件確實沒有 12 導程檔案）`,
+    );
+  }
   if (mediaToReview > 0) {
     log.warn(`另有 ${mediaToReview} 個「案件影音」檔程式判不出內容，已另外列清單請你點開看。`);
   }

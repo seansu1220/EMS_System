@@ -58,6 +58,7 @@ function countVerdicts(outcomes) {
     after: of(VERDICT.after) - afterWithRemark,
     afterWithRemark,
     unknown: of(VERDICT.unknown),
+    none: of(VERDICT.none),
   };
 }
 
@@ -324,6 +325,9 @@ export async function writeRunSummary(input) {
     `| 到院後才傳，**備註有補述原因** | ${verdicts.afterWithRemark} | 是 |`,
     `| 到院後才傳，備註沒有補述 | ${verdicts.after} | 否 |`,
     `| 判定不出來 | ${verdicts.unknown} | 否 |`,
+    ...(verdicts.none > 0
+      ? [`| 紀錄表沒選 12 導程，上傳清單也沒有 12 導程檔案 | ${verdicts.none} | 否 |`]
+      : []),
     '',
     ...(manualCounted + manualSkipped > 0
       ? [
