@@ -92,7 +92,7 @@ export function validateTriageTagCount(count: number, nextSerial: number, unitUs
  * 領取一批傷票號碼（接續上一個人的號碼往下發，並計入單位本週用量）。
  *
  * @returns 這次拿到的起始流水號與張數
- * @throws 單位格式不對、張數不合法、超過單位每週上限、號碼不夠、或寫入失敗時
+ * @throws 單位不在名單、張數不合法、超過單位每週上限、號碼不夠、或寫入失敗時
  */
 export async function allocateTriageTags(
   user: AppUser,

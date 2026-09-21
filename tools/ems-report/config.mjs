@@ -333,6 +333,10 @@ export const TRAFFIC_CASE_REPORT = {
  *
  * 順序取自使用者提供的既有報表（`6月份到院前預警比例.xlsx`），即官方慣用排列，
  * 報表輸出時會照這個順序呈現。分隊調整或改隸時只需改這裡。
+ *
+ * ⚠ 網頁「測試用傷票領取」的單位名單抄了一份（網頁建置不讀 tools 底下的檔案）：
+ *   分隊有異動時，`src/config/triageTag.ts` 的 TRIAGE_TAG_BRIGADES 與
+ *   `firebase/firestore.rules` 的 triageUnitValid() 也要一起改。
  */
 export const BRIGADES = [
   {

@@ -1,9 +1,10 @@
 /**
  * 測試用傷票領取頁 `/triage-tags`：輸入單位與張數 → 系統接續發號 → 下載可直接雙面列印的 PDF。
- * 單位格式必須是「OO分隊」，同一單位每週最多 20 張（台灣時間週一起算）。
+ * 單位只能從月報表的分隊名單選，同一單位每週最多 20 張（台灣時間週一起算）。
  *
  * 三種角色都能用（含解鎖專用帳號）；解鎖專用帳號只看得到自己的領取紀錄。
- * 號碼一旦發出就不回收，PDF 弄丟了從下方紀錄「重新下載」，號碼不會變。
+ * 號碼一旦發出就不回收。「重新下載」**只給剛領的那一批**（按鈕在領取按鈕旁，離開頁面就消失）；
+ * 領取紀錄不提供下載，免得後來登入的人把別人領的傷票載走（使用者 2026-09-21 指定）。
  */
 import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from '../hooks/useAuth';
@@ -25,9 +26,11 @@ import {
   validateTriageTagUnit,
 } from '../lib/triageTagNumber';
 import {
+  TRIAGE_TAG_BRIGADES,
   TRIAGE_TAG_TOTAL,
   TRIAGE_TAG_UNIT_HINT,
   TRIAGE_TAG_UNIT_WEEKLY_LIMIT,
+  TRIAGE_TAG_UNITS,
 } from '../config/triageTag';
 import type { TriageTagIssue } from '../types/triageTag';
 import { Button, Card, CenteredSpinner, ErrorBanner, FieldLabel, INPUT_CLASS } from '../components/ui';
@@ -37,7 +40,9 @@ const LAST_UNIT_STORAGE_KEY = 'triageTag.lastUnit';
 
 function loadLastUnit(): string {
   try {
-    return window.localStorage.getItem(LAST_UNIT_STORAGE_KEY) ?? '';
+    const saved = window.localStorage.getItem(LAST_UNIT_STORAGE_KEY) ?? '';
+    // 舊版允許自由輸入，存下來的可能不在名單上，這種就不要帶入。
+    return TRIAGE_TAG_UNITS.includes(saved) ? saved : '';
   } catch {
     return '';
   }
@@ -101,18 +106,8 @@ function PrintGuide() {
   );
 }
 
-/** 領取紀錄表格（每一列可重新下載同一批號碼）。 */
-function IssueTable({
-  issues,
-  showRequester,
-  busy,
-  onRedownload,
-}: {
-  issues: TriageTagIssue[];
-  showRequester: boolean;
-  busy: boolean;
-  onRedownload: (issue: TriageTagIssue) => void;
-}) {
+/** 領取紀錄表格（只列紀錄，**不提供下載**，避免別人把不是自己領的傷票載走）。 */
+function IssueTable({ issues, showRequester }: { issues: TriageTagIssue[]; showRequester: boolean }) {
   if (issues.length === 0) return <p className="text-sm text-slate-400">還沒有領取紀錄。</p>;
   return (
     <div className="overflow-x-auto">
@@ -124,7 +119,6 @@ function IssueTable({
             {showRequester && <th className="py-2 pr-3 font-medium">領取人</th>}
             <th className="py-2 pr-3 font-medium">號碼</th>
             <th className="py-2 pr-3 font-medium">張數</th>
-            <th className="py-2 font-medium" />
           </tr>
         </thead>
         <tbody>
@@ -135,11 +129,6 @@ function IssueTable({
               {showRequester && <td className="py-2 pr-3">{issue.requestedByName}</td>}
               <td className="py-2 pr-3 font-mono">{describeTriageTagRange(issue.startSerial, issue.count)}</td>
               <td className="py-2 pr-3">{issue.count}</td>
-              <td className="py-2 text-right">
-                <Button variant="secondary" disabled={busy} onClick={() => onRedownload(issue)}>
-                  重新下載
-                </Button>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -156,6 +145,11 @@ export function TriageTagPage() {
   const [issues, setIssues] = useState<TriageTagIssue[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [unitText, setUnitText] = useState(loadLastUnit);
+  /**
+   * 這次在本頁剛領到的那一批（給「重新下載」用）。只放在畫面的記憶體裡，
+   * 離開或重新整理頁面就沒了——重新下載只給當下沒載到的人補救，不是隨時都能再載。
+   */
+  const [lastAllocation, setLastAllocation] = useState<{ startSerial: number; count: number } | null>(null);
   /** 單位本週已領張數；單位格式不對或還在讀取時為 null。 */
   const [unitUsed, setUnitUsed] = useState<number | null>(null);
   const [countText, setCountText] = useState('10');
@@ -213,25 +207,28 @@ export function TriageTagPage() {
     setBusy(true);
     try {
       const allocated = await allocateTriageTags(user, unit, count);
+      // 號碼一領到就記下來：就算接下來產生 PDF 失敗，也能按「重新下載」補。
+      setLastAllocation(allocated);
       saveLastUnit(unit);
       const range = describeTriageTagRange(allocated.startSerial, allocated.count);
       await runDownload(allocated.startSerial, allocated.count, `已領取 ${range}，PDF 已下載。`);
     } catch (error) {
       setActionError(
-        `${(error as Error).message}　（若號碼已經領到但 PDF 沒下載成功，可以從下方紀錄重新下載。）`,
+        `${(error as Error).message}　（若號碼已經領到但 PDF 沒下載成功，請按旁邊的「重新下載」。）`,
       );
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleRedownload(issue: TriageTagIssue) {
+  async function handleRedownload() {
+    if (!lastAllocation) return;
     setActionError(null);
     setNotice('');
     setBusy(true);
     try {
-      const range = describeTriageTagRange(issue.startSerial, issue.count);
-      await runDownload(issue.startSerial, issue.count, `已重新下載 ${range}（號碼不變）。`);
+      const range = describeTriageTagRange(lastAllocation.startSerial, lastAllocation.count);
+      await runDownload(lastAllocation.startSerial, lastAllocation.count, `已重新下載 ${range}（號碼不變）。`);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -246,7 +243,7 @@ export function TriageTagPage() {
       <div>
         <h1 className="text-xl font-bold text-slate-800">測試用傷票領取</h1>
         <p className="mt-1 text-sm text-slate-500">
-          輸入單位與張數，系統會接續上一位同仁的號碼發給你，並產生可直接雙面列印的 PDF。
+          選擇單位並輸入張數，系統會接續上一位同仁的號碼發給你，並產生可直接雙面列印的 PDF。
           同一單位每週最多 {TRIAGE_TAG_UNIT_WEEKLY_LIMIT} 張（每週一重新計算）。
         </p>
       </div>
@@ -257,12 +254,18 @@ export function TriageTagPage() {
         <form className="space-y-4" onSubmit={handleAllocate}>
           <div className="max-w-xs">
             <FieldLabel required>單位</FieldLabel>
-            <input
-              className={INPUT_CLASS}
-              value={unitText}
-              onChange={(event) => setUnitText(event.target.value)}
-              placeholder="例：大湳分隊"
-            />
+            <select className={INPUT_CLASS} value={unitText} onChange={(event) => setUnitText(event.target.value)}>
+              <option value="">請選擇分隊</option>
+              {TRIAGE_TAG_BRIGADES.map((brigade) => (
+                <optgroup key={brigade.name} label={brigade.name}>
+                  {brigade.squads.map((squad) => (
+                    <option key={squad} value={squad}>
+                      {squad}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
             {unit !== '' && unitProblem ? (
               <p className="mt-1 text-xs text-red-600">{unitProblem}</p>
             ) : (
@@ -302,9 +305,16 @@ export function TriageTagPage() {
           {countText !== '' && countProblem && <p className="text-sm text-red-600">{countProblem}</p>}
           <ErrorBanner message={actionError} />
           {notice && <p className="text-sm text-green-700">{notice}</p>}
-          <Button type="submit" disabled={!canSubmit}>
-            {progress || '領取並下載 PDF'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={!canSubmit}>
+              {progress || '領取並下載 PDF'}
+            </Button>
+            {lastAllocation && (
+              <Button type="button" variant="secondary" disabled={busy} onClick={handleRedownload}>
+                重新下載（{describeTriageTagRange(lastAllocation.startSerial, lastAllocation.count)}）
+              </Button>
+            )}
+          </div>
         </form>
       </Card>
 
@@ -315,7 +325,7 @@ export function TriageTagPage() {
         {issues === null ? (
           <p className="text-sm text-slate-400">載入中…</p>
         ) : (
-          <IssueTable issues={issues} showRequester={seesAll} busy={busy} onRedownload={handleRedownload} />
+          <IssueTable issues={issues} showRequester={seesAll} />
         )}
       </Card>
     </div>

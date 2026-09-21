@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-09-21　v1.43.0 傷票單位改為月報表分隊名單；領取紀錄拿掉重新下載
+
+### 問題描述
+1. 單位只檢查「兩個中文字＋分隊」，打「台北分隊」之類不存在的分隊也會過。
+   使用者希望**只允許月報表上的分隊**。
+2. 領取紀錄每一列都能「重新下載」，後來登入的人可以把別人領的傷票載走。
+   使用者希望紀錄不給下載，但領取之後要有一顆「重新下載」讓沒載到的人補救。
+3. 使用者又測試了一次，號碼與張數要再清空一次。
+
+### 根本原因
+1. v1.42.0 只做格式檢查，沒有對照正式的分隊名單。
+2. v1.41.0 的補救設計是「從紀錄重新下載」，沒考慮到紀錄對其他人可見。
+
+### 修改的檔案與內容
+- **`src/config/triageTag.ts`**：拿掉 `TRIAGE_TAG_UNIT_PATTERN`，改為 `TRIAGE_TAG_BRIGADES`
+  （四個大隊 41 個分隊，照抄 `tools/ems-report/config.mjs` 的 `BRIGADES`）與攤平的 `TRIAGE_TAG_UNITS`。
+- **`src/lib/triageTagNumber.ts`**：`validateTriageTagUnit()` 改為比對名單。
+- **`src/pages/TriageTagPage.tsx`**：單位改成依大隊分組的下拉選單；
+  領取紀錄拿掉「重新下載」欄；領取按鈕旁新增「重新下載（H00T000 ~ H00T009）」，
+  只記本頁剛領的那一批（號碼一領到就記，PDF 產生失敗也能補），離開頁面即消失。
+- **`firebase/firestore.rules`**：`triageUnitValid()` 改為 `unit in [41 個分隊]`。
+- **`scripts/rules.test.mjs`**：單位測試改為「不完整名稱（大湳）」與「不在名單（台北分隊）」，**79/79 通過**。
+- **`tools/ems-report/config.mjs`**：`BRIGADES` 註解補上「網頁傷票名單也要一起改」。
+- **`docs/SPEC.md`**：更新 2.9、安全規則、目錄結構。
+- **`package.json`**：版本 1.17.0。
+
+### 號碼歸零
+依使用者要求，部署後再次清空正式資料庫的 `triageTagCounter`、`triageTagIssues`、`triageTagUnitWeeks`。
+
+---
+
 ## 2026-09-21　v1.42.0 測試用傷票：必填單位（OO分隊）、同單位每週最多 20 張
 
 ### 問題描述

@@ -6,7 +6,7 @@ import {
   TRIAGE_TAG_NUMBER,
   TRIAGE_TAG_TOTAL,
   TRIAGE_TAG_UNIT_HINT,
-  TRIAGE_TAG_UNIT_PATTERN,
+  TRIAGE_TAG_UNITS,
   TRIAGE_TAG_WEEK_UTC_OFFSET_HOURS,
 } from '../config/triageTag';
 
@@ -69,9 +69,9 @@ export function describeTriageTagWeek(weekIndex: number): string {
 }
 
 /**
- * 檢查單位名稱格式（兩個中文字＋分隊）。
+ * 檢查單位是不是月報表上的分隊。
  * @returns 錯誤訊息；沒問題回傳 null
  */
 export function validateTriageTagUnit(unit: string): string | null {
-  return TRIAGE_TAG_UNIT_PATTERN.test(unit.trim()) ? null : TRIAGE_TAG_UNIT_HINT;
+  return TRIAGE_TAG_UNITS.includes(unit.trim()) ? null : TRIAGE_TAG_UNIT_HINT;
 }

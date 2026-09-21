@@ -17,7 +17,7 @@
  * 5. **解鎖專用帳號**（role == 'unlocker'）讀不到任何業務資料，
  *    解鎖工單只讀得到自己送的、不可回寫結果、不可冒用他人名義申請。
  * 6. **測試用傷票**：號碼只能接續往下領（計數器、領取紀錄、單位週用量必須一起寫、互相對得上），
- *    不能挑號碼、跳號或冒名；單位須為「OO分隊」且同單位每週最多 20 張；
+ *    不能挑號碼、跳號或冒名；單位須為月報表上的分隊且同單位每週最多 20 張；
  *    解鎖專用帳號只讀得到自己的領取紀錄。
  */
 import { readFileSync } from 'node:fs';
@@ -505,12 +505,12 @@ await check(
   assertFails(allocateTags(member, { before: 12, count: 9, weekIndex: THIS_WEEK - 1, requestedBy: 'member-uid' })),
 );
 await check(
-  '單位格式不是「OO分隊」會被擋',
+  '單位不是完整分隊名稱會被擋（大湳）',
   assertFails(allocateTags(member, { before: 12, count: 1, unit: '大湳', requestedBy: 'member-uid' })),
 );
 await check(
-  '單位格式三個字加分隊也會被擋',
-  assertFails(allocateTags(member, { before: 12, count: 1, unit: '大湳湳分隊', requestedBy: 'member-uid' })),
+  '不在月報表名單上的分隊會被擋（台北分隊）',
+  assertFails(allocateTags(member, { before: 12, count: 1, unit: '台北分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '同單位剛好領滿 20 張可以（已 12 張再領 8 張）',

@@ -39,14 +39,37 @@ export const TRIAGE_TAG_MAX_PER_REQUEST = 100;
 export const TRIAGE_TAG_UNIT_WEEKLY_LIMIT = 20;
 
 /**
- * 單位名稱的格式：**兩個中文字＋「分隊」**（例：`大湳分隊`），不是這個格式不給領。
- * 格式固定，同一個分隊才不會因為寫法不同（「大湳」「大湳隊」）被算成不同單位而繞過每週上限。
- * ⚠ 須與 `firebase/firestore.rules` 的 triageUnitPattern() 一致。
+ * 可以領傷票的單位：**只限月報表上的 41 個分隊**（使用者 2026-09-21 指定），畫面上用下拉選單選。
+ *
+ * 照抄 `tools/ems-report/config.mjs` 的 `BRIGADES`（月報表的大隊與分隊，官方慣用順序）。
+ * 網頁建置不讀 tools 底下的檔案，所以這裡另存一份；**分隊調整時三個地方要一起改**：
+ * 這裡、`tools/ems-report/config.mjs`、`firebase/firestore.rules` 的 triageUnitValid()。
+ * 名單固定也順帶避免同一個分隊有不同寫法（「大湳」「大湳隊」）而被算成不同單位、繞過每週上限。
  */
-export const TRIAGE_TAG_UNIT_PATTERN = /^\p{Script=Han}{2}分隊$/u;
+export const TRIAGE_TAG_BRIGADES: readonly { name: string; squads: readonly string[] }[] = [
+  {
+    name: '第一大隊',
+    squads: ['桃園分隊', '中路分隊', '大林分隊', '三民分隊', '大有分隊', '埔子分隊', '八德分隊', '大湳分隊', '茄苳分隊', '龜山分隊', '坪頂分隊', '迴龍分隊'],
+  },
+  {
+    name: '第二大隊',
+    squads: ['中壢分隊', '興國分隊', '華勛分隊', '內壢分隊', '龍岡分隊', '青埔分隊', '楊梅分隊', '幼獅分隊', '埔心分隊', '富岡分隊', '新屋分隊', '永安分隊'],
+  },
+  {
+    name: '第三大隊',
+    squads: ['蘆竹分隊', '山腳分隊', '大竹分隊', '大園分隊', '竹圍分隊', '觀音分隊', '新坡分隊', '草漯分隊'],
+  },
+  {
+    name: '第四大隊',
+    squads: ['圳頂分隊', '大溪分隊', '平鎮分隊', '復旦分隊', '山峰分隊', '龍潭分隊', '高平分隊', '復興分隊', '巴陵分隊'],
+  },
+];
 
-/** 單位格式不對時給使用者看的說明。 */
-export const TRIAGE_TAG_UNIT_HINT = '單位請填「OO分隊」（兩個中文字＋分隊，例：大湳分隊）';
+/** 所有允許的單位（攤平）。 */
+export const TRIAGE_TAG_UNITS: readonly string[] = TRIAGE_TAG_BRIGADES.flatMap((brigade) => brigade.squads);
+
+/** 單位不在名單時給使用者看的說明。 */
+export const TRIAGE_TAG_UNIT_HINT = '請從清單選擇分隊（只限月報表上的分隊）';
 
 /**
  * 計算「第幾週」用的時區位移（台灣 UTC+8）。

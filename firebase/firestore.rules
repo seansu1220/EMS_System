@@ -149,10 +149,10 @@ service cloud.firestore {
     //   - 領取紀錄的起始號＝計數器原本的下一號（不能自己挑號碼、不能重複領）
     //   - 計數器往後推的張數＝領取紀錄的張數（不能偷跳號，也不能只推計數器不留紀錄）
     //   - 單位本週用量加上的張數＝領取紀錄的張數，且不超過每週上限 20 張
-    //   - 單位必須是「兩個中文字＋分隊」，週序必須是伺服器時間的這一週
+    //   - 單位必須是月報表上的分隊，週序必須是伺服器時間的這一週
     // 三種角色（含解鎖專用）只要已核准都能領。
     // ⚠️ 單次上限 100 須與 src/config/triageTag.ts 的 TRIAGE_TAG_MAX_PER_REQUEST 一致；
-    //    每週 20 張須與 TRIAGE_TAG_UNIT_WEEKLY_LIMIT 一致；單位格式須與 TRIAGE_TAG_UNIT_PATTERN 一致。
+    //    每週 20 張須與 TRIAGE_TAG_UNIT_WEEKLY_LIMIT 一致；單位名單須與 TRIAGE_TAG_BRIGADES 一致。
     function triageCounterPath() {
       return /databases/$(database)/documents/triageTagCounter/main;
     }
@@ -174,8 +174,15 @@ service cloud.firestore {
       return int(math.floor((localDay + 3) / 7));
     }
 
+    // 單位只限月報表上的分隊（第一～第四大隊，共 41 個）。
+    // ⚠️ 須與 src/config/triageTag.ts 的 TRIAGE_TAG_BRIGADES、tools/ems-report/config.mjs 的 BRIGADES 一致。
     function triageUnitValid(unit) {
-      return unit is string && unit.matches('^\\p{Han}{2}分隊$');
+      return unit is string && unit in [
+        '桃園分隊', '中路分隊', '大林分隊', '三民分隊', '大有分隊', '埔子分隊', '八德分隊', '大湳分隊', '茄苳分隊', '龜山分隊', '坪頂分隊', '迴龍分隊',
+        '中壢分隊', '興國分隊', '華勛分隊', '內壢分隊', '龍岡分隊', '青埔分隊', '楊梅分隊', '幼獅分隊', '埔心分隊', '富岡分隊', '新屋分隊', '永安分隊',
+        '蘆竹分隊', '山腳分隊', '大竹分隊', '大園分隊', '竹圍分隊', '觀音分隊', '新坡分隊', '草漯分隊',
+        '圳頂分隊', '大溪分隊', '平鎮分隊', '復旦分隊', '山峰分隊', '龍潭分隊', '高平分隊', '復興分隊', '巴陵分隊'
+      ];
     }
 
     // 這一筆寫入裡「新建」了起始號為 startSerial 的領取紀錄（原本不存在、寫完存在）。
