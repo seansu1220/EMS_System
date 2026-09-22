@@ -199,7 +199,7 @@ export function UnlockPage() {
           </div>
 
           <div>
-            <FieldLabel required>申請事由</FieldLabel>
+            <FieldLabel required hint="（請填寫解鎖後欲修改內容）">申請事由</FieldLabel>
             <input
               className={INPUT_CLASS}
               value={reason}

@@ -78,16 +78,20 @@ export function FieldLabel({
   children,
   required = false,
   optional = false,
+  hint,
 }: {
   children: ReactNode;
   required?: boolean;
   optional?: boolean;
+  /** 接在標題後方的灰色補充說明。 */
+  hint?: string;
 }) {
   return (
     <label className="mb-1 block text-sm font-medium text-slate-700">
       {children}
       {required && <span className="ml-0.5 text-red-500">*</span>}
       {optional && <span className="ml-1 text-xs text-slate-400">選填</span>}
+      {hint && <span className="ml-1 text-xs font-normal text-slate-500">{hint}</span>}
     </label>
   );
 }
