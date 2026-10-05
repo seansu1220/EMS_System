@@ -35,7 +35,7 @@ export async function waitForContentAp(page, apName, timeoutMs = 20000) {
  *
  * @returns {Promise<string>} 這次用的記號
  */
-async function stampContent(page) {
+export async function stampContent(page) {
   const stamp = `ems-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await getFrame(page, SITE.frames.content)
     .evaluate((value) => {
@@ -56,7 +56,7 @@ async function stampContent(page) {
  *
  * @returns {Promise<boolean>} 期限內是否確實換過文件
  */
-async function waitForContentReplaced(page, stamp, timeoutMs = 20000) {
+export async function waitForContentReplaced(page, stamp, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const content = page.frames().find((item) => item.name() === SITE.frames.content);

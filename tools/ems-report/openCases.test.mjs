@@ -78,7 +78,7 @@ test('buildCaseSummary 列數與按鈕數對不上、案件列表多筆時要寫
   assert.equal(summary.hasClosed, true);
   assert.equal(summary.notes.length, 2);
   assert.match(summary.notes[0], /3 個紀錄表按鈕.*1 列/);
-  assert.match(summary.notes[1], /查到 2 筆/);
+  assert.match(summary.notes[1], /2 列的案號都是這一號/);
   assert.deepEqual(summary.squads, ['平鎮分隊'], '案件內部讀不到分隊時退回清單上的');
 });
 

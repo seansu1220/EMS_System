@@ -152,7 +152,7 @@ export function buildCaseSummary(inspection, group) {
     notes.push(`案件內部有 ${inspection.buttonCount} 個紀錄表按鈕，但只讀到 ${inspection.rows.length} 列狀態`);
   }
   if (inspection.caseListRows > 1) {
-    notes.push(`案件列表以這個案號查到 ${inspection.caseListRows} 筆，取第一筆統整，請自行確認`);
+    notes.push(`案件列表有 ${inspection.caseListRows} 列的案號都是這一號，取第一列統整，請自行確認`);
   }
   const squadsInCase = inspection.rows.map((row) => row.squad).filter(Boolean);
   return {
