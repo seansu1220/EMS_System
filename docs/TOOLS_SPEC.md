@@ -1,6 +1,10 @@
 # 小工具規格書（TOOLS SPEC）
 
-> 版本：v1.40.1　建立日期：2026-07-26　最後更新：2026-09-22
+> 版本：v1.40.3　建立日期：2026-07-26　最後更新：2026-10-05
+> v1.40.3：**測試前先做靜態檢查，抓「呼叫了卻不存在的函式」**（見 1.8）——
+> 　　　　 `copyHowToFile()` 在 9/10 被誤刪，交通案件、月度報表、心電圖統計一啟動就失敗，
+> 　　　　 測試卻全過（測試走不到 `main()`）。新增 `npm run tool:lint`（eslint 只開 `no-undef`），
+> 　　　　 三個工具的 `tool:*:test` 都會先跑它
 > v1.40.1：**有勾 EKG 檢查、但紀錄表沒選 12 導程的案件也進去查**（見 3.4.2）——
 > 　　　　 用案件影音傳心電圖的多半就是這一群，原本完全不在查核名單裡（2026-08 有 31 件）。
 > 　　　　 它們只認上傳清單裡的檔案，不走傳輸紀錄
@@ -475,7 +479,8 @@ conhost 上 readline 會依提示字寬重繪該行，提示含全形字或整�
 | `npm run tool:ems -- probe --manual` | 改為手動點選的探測模式 |
 | `npm run tool:ems -- check-sheet` | 檢查增減用的 Google 試算表 |
 | `npm run tool:ems -- <任何指令> --fresh-login` | 捨棄保存的登入狀態，強制重新登入（見 0.8） |
-| `npm run tool:ems:test` | 全部單元／整合測試 |
+| `npm run tool:ems:test` | 全部單元／整合測試（會先跑 `tool:lint`） |
+| `npm run tool:lint` | 靜態檢查 `tools/` 全部程式：找出用了卻沒定義的名稱（設定在 `tools/eslint.config.mjs`） |
 
 以本機已安裝的 Chrome 執行（`playwright-core` + `channel: 'chrome'`），不另外下載瀏覽器。
 **Node.js 並非 Windows 內建**，該台電腦需自行安裝。
@@ -630,7 +635,8 @@ conhost 上 readline 會依提示字寬重繪該行，提示含全形字或整�
 | 撈到全部資料（10185 筆） | 日期格式為 `yyyy-MM-dd HH:mm:ss`，只處理年月日會讓 `HH:mm:ss` 原樣留在字串裡 | 支援時分秒；起日 `00:00:00`、**迄日 `23:59:59`** |
 | 報表只有一個叫「V」的分隊 | 匯出檔沒有名為「分隊」的欄，欄名模糊比對抓到「分隊 自行受理」勾選欄 | 改以欄位內容判定分隊欄 |
 | `cannot save file` | SheetJS 的 ESM 版必須先 `set_fs(fs)` | 統一由 `xlsxNode.mjs` 取用 |
-| 常數 `is not defined` | `node --check` 只驗語法、不驗未定義引用 | 測試需**實際執行到函式內部**（見 `session.test.mjs`） |
+| 常數 `is not defined` | `node --check` 只驗語法、不驗未定義引用 | 測試需**實際執行到函式內部**（見 `session.test.mjs`）；v1.40.3 起另有 `tool:lint` 靜態把關 |
+| **按下 .bat 立刻結束**：`copyHowToFile is not defined`（2026-10-05） | 改寫相鄰函式時把它整段誤刪，呼叫還留著；單元測試走不到 `main()`，測試全過、一個月沒人發現。同次掃描另抓到 `ekgOhca.mjs` 漏 import `locateCprCheckbox` | `npm run tool:lint`（eslint `no-undef`），各 `tool:*:test` 先跑它。瀏覽器端用到的名稱（`document`、`CSS`…）**逐一列在設定檔**，不整包開放，以免打錯字被當成合法 |
 | 打驗證碼時焦點一直被搶 | 等待迴圈每秒重填帳密並把游標移到驗證碼欄 | **只在欄位空白時才代填**，填完只移動一次焦點 |
 | 匯出後乾等 3 分鐘才報錯 | 系統匯出在伺服器端拋例外（頁面顯示 `Error!!! ..._btnExcel()`）時**不會有任何下載**，只等下載事件必然等到逾時 | 監看頁面是否出現 `Error!!!` 字樣，出現即立刻中止；並自動重新查詢後重試一次 |
 | 讀 Google 試算表得到 HTTP 400 | 預設帶了 `gid=0`，但**第一個分頁的 gid 未必是 0**（原始分頁被刪過就會變） | 未指定 gid 時**不帶該參數**，Google 即回傳第一個分頁；帶了 gid 而收到 400 時自動退回不帶 |

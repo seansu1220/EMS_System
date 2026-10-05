@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-10-05　小工具 v1.40.3 測試前加靜態檢查，抓「呼叫了卻不存在的函式」
+
+### 問題描述
+v1.40.2 修掉的 `copyHowToFile is not defined` 在程式裡躲了將近一個月：
+9/10 誤刪後測試照樣全過，直到使用者按下 .bat 才發現。使用者要求加一道防線。
+
+### 根本原因
+單元測試只驗個別函式，不會執行 `index.mjs` 的 `main()`；ES module 用到不存在的名稱時，
+要執行到那一行才會報錯，`node --check` 也只驗語法。
+
+### 修改的檔案與內容
+- **`tools/eslint.config.mjs`**（新增）：eslint 只開 `no-undef` 一條規則，範圍是 `tools/` 全部 `.mjs`（排除 `out/`）。
+  Node 內建名稱用 `globals.node`；只在瀏覽器頁面裡執行的名稱（`document`、`window`、`location`、`CSS`、`Image`、`Node`）
+  **逐一列出**，不整包開放 `globals.browser`，以免 `name`、`status` 這類常見字打錯時被當成合法。
+- **`package.json`**：新增 `tool:lint`；`tool:ems:test`、`tool:mci:test`、`tool:duty:test` 都先跑它，檢查不過就不跑測試。
+  devDependencies 加 `eslint`、`globals`。
+- **`docs/TOOLS_SPEC.md`**：指令表補 `tool:lint`；1.8「實跑踩過的坑」補這次的案例與對策；版本 v1.40.3。
+- 驗證：現行程式碼檢查通過；三個工具測試 430／136／20 全過；
+  把 `index.mjs` 換回 9/10 誤刪後的版本，`tool:ems:test` 當場報 `'copyHowToFile' is not defined` 並失敗。
+
+---
+
 ## 2026-10-05　小工具 v1.40.2 修正二級以上交通案件、月度報表、心電圖統計一啟動就失敗
 
 ### 問題描述
