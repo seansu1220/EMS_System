@@ -3,7 +3,7 @@
  *
  * 報表四個分頁：
  *   1. 摘要：查詢期間、各階段筆數，以及兩個以**案件**為單位的數字：
- *      連一張已結案都沒有的案件、不是每台車都有已結案的案件（後者含前者）
+ *      整件未結案的案件、有車輛未結案的案件（後者含前者）
  *   2. 案件統整：一件一列，`已結案*1+已填寫*2+未填寫*1`；整件沒有已結案的塗淺黃，
  *      別台有結、但有車一張都沒結的塗淺橘
  *   3. 各張紀錄表：案件內部讀到的每一列（項次／日期／車輛／分隊／狀態），供回頭核對統整
@@ -23,8 +23,8 @@ import { maskCode } from './sheetFields.mjs';
 
 /** 各分頁的欄位（順序即輸出順序）。 */
 export const CASE_COLUMNS = [
-  '案件日期', '派遣案號', '派遣分隊', '紀錄表張數', '救護表狀態統整', '有已結案',
-  '每台車都有已結案', '沒有已結案的車', '未結案的紀錄表（TEMSIS）', '備註',
+  '案件日期', '派遣案號', '派遣分隊', '紀錄表張數', '狀態統整', '有已結案',
+  '車輛皆已結案', '未結案車輛', '未結案紀錄表 TEMSIS', '備註',
 ];
 const RECORD_COLUMNS = ['派遣案號', '項次', '日期', '派遣車輛', '派遣分隊', '救護表狀態'];
 const FAILURE_COLUMNS = ['卡在哪一步', 'TEMSIS／派遣案號', '分隊', '案件日期', '原因'];
@@ -40,7 +40,7 @@ function closedLabel(hasClosed) {
   return hasClosed ? '有' : '無';
 }
 
-/** 「每台車都有已結案」欄的寫法（讀取失敗時同樣不知道）。 */
+/** 「車輛皆已結案」欄的寫法（讀取失敗時同樣不知道）。 */
 function everyVehicleLabel(item) {
   if (item.hasClosed === null) return '讀取失敗';
   return (item.vehiclesWithoutClosed ?? []).length === 0 ? '是' : '否';
@@ -92,12 +92,12 @@ export function buildSummaryRows(result, range) {
   const lookupFailed = result.lookups.filter((item) => item.error).length;
   const rows = [
     ['查詢期間', `${range.start} ~ ${range.end}`],
-    ['未結案的紀錄表', `${result.recordCount} 張`],
+    ['未結案紀錄表', `${result.recordCount} 張`],
     ['讀到指派案號', `${result.lookups.length - lookupFailed} 張（讀不到 ${lookupFailed} 張）`],
     ['合併成案件', `${counts.caseCount} 件（成功統整 ${counts.inspected} 件、讀取失敗 ${counts.failed} 件）`],
     ['有已結案的案件', `${counts.withClosed} 件`],
-    ['連一張已結案都沒有的案件', `${counts.withoutClosed} 件`],
-    ['不是每台車都有已結案的案件', `${counts.withUnclosedVehicle} 件（含上一列的 ${counts.withoutClosed} 件；同一台車任一張已結案就算那台有結）`],
+    ['整件未結案的案件', `${counts.withoutClosed} 件`],
+    ['有車輛未結案的案件', `${counts.withUnclosedVehicle} 件（含整件未結案 ${counts.withoutClosed} 件）`],
   ];
   if (result.skipped > 0) rows.push(['⚠ 只跑了一部分', `依 --limit 少跑 ${result.skipped} 張紀錄表，數字不完整`]);
   if (result.aborted) rows.push(['⚠ 中途停止', '連續失敗太多筆而停下，數字不完整；12 小時內重跑會接著跑']);
@@ -110,7 +110,7 @@ export function buildSummaryRows(result, range) {
  */
 function highlightCasesWithoutClosed(sheet, rows) {
   const closedColumn = CASE_COLUMNS.indexOf('有已結案');
-  const everyVehicleColumn = CASE_COLUMNS.indexOf('每台車都有已結案');
+  const everyVehicleColumn = CASE_COLUMNS.indexOf('車輛皆已結案');
   rows.forEach((row, index) => {
     let argb = null;
     if (row[closedColumn] === '無') argb = OPEN_CASES.highlightArgb;
@@ -136,17 +136,17 @@ export function buildOpenCaseWorkbook(result, range) {
 
   const caseRows = buildCaseRows(result.summaries);
   const caseSheet = buildListSheet(workbook, '案件統整', `案件統整（${period}）`, CASE_COLUMNS, caseRows, {
-    wideColumns: ['備註', '沒有已結案的車'],
+    wideColumns: ['備註', '未結案車輛'],
   });
   highlightCasesWithoutClosed(caseSheet, caseRows);
   // TEMSIS 一格可能好幾個（換行分隔），要開自動換行才看得到全部。
-  caseSheet.getColumn(CASE_COLUMNS.indexOf('未結案的紀錄表（TEMSIS）') + 1).alignment = { wrapText: true, vertical: 'top' };
+  caseSheet.getColumn(CASE_COLUMNS.indexOf('未結案紀錄表 TEMSIS') + 1).alignment = { wrapText: true, vertical: 'top' };
   caseSheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: CASE_COLUMNS.length } };
 
   const recordRows = [...result.summaries].sort(byCaseDate).flatMap((item) => item.records.map((record) => [
     item.dispatchNo, record.itemNo, record.date, record.vehicle, record.squad, record.status,
   ]));
-  buildListSheet(workbook, '各張紀錄表', `案件內的每一張紀錄表（${period}）`, RECORD_COLUMNS, recordRows);
+  buildListSheet(workbook, '各張紀錄表', `各張紀錄表（${period}）`, RECORD_COLUMNS, recordRows);
 
   const failureRows = buildFailureRows(result);
   if (failureRows.length > 0) {
@@ -186,9 +186,9 @@ export function printOpenCaseSummary(result) {
     const head = `${item.caseDate || '日期不明'}　${maskCode(item.dispatchNo)}　${item.squads.join('、') || '分隊不明'}`;
     const unclosed = item.vehiclesWithoutClosed ?? [];
     if (item.error) log.warn(`${head}　讀取失敗：${item.error}`);
-    else if (!item.hasClosed) log.warn(`${head}　${item.recordCount} 張：${item.statusText}　← 沒有已結案`);
+    else if (!item.hasClosed) log.warn(`${head}　${item.recordCount} 張：${item.statusText}　← 整件未結案`);
     else if (unclosed.length > 0) {
-      log.warn(`${head}　${item.recordCount} 張：${item.statusText}　← ${unclosed.join('、')} 沒有已結案`);
+      log.warn(`${head}　${item.recordCount} 張：${item.statusText}　← 未結案車輛：${unclosed.join('、')}`);
     } else log.info(`${head}　${item.recordCount} 張：${item.statusText}`);
   }
 
@@ -196,8 +196,8 @@ export function printOpenCaseSummary(result) {
   const lookupFailed = result.lookups.filter((item) => item.error).length;
   log.step('執行結果');
   log.info(`未結案紀錄表 ${result.recordCount} 張，合併成 ${counts.caseCount} 件案子`);
-  log.ok(`連一張已結案都沒有的案件：${counts.withoutClosed} 件（有已結案的 ${counts.withClosed} 件）`);
-  log.ok(`不是每台車都有已結案的案件：${counts.withUnclosedVehicle} 件（含上面的 ${counts.withoutClosed} 件）`);
+  log.ok(`整件未結案的案件：${counts.withoutClosed} 件（有已結案的 ${counts.withClosed} 件）`);
+  log.ok(`有車輛未結案的案件：${counts.withUnclosedVehicle} 件（含整件未結案 ${counts.withoutClosed} 件）`);
   if (lookupFailed > 0 || counts.failed > 0) {
     log.warn(`讀不到案號 ${lookupFailed} 張、進不了案件 ${counts.failed} 件，不在上面的數字裡（明細見報表「讀取失敗」分頁）`);
   }

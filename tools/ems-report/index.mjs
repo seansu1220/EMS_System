@@ -1404,7 +1404,7 @@ async function resolveOpenCaseRange(options) {
 
 /**
  * 未結案案件統整：撈出期間內未結案的紀錄表，逐件統整所屬案件的紀錄表狀態，
- * 報出「連一張已結案都沒有的案件」有幾件。**只讀不寫**，不動系統任何資料。
+ * 報出「整件未結案的案件」有幾件。**只讀不寫**，不動系統任何資料。
  */
 async function runOpenCasesCommand(options) {
   const range = await resolveOpenCaseRange(options);

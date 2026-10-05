@@ -66,11 +66,11 @@ test('buildCaseRows 依日期排序，寫出有沒有已結案、每台車有沒
   const column = (name) => rows.map((row) => row[CASE_COLUMNS.indexOf(name)]);
   assert.deepEqual(column('派遣案號'), ['D1', 'D4', 'D2', 'D3']);
   assert.deepEqual(column('有已結案'), ['有', '有', '無', '讀取失敗']);
-  assert.deepEqual(column('每台車都有已結案'), ['否', '是', '否', '讀取失敗']);
-  assert.equal(column('沒有已結案的車')[0], '新坡92、新屋92');
-  assert.deepEqual(column('未結案的紀錄表（TEMSIS）')[2].split(/\r?\n/), ['T2', 'T5']);
+  assert.deepEqual(column('車輛皆已結案'), ['否', '是', '否', '讀取失敗']);
+  assert.equal(column('未結案車輛')[0], '新坡92、新屋92');
+  assert.deepEqual(column('未結案紀錄表 TEMSIS')[2].split(/\r?\n/), ['T2', 'T5']);
   assert.equal(column('備註')[3], '進不去');
-  assert.equal(column('救護表狀態統整')[3], '', '失敗的不寫統整');
+  assert.equal(column('狀態統整')[3], '', '失敗的不寫統整');
 });
 
 test('buildFailureRows 兩個階段的失敗都列出來', () => {
@@ -82,9 +82,9 @@ test('buildFailureRows 兩個階段的失敗都列出來', () => {
 
 test('buildSummaryRows 兩個以案件為單位的數字，失敗的不算進去', () => {
   const rows = new Map(buildSummaryRows(RESULT, RANGE));
-  assert.equal(rows.get('連一張已結案都沒有的案件'), '1 件');
+  assert.equal(rows.get('整件未結案的案件'), '1 件');
   assert.equal(rows.get('有已結案的案件'), '2 件');
-  assert.match(rows.get('不是每台車都有已結案的案件'), /^2 件（含上一列的 1 件/);
+  assert.match(rows.get('有車輛未結案的案件'), /^2 件（含整件未結案 1 件）$/);
   assert.match(rows.get('合併成案件'), /4 件.*讀取失敗 1 件/);
   assert.match(rows.get('讀到指派案號'), /3 張（讀不到 1 張）/);
   assert.equal(rows.has('⚠ 中途停止'), false);

@@ -108,7 +108,7 @@ export const UNKNOWN_VEHICLE = '（車輛讀不到）';
  * 不代表**每一台**都結了——只看整件案子會把這種漏掉。
  *
  * @param {CaseRecordRow[]} rows
- * @returns {string[]} 沒有已結案的車（依第一次出現的順序）
+ * @returns {string[]} 未結案車輛（依第一次出現的順序）
  */
 export function findVehiclesWithoutClosed(rows) {
   const byVehicle = new Map();

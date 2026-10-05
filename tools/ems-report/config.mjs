@@ -830,7 +830,7 @@ export const OPEN_CASES = {
   /** 期間超過幾天時提醒一下（只提醒、不擋）：未結案的紀錄表一筆要跑十幾秒。 */
   longRangeWarnDays: 62,
 
-  /** 報表上「連一張已結案都沒有」那幾列的底色（淺黃），一眼就挑得出來。 */
+  /** 報表上「整件未結案」那幾列的底色（淺黃），一眼就挑得出來。 */
   highlightArgb: 'FFFFF2CC',
   /** 「別台車有結案、但有車一張都沒結」那幾列的底色（淺橘），與上一種分得開。 */
   partialHighlightArgb: 'FFFCE4D6',
