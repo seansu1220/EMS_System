@@ -288,8 +288,10 @@ export const TRAFFIC_CASE_REPORT = {
     { title: '編號', source: 'serial', width: 6.89 },
     { title: '發生日期', sheet: 'main', column: '案發日期', transform: 'rocDate', width: 11.44 },
     // 地點是唯一會長到換行的欄位，靠左看得比較順；其餘置中比照來文既有版面。
-    { title: '發生地點', sheet: 'main', column: '發生地點', width: 26.22, align: 'left' },
-    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名', width: 12 },
+    // `fit`：'wrap'＝自動換行並把整列調高到放得下；沒寫＝不換行、放不下就縮小字型（見 layout.autoFit）。
+    { title: '發生地點', sheet: 'main', column: '發生地點', width: 26.22, align: 'left', fit: 'wrap' },
+    // 外籍人士的姓名可能很長，跟地點一樣換行加高，不縮字。
+    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名', width: 12, fit: 'wrap' },
     { title: '身分證字號', sheet: 'patient', column: '身分證字號/護照號碼/居留證號碼', width: 13.33 },
     // 使用者 2026-09-01 指定：照抄系統文字（第1級／第2級），不轉成數字。
     // `headerText` 是來文格式上那一格的實際寫法（分兩行），`title` 則是程式內部用的名稱。
@@ -320,7 +322,23 @@ export const TRAFFIC_CASE_REPORT = {
     dataFontSize: 14,
     titleRowHeight: 34.8,
     headerRowHeight: 33.6,
+    /** 資料列的**最低**列高（範本值）；內容放不下時該列會自動加高，見 `autoFit`。 */
     dataRowHeight: 33.6,
+    /**
+     * 資料列自動加高的換算參數（`cellFit.mjs`）。
+     *
+     * 範本是 14 號字配 33.6 的列高，連兩行都塞不下，長地址會被切掉（2026-10-05 使用者回報）。
+     * 欄寬與字級是來文規定的不能動，所以改成依內容估算行數、把該列調高。
+     * 估算偏保守：`safetyRatio` 讓每行少算一點字，`lineHeightRatio` 取標楷體的實際行距。
+     */
+    autoFit: {
+      pxPerWidthUnit: 7,
+      columnPaddingPx: 5,
+      cellInnerMarginPx: 6,
+      safetyRatio: 0.9,
+      lineHeightRatio: 1.42,
+      rowPaddingPt: 4,
+    },
     /** 框線樣式：標題列與資料格四邊都有。 */
     borderStyle: 'thin',
   },

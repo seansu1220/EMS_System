@@ -68,6 +68,32 @@ test('資料從第 3 列開始，每一格都有框線；地點靠左、其餘�
   assert.equal(sheet.getCell('C3').alignment.horizontal, 'left', '發生地點靠左');
 });
 
+test('長地址那一列自動加高，短的維持範本列高（避免切字）', () => {
+  const longAddress = '桃園市桃園區某某醫院往某某公園透過路燈0000000轉換GIS座標(25.0000,121.0000)';
+  const sheet = createReportWorkbook({
+    ...TABLE,
+    rows: [
+      ['1', '115/08/01', '中壢區某路1號', '王小明', 'A123456789', '第1級', '第1級', ''],
+      ['2', '115/08/03', longAddress, '王小明', 'A123456789', '第2級', '第2級', ''],
+    ],
+  }).worksheets[0];
+  const minHeight = TRAFFIC_CASE_REPORT.layout.dataRowHeight;
+  assert.equal(sheet.getRow(3).height, minHeight, '一行放得下的維持範本列高');
+  // 這麼長的地址在 14 號字下至少四行，每行約 20 點。
+  assert.ok(sheet.getRow(4).height >= 80, `長地址列高應至少 80，實際 ${sheet.getRow(4).height}`);
+});
+
+test('地點、姓名換行；日期、身分證等不換行、放不下就縮字', () => {
+  const sheet = sheetOf();
+  assert.equal(sheet.getCell('C3').alignment.wrapText, true, '地點換行');
+  assert.equal(sheet.getCell('D3').alignment.wrapText, true, '姓名換行');
+  for (const address of ['A3', 'B3', 'E3', 'F3', 'G3']) {
+    // 日期開了換行會在斜線處被折成兩行，第二行被切掉。
+    assert.equal(sheet.getCell(address).alignment.wrapText, false, `${address} 不換行`);
+    assert.equal(sheet.getCell(address).alignment.shrinkToFit, true, `${address} 放不下時縮字`);
+  }
+});
+
 test('欄位數與資料對不上時直接中止，不產出半張表', () => {
   assert.throws(
     () => createReportWorkbook({ headers: ['編號'], rows: [['1']], problems: [] }),

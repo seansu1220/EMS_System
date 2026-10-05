@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
+import { estimateLineCount, rowHeightForLines } from './cellFit.mjs';
 import { PATHS, TRAFFIC_CASE_REPORT } from './config.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
@@ -50,21 +51,50 @@ function writeHeaderRow(sheet, layout, columnMap) {
   row.commit();
 }
 
+/**
+ * 一列資料要多高才不會切到字：取所有換行欄裡最多的行數來算，不低於範本列高。
+ *
+ * @param {string[]} values 這一列各欄的文字
+ * @returns {number} 列高（點）
+ */
+export function dataRowHeightFor(values) {
+  const { layout, columnMap } = TRAFFIC_CASE_REPORT;
+  const lineCount = values.reduce((most, text, columnIndex) => {
+    const column = columnMap[columnIndex];
+    if (column?.fit !== 'wrap') return most;
+    return Math.max(most, estimateLineCount(text, column.width, layout.dataFontSize, layout.autoFit));
+  }, 1);
+  return rowHeightForLines(lineCount, layout.dataFontSize, layout.autoFit, layout.dataRowHeight);
+}
+
+/**
+ * 資料格的對齊方式。
+ *
+ * 換行欄（地點、姓名）放不下就換行，整列會依 `dataRowHeightFor` 加高；
+ * 其餘欄（日期、身分證字號…）只該有一行——開換行的話 `115/09/01` 會在斜線處被折成兩行、
+ * 第二行被切掉，所以改成不換行、放不下時讓 Excel 縮小字型。
+ */
+function dataCellAlignment(column) {
+  const wrap = column.fit === 'wrap';
+  return {
+    // 地點是唯一會長到換行的欄位，靠左看得比較順（設定在 columnMap 的 align）。
+    horizontal: column.align ?? 'center',
+    vertical: 'middle',
+    wrapText: wrap,
+    shrinkToFit: !wrap,
+  };
+}
+
 /** 資料列：一列一件案子，從第 3 列開始。 */
 function writeDataRows(sheet, layout, columnMap, rows) {
   rows.forEach((values, rowIndex) => {
     const row = sheet.getRow(3 + rowIndex);
-    row.height = layout.dataRowHeight;
+    row.height = dataRowHeightFor(values);
     values.forEach((text, columnIndex) => {
       const cell = row.getCell(columnIndex + 1);
       cell.value = text;
       cell.font = { name: layout.fontName, size: layout.dataFontSize };
-      cell.alignment = {
-        // 地點是唯一會長到換行的欄位，靠左看得比較順（設定在 columnMap 的 align）。
-        horizontal: columnMap[columnIndex].align ?? 'center',
-        vertical: 'middle',
-        wrapText: true,
-      };
+      cell.alignment = dataCellAlignment(columnMap[columnIndex]);
       cell.border = allBorders(layout.borderStyle);
     });
     row.commit();
