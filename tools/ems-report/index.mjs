@@ -24,6 +24,8 @@
  *   npm run tool:ems -- unlock-online --execute  真的解鎖，並把結果回寫網頁
  *   npm run tool:ems -- unlock-watch         常駐監看：只維持登入不解鎖（可用來測登入能撐多久）
  *   npm run tool:ems -- unlock-watch --execute   常駐監看：有人送出申請就立刻處理
+ *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
+ *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
  *
  * 任何指令都可加 --fresh-login：捨棄上次保存的登入狀態，強制重新登入。
  */
@@ -31,9 +33,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
-import { resolveMonthRange, getRecentRange } from './dateRange.mjs';
+import { resolveMonthRange, getRecentRange, buildCustomRange, countRangeDays } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
 import { runUnlockWatch } from './unlockWatch.mjs';
+import { runOpenCaseFlow, removeProgress } from './openCasesFlow.mjs';
+import { printOpenCaseSummary, writeOpenCaseReport } from './openCasesReport.mjs';
 import {
   closeQueue,
   connectQueue,
@@ -112,6 +116,7 @@ import {
   REPORT_PROFILES,
   TRAFFIC_CASE_REPORT,
   UNLOCK,
+  OPEN_CASES,
 } from './config.mjs';
 import { excludeOhcaCases, temsisSetOf, EXCLUDED_REASON } from './ekgExclude.mjs';
 import {
@@ -122,7 +127,7 @@ import {
   countAdjustmentsBySquad,
   collectAdjustRows,
 } from './adjustSheet.mjs';
-import { log, closePrompt, enableLiveLog, writeLogFile } from './logger.mjs';
+import { log, closePrompt, enableLiveLog, prompt, writeLogFile } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 操作備忘的檔名（原始檔在 `tools/ems-report/`，執行時複製到 `out/report/`）。 */
@@ -131,13 +136,13 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 /** 可用的指令。 */
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe', 'check-sheet',
-  'unlock', 'unlock-online', 'unlock-watch',
+  'unlock', 'unlock-online', 'unlock-watch', 'open-cases',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'} command
+ *   |'unlock-online'|'unlock-watch'|'open-cases'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -147,6 +152,8 @@ const COMMANDS = [
  * @property {number|undefined} limit 心電圖逐案查核只跑前幾件
  * @property {string|undefined} squad 心電圖逐案查核只跑某一分隊（診斷用，不產生正式報表）
  * @property {boolean} verify 心電圖是否逐案查核上傳時間
+ * @property {string|undefined} from 未結案案件統整的起日（`--from=`）
+ * @property {string|undefined} to 未結案案件統整的迄日（`--to=`）
  */
 
 /** 解析 `--limit=N`；給了不是正整數的值就直接報錯，不默默忽略。 */
@@ -193,6 +200,9 @@ function parseArgs(argv) {
     dryRun: !args.includes('--execute'),
     /** 保存的登入狀態怪怪的時候，用這個強制重新登入。 */
     freshLogin: args.includes('--fresh-login'),
+    /** 未結案案件統整的日期範圍（兩個都給才算數，只給一個會在用到時報錯）。 */
+    from: args.find((arg) => arg.startsWith('--from='))?.split('=')[1]?.trim() || undefined,
+    to: args.find((arg) => arg.startsWith('--to='))?.split('=')[1]?.trim() || undefined,
   };
 }
 
@@ -1355,6 +1365,66 @@ async function runUnlockWatchCommand(options) {
   }
 }
 
+/**
+ * 在終端機問日期範圍；寫錯就說哪裡錯、再問一次，不必重開視窗。
+ *
+ * 提示字串維持**短且純 ASCII**（見 TOOLS_SPEC 0.7：全形提示會讓剛輸入的字被抹掉），
+ * 中文說明另外印在前面。
+ *
+ * @returns {Promise<import('./dateRange.mjs').MonthRange>}
+ */
+async function promptOpenCaseRange() {
+  log.step('請輸入要查的日期範圍（救護紀錄表的案件日期）');
+  log.info('寫法：2026-09-01，也可以寫 2026/9/1 或民國 115/09/01；每輸入一個按一次 Enter。');
+  for (;;) {
+    const from = await prompt('  [from] ');
+    const to = from ? await prompt('  [to]   ') : null;
+    if (!from || !to) throw new Error('沒有輸入日期範圍，結束。');
+    try {
+      return buildCustomRange(from, to);
+    } catch (error) {
+      log.warn(`${error instanceof Error ? error.message : error}，請重新輸入`);
+    }
+  }
+}
+
+/**
+ * 決定未結案案件統整的期間：`--from`/`--to` 優先，其次 `--month`，都沒有就當場問。
+ * @param {CliOptions} options
+ * @returns {Promise<import('./dateRange.mjs').MonthRange>}
+ */
+async function resolveOpenCaseRange(options) {
+  if (options.from || options.to) {
+    if (!options.from || !options.to) throw new Error('--from 與 --to 要一起給（起日與迄日）');
+    return buildCustomRange(options.from, options.to);
+  }
+  if (options.month) return resolveMonthRange(options.month);
+  return promptOpenCaseRange();
+}
+
+/**
+ * 未結案案件統整：撈出期間內未結案的紀錄表，逐件統整所屬案件的紀錄表狀態，
+ * 報出「連一張已結案都沒有的案件」有幾件。**只讀不寫**，不動系統任何資料。
+ */
+async function runOpenCasesCommand(options) {
+  const range = await resolveOpenCaseRange(options);
+  const days = countRangeDays(range);
+  log.info(`查詢期間：${range.start} ~ ${range.end}（${days} 天）`);
+  if (days > OPEN_CASES.longRangeWarnDays) {
+    log.warn(`期間有 ${days} 天，未結案的紀錄表一張要跑十幾秒，可能會跑很久；中途關掉 12 小時內重跑會接著跑。`);
+  }
+  /** @type {import('./openCasesFlow.mjs').OpenCaseResult|null} */
+  let result = null;
+  await withSession(async (session) => {
+    result = await runOpenCaseFlow(session, range, { limit: options.limit, keepRaw: options.keepRaw });
+  }, { freshLogin: options.freshLogin });
+
+  printOpenCaseSummary(result);
+  await writeOpenCaseReport(result, range);
+  // 整份跑完才刪進度檔：留著的話，下次同一期間重跑會沿用今天讀到的狀態。
+  if (!result.aborted && result.skipped === 0) await removeProgress(range);
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
@@ -1369,6 +1439,10 @@ async function main() {
   }
   if (options.command === 'unlock-watch') {
     await runUnlockWatchCommand(options);
+    return;
+  }
+  if (options.command === 'open-cases') {
+    await runOpenCasesCommand(options);
     return;
   }
 

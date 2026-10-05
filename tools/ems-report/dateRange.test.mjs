@@ -4,7 +4,51 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getMonthRange, getPreviousMonthRange, resolveMonthRange, formatDateForSite } from './dateRange.mjs';
+import {
+  getMonthRange,
+  getPreviousMonthRange,
+  resolveMonthRange,
+  formatDateForSite,
+  parseUserDate,
+  buildCustomRange,
+  countRangeDays,
+  padRange,
+} from './dateRange.mjs';
+
+test('parseUserDate 接受常見的幾種寫法', () => {
+  assert.equal(parseUserDate('2026-09-01'), '2026-09-01');
+  assert.equal(parseUserDate(' 2026/9/1 '), '2026-09-01');
+  assert.equal(parseUserDate('2026.9.1'), '2026-09-01');
+  assert.equal(parseUserDate('20260901'), '2026-09-01');
+  assert.equal(parseUserDate('115/09/01'), '2026-09-01', '民國年要加 1911');
+  assert.equal(parseUserDate('1150901'), '2026-09-01', '民國 7 碼連寫');
+  assert.throws(() => parseUserDate('2026-02-30'), /不存在/);
+  assert.throws(() => parseUserDate('2026-13-01'), /不存在/);
+  assert.throws(() => parseUserDate('九月一日'), /看不懂/);
+  assert.throws(() => parseUserDate(''), /看不懂/);
+});
+
+test('buildCustomRange 組出期間，label 只用日期（會進檔名）', () => {
+  assert.deepEqual(buildCustomRange('2026/9/1', '115/09/30'), {
+    label: '2026-09-01至2026-09-30',
+    start: '2026-09-01',
+    end: '2026-09-30',
+  });
+  assert.equal(buildCustomRange('2026-09-05', '2026-09-05').start, '2026-09-05', '同一天可以');
+  assert.throws(() => buildCustomRange('2026-09-30', '2026-09-01'), /晚於/);
+});
+
+test('countRangeDays 含頭尾、跨月跨年都算對', () => {
+  assert.equal(countRangeDays({ start: '2026-09-01', end: '2026-09-30' }), 30);
+  assert.equal(countRangeDays({ start: '2026-09-05', end: '2026-09-05' }), 1);
+  assert.equal(countRangeDays({ start: '2025-12-31', end: '2026-01-01' }), 2);
+});
+
+test('padRange 前後放寬，跨月跨年正確，且不改動輸入', () => {
+  const original = { label: 'x', start: '2026-03-01', end: '2026-12-31' };
+  assert.deepEqual(padRange(original, 1), { label: 'x', start: '2026-02-28', end: '2027-01-01' });
+  assert.equal(original.start, '2026-03-01');
+});
 
 test('getMonthRange 取得整月區間', () => {
   assert.deepEqual(getMonthRange(2026, 2), { label: '2026-02', start: '2026-02-01', end: '2026-02-28' });

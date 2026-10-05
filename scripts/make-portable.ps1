@@ -389,6 +389,23 @@ New-Launcher -FileName '二級以上因交通事故救護案件.bat' `
     'It contains names and ID numbers.'
   )
 
+New-Launcher -FileName '未結案案件統整.bat' `
+  -Title 'EMS Open Cases Summary (read only)' `
+  -Command 'open-cases' `
+  -Notice @(
+    'Open Cases Summary (READ ONLY)',
+    '----------------------------------------',
+    '1. Type the start date and the end date,',
+    '   e.g. 2026-09-01 and 2026-09-30.',
+    '2. A browser opens - type the CAPTCHA',
+    '   and sign in. The rest is automatic.',
+    '',
+    'Closed by mistake? Run again within 12',
+    'hours with the SAME dates to continue.',
+    '',
+    'Result: out\internal\ in this folder.'
+  )
+
 $settingsLauncher = @'
 @echo off
 cd /d "%~dp0"

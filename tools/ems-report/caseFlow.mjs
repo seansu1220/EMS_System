@@ -192,7 +192,12 @@ export async function waitForCaseDetail(page) {
   return false;
 }
 
-/** 以指派案號在案件列表找到案件並進入內部。 */
+/**
+ * 以指派案號在案件列表找到案件並進入內部。
+ *
+ * @returns {Promise<{rowCount: number}>} 案件列表查到幾筆（照理只有 1 筆；
+ *   多於 1 筆時一樣進第一筆，由呼叫端決定要不要標註出來）
+ */
 export async function openCaseByDispatchNo(context, page, dispatchNo, range) {
   log.step(`案件列表查詢（派遣案號 ${maskCode(dispatchNo)}）`);
   await gotoMenuItem(page, UNLOCK.caseListMenuText);
@@ -229,7 +234,7 @@ export async function openCaseByDispatchNo(context, page, dispatchNo, range) {
     await page.waitForLoadState('load', { timeout: 60000 }).catch(() => {});
     if (await waitForCaseDetail(page)) {
       await captureSnapshot(context, '解鎖-案件內部');
-      return;
+      return { rowCount: rows.length };
     }
     log.warn(`點了「${UNLOCK.buttonTexts.openCase[0]}」但還沒進入案件內部（第 ${attempt} 次）`);
   }

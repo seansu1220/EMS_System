@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-10-05　小工具 v1.41.0 新增「未結案案件統整」
+
+### 問題描述
+使用者要篩選指定期間內的未結案案件：救護紀錄表查詢只看得到「這一張紀錄表未結案」，
+看不到它所屬的案件裡其他車的紀錄表是什麼狀態。人工作法是逐筆開 PDF 抄指派案號、
+再到案件列表一件一件點進去數，最後要回答「連一張已結案都沒有的案件有幾件」。
+
+### 根本原因
+新功能需求（沒有既有工具做這件事）。
+
+### 修改的檔案與內容
+- **`tools/ems-report/openCases.mjs`**（新增）：統整規則純函式——狀態統整成 `已結案*1+已填寫*2+未填寫*1`、
+  依指派案號分組、件數計算（讀取失敗的不算進「沒有已結案」）、進度檔能不能沿用。
+- **`tools/ems-report/openCasesFlow.mjs`**（新增）：救護狀態＝未結案查詢後**匯出**取整批清單（結果頁一頁只有 30 筆）、
+  回頭核對匯出檔的救護狀態、逐筆開 PDF 讀指派案號（TEMSIS 不符不採用）、案號去重後逐件進案件內部讀「救護表狀態」、
+  每筆重試 3 次、連續 5 筆失敗就停、進度檔（同期間 12 小時內才沿用，跑完即刪）。**只讀不寫**。
+- **`tools/ems-report/openCasesReport.mjs`**（新增）：終端機摘要與 Excel 報表（摘要／案件統整／各張紀錄表／讀取失敗），
+  沒有已結案的案件塗淺黃；落在 `out/internal/`。
+- **`tools/ems-report/dateRange.mjs`**：新增 `parseUserDate()`（西元、民國、連寫都接受）、`buildCustomRange()`、
+  `countRangeDays()`、`padRange()`。
+- **`tools/ems-report/caseFlow.mjs`**：`openCaseByDispatchNo()` 回傳 `{rowCount}`，案件列表查到多筆時報表才寫得出來。
+- **`tools/ems-report/config.mjs`**：新增 `OPEN_CASES`（未結案的下拉值 `1`、欄名、狀態順序、重試與進度檔參數）。
+- **`tools/ems-report/index.mjs`**：新增 `open-cases` 指令與 `--from`／`--to` 參數；沒給日期就在終端機問，寫錯會重問。
+- **`捷徑/未結案案件統整.bat`**（新增，純 ASCII＋CRLF）；**`scripts/make-portable.ps1`** 可攜版一併產出這支捷徑。
+- **`src/pages/ToolsPage.tsx`**：`/tools` 說明頁新增「未結案案件統整」。
+- 測試：新增 `openCases.test.mjs`、`openCasesReport.test.mjs`，`dateRange.test.mjs` 補日期解析；全部 457 個通過。
+- 文件：`docs/TOOLS_SPEC.md` 新增第 9 章（v1.41.0）；`docs/SPEC.md` 第 4 章工具表（v1.25.0）。
+- 尚未實跑：案件內部狀態欄的實際值、匯出檔有沒有救護狀態欄，見 TOOLS_SPEC 9.8。
+
 ## 2026-10-05　小工具 v1.40.5 交通案件來文切字的真正原因；地點欄加寬
 
 ### 問題描述

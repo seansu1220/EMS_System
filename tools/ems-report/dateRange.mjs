@@ -94,6 +94,78 @@ export function resolveMonthRange(monthArg, today = new Date()) {
 }
 
 /**
+ * 解析使用者輸入的一個日期，回傳 `YYYY-MM-DD`；看不懂或不是真的日期就丟錯（不猜）。
+ *
+ * 接受的寫法（使用者多半直接照系統畫面或公文抄）：
+ * `2026-09-01`、`2026/9/1`、`2026.9.1`、`20260901`、民國 `115/09/01`、`1150901`。
+ * 年份小於 1000 一律當成民國年。
+ *
+ * @param {string} text
+ * @returns {string} `YYYY-MM-DD`
+ */
+export function parseUserDate(text) {
+  const raw = String(text ?? '').trim();
+  const separated = /^(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(raw);
+  const compact = /^(\d{3,4})(\d{2})(\d{2})$/.exec(raw);
+  const matched = separated ?? compact;
+  if (!matched) {
+    throw new Error(`看不懂的日期：「${raw}」（請寫成 2026-09-01，或民國 115/09/01）`);
+  }
+  const yearNumber = Number(matched[1]);
+  const year = yearNumber < 1000 ? yearNumber + 1911 : yearNumber;
+  const month = Number(matched[2]);
+  const day = Number(matched[3]);
+  // 用 Date 反推回來檢查，2/30、13 月這種不存在的日期會對不上。
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+    throw new Error(`不存在的日期：「${raw}」`);
+  }
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+/**
+ * 由使用者指定的起訖日組出查詢期間。
+ *
+ * `label` 會用在產出檔名上（`2026-09-01至2026-09-30`），所以只用日期組成，不放說明文字。
+ *
+ * @param {string} fromText 起日（任何 `parseUserDate` 看得懂的寫法）
+ * @param {string} toText 迄日
+ * @returns {MonthRange}
+ */
+export function buildCustomRange(fromText, toText) {
+  const start = parseUserDate(fromText);
+  const end = parseUserDate(toText);
+  if (start > end) {
+    throw new Error(`起日（${start}）晚於迄日（${end}），請對調後再試`);
+  }
+  return { label: `${start}至${end}`, start, end };
+}
+
+/**
+ * 查詢期間有幾天（含頭尾）。
+ * @param {MonthRange} range
+ * @returns {number}
+ */
+export function countRangeDays(range) {
+  const toUtc = (iso) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+  return Math.round((toUtc(range.end) - toUtc(range.start)) / 86400000) + 1;
+}
+
+/**
+ * 把期間前後各放寬幾天（回傳新物件，不改動輸入）。
+ * @param {MonthRange} range
+ * @param {number} days
+ * @returns {MonthRange}
+ */
+export function padRange(range, days) {
+  const shift = (iso, delta) => {
+    const date = new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + delta));
+    return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+  };
+  return { label: range.label, start: shift(range.start, -days), end: shift(range.end, days) };
+}
+
+/**
  * 依系統日期元件的格式樣板輸出日期字串。
  *
  * 樣板沿用 My97DatePicker 的寫法（該系統的日期欄位就是用這套元件），支援：
