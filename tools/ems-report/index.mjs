@@ -279,6 +279,26 @@ async function writeUnalertedCases(cases, auditRows, monthRange) {
 }
 
 /**
+ * 把操作備忘複製到報表資料夾。
+ *
+ * 使用者 2026-09-08 要求：想不起來月度報表怎麼跑時，要能**直接在放報表的資料夾裡點開**，
+ * 不必先想起專案在哪。原始檔留在 `tools/ems-report/`（進版控、多台電腦同步得到），
+ * 每次執行覆蓋一份到 `out/report/`，兩邊內容一定一致。
+ *
+ * 複製失敗只警告：這只是備忘，不值得讓整個月的報表因此做不出來。
+ */
+async function copyHowToFile() {
+  const source = path.join(PATHS.toolDir, HOW_TO_FILE_NAME);
+  const target = path.join(PATHS.reportDir, HOW_TO_FILE_NAME);
+  try {
+    await fs.mkdir(PATHS.reportDir, { recursive: true });
+    await fs.copyFile(source, target);
+  } catch (error) {
+    log.warn(`操作備忘複製失敗（不影響報表）：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * 完整流程：查詢 → 匯出兩份 → 依分隊彙總 → 產出報表 → 刪除原始明細。
  * @param {import('./session.mjs').EmsSession} session
  * @param {import('./dateRange.mjs').MonthRange} monthRange

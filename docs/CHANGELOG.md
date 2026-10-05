@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-10-05　小工具 v1.40.2 修正二級以上交通案件、月度報表、心電圖統計一啟動就失敗
+
+### 問題描述
+使用者執行「二級以上因交通事故救護案件\產出來文格式.bat」，還沒開瀏覽器就結束，
+`out/last-run.log` 記錄 `ReferenceError: copyHowToFile is not defined`。
+同一行程式也會被 `run`（月度報表）、`ekg`（心電圖統計）、`monthly` 走到，
+因此這三個指令自 2026-09-10 起同樣一啟動就失敗。
+
+### 根本原因
+- `0f1a887`（2026-09-10，增減試算表逐列對帳）改寫 `index.mjs` 時，把 `c8e82c9` 新增的
+  `copyHowToFile()` 整段誤刪，但 `main()` 裡呼叫它的那一行還在。
+  ES module 只在執行到該行時才報錯，單元測試不會走到 `main()`，所以測試全過沒被發現。
+- 用 eslint `no-undef` 全面掃描時另外發現：`ekgOhca.mjs` 呼叫 `locateCprCheckbox()`，
+  但該函式在 `62176cb` 搬到 `ekgScrape.mjs` 後沒有補 import，`ekg-ohca` 指令同樣會在執行時報錯。
+
+### 修改的檔案與內容
+- **`tools/ems-report/index.mjs`**：照 `c8e82c9` 原樣補回 `copyHowToFile()`（複製操作備忘到 `out/report/`，失敗只警告）。
+- **`tools/ems-report/ekgOhca.mjs`**：從 `./ekgScrape.mjs` 補 import `locateCprCheckbox`。
+- 驗證：`npm run tool:ems:test` 430 個全過；eslint `no-undef` 掃兩檔無未定義識別字。
+- 可攜版（`可攜版/EMS工具/`）是 2026-09-08 以前建的，不受影響。
+
+---
+
 ## 2026-09-22　v1.44.1 解鎖工單「申請事由」加上填寫提示
 
 ### 問題描述

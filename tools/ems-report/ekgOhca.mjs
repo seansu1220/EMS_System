@@ -26,7 +26,7 @@ import { EKG, PATHS, UNLOCK, SQUAD_COLUMN_CANDIDATES } from './config.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import { resolveColumnByNames, resolveSquadColumn } from './aggregate.mjs';
 import { content } from './caseFlow.mjs';
-import { applyBaseCriteria, locateEkgFields, queryAndExport } from './ekgScrape.mjs';
+import { applyBaseCriteria, locateCprCheckbox, locateEkgFields, queryAndExport } from './ekgScrape.mjs';
 import { queryByTemsis } from './ekgVerify.mjs';
 import { buildListSheet } from './ekgLists.mjs';
 import { log } from './logger.mjs';
