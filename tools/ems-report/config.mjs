@@ -289,9 +289,14 @@ export const TRAFFIC_CASE_REPORT = {
     { title: '發生日期', sheet: 'main', column: '案發日期', transform: 'rocDate', width: 11.44 },
     // 地點是唯一會長到換行的欄位，靠左看得比較順；其餘置中比照來文既有版面。
     // `fit`：'wrap'＝自動換行並把整列調高到放得下；沒寫＝不換行、放不下就縮小字型（見 layout.autoFit）。
-    { title: '發生地點', sheet: 'main', column: '發生地點', width: 26.22, align: 'left', fit: 'wrap' },
-    // 外籍人士的姓名可能很長，跟地點一樣換行加高，不縮字。
-    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名', width: 12, fit: 'wrap' },
+    // `templateWidth` 是範本原本的欄寬；有寫的欄位是使用者 2026-10-05 要求加寬的
+    // （範本 26.22 只放得下 9 個字，地址幾乎都要折兩三行），版面測試會跳過這兩欄的欄寬比對。
+    {
+      title: '發生地點', sheet: 'main', column: '發生地點', width: 42, templateWidth: 26.22,
+      align: 'left', fit: 'wrap',
+    },
+    // 外籍人士的姓名可能很長，跟地點一樣換行加高，不縮字。範本 12 連 4 個字的姓名都放不下一行。
+    { title: '當事人姓名', sheet: 'patient', column: '傷病患姓名', width: 14, templateWidth: 12, fit: 'wrap' },
     { title: '身分證字號', sheet: 'patient', column: '身分證字號/護照號碼/居留證號碼', width: 13.33 },
     // 使用者 2026-09-01 指定：照抄系統文字（第1級／第2級），不轉成數字。
     // `headerText` 是來文格式上那一格的實際寫法（分兩行），`title` 則是程式內部用的名稱。
@@ -328,19 +333,25 @@ export const TRAFFIC_CASE_REPORT = {
      * 資料列自動加高的換算參數（`cellFit.mjs`）。
      *
      * 範本是 14 號字配 33.6 的列高，連兩行都塞不下，長地址會被切掉（2026-10-05 使用者回報）。
-     * 欄寬與字級是來文規定的不能動，所以改成依內容估算行數、把該列調高。
-     * 估算偏保守：`safetyRatio` 讓每行少算一點字，`lineHeightRatio` 取標楷體的實際行距。
+     * 字級是來文規定的不能動，所以依內容估算行數、把該列調高。
+     * `cellInnerMarginPx` 與 `safetyRatio` 是拿 Excel 的「自動調整列高」逐列對照校準的
+     * （2026-09 全部 231 列，見 docs/TOOLS_SPEC.md 8.7）——估算結果要**不低於** Excel 實際需要的高度。
      */
     autoFit: {
       pxPerWidthUnit: 7,
       columnPaddingPx: 5,
-      cellInnerMarginPx: 6,
-      safetyRatio: 0.9,
+      cellInnerMarginPx: 16,
+      safetyRatio: 0.98,
       lineHeightRatio: 1.42,
       rowPaddingPt: 4,
     },
     /** 框線樣式：標題列與資料格四邊都有。 */
     borderStyle: 'thin',
+    /**
+     * 列印設定：A4 直式、寬度縮成一頁（地址欄加寬後超過 A4 寬）、每頁重複印第 1～2 列的標題。
+     * `paperSize` 9＝A4（Excel 的代碼）。
+     */
+    print: { paperSize: 9, orientation: 'portrait', repeatRows: '1:2' },
   },
   /** 產出檔名前綴，實際檔名為 `{prefix}-{YYYY-MM}.xlsx`。 */
   fileNamePrefix: '二級以上因交通事故救護案件',

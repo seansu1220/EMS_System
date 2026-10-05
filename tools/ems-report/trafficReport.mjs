@@ -35,10 +35,16 @@ function writeTitleRow(sheet, layout, columnCount) {
   row.commit();
 }
 
-/** 欄位標題列（第 2 列）。 */
+/**
+ * 欄位標題列（第 2 列）。
+ *
+ * 列高也要估：「醫護人員／檢傷分級」兩行 12 號字需要 34 點，範本只給 33.6，
+ * Excel 會切到下緣一點點（2026-10-05 用 Excel 自動列高對照出來的）。
+ */
 function writeHeaderRow(sheet, layout, columnMap) {
   const row = sheet.getRow(2);
-  row.height = layout.headerRowHeight;
+  const headerLines = Math.max(...columnMap.map((column) => (column.headerText ?? column.title).split('\n').length));
+  row.height = rowHeightForLines(headerLines, layout.headerFontSize, layout.autoFit, layout.headerRowHeight);
   columnMap.forEach((column, index) => {
     const cell = row.getCell(index + 1);
     // 來文上有的格子是分兩行寫的（例：醫護人員／檢傷分級），照它的寫法。
@@ -119,7 +125,20 @@ export function createReportWorkbook(table) {
   }
 
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(layout.sheetName);
+  // ⚠ 兩個檢視設定一定要寫：少了它們，Excel 會把**每一列的列高都縮成約三分之二**
+  // （設 33.6 讀成 22.4），整張表的字都被切掉——2026-10-05 實測，改用範本以外的方式產檔後才出現。
+  workbook.views = [{ x: 0, y: 0, width: 21900, height: 11916, firstSheet: 0, activeTab: 0, visibility: 'visible' }];
+  const sheet = workbook.addWorksheet(layout.sheetName, {
+    views: [{ state: 'normal', zoomScale: 100, zoomScaleNormal: 100 }],
+    pageSetup: {
+      paperSize: layout.print.paperSize,
+      orientation: layout.print.orientation,
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      printTitlesRow: layout.print.repeatRows,
+    },
+  });
   sheet.columns = columnMap.map((column) => ({ width: column.width }));
 
   writeTitleRow(sheet, layout, columnMap.length);

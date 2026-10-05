@@ -79,8 +79,8 @@ test('長地址那一列自動加高，短的維持範本列高（避免切字�
   }).worksheets[0];
   const minHeight = TRAFFIC_CASE_REPORT.layout.dataRowHeight;
   assert.equal(sheet.getRow(3).height, minHeight, '一行放得下的維持範本列高');
-  // 這麼長的地址在 14 號字下至少四行，每行約 20 點。
-  assert.ok(sheet.getRow(4).height >= 80, `長地址列高應至少 80，實際 ${sheet.getRow(4).height}`);
+  // 這麼長的地址在加寬後的地點欄仍至少三行，14 號字每行約 20 點。
+  assert.ok(sheet.getRow(4).height >= 59, `長地址列高應至少 59，實際 ${sheet.getRow(4).height}`);
 });
 
 test('地點、姓名換行；日期、身分證等不換行、放不下就縮字', () => {
@@ -92,6 +92,23 @@ test('地點、姓名換行；日期、身分證等不換行、放不下就縮�
     assert.equal(sheet.getCell(address).alignment.wrapText, false, `${address} 不換行`);
     assert.equal(sheet.getCell(address).alignment.shrinkToFit, true, `${address} 放不下時縮字`);
   }
+});
+
+test('一定要寫工作表檢視設定，否則 Excel 會把每一列都縮成約三分之二高', async () => {
+  const workbook = createReportWorkbook(TABLE);
+  // 實際存成檔案再讀回來，確認 XML 裡真的有這兩段（ExcelJS 沒設時整段不寫）。
+  const reloaded = new ExcelJS.Workbook();
+  await reloaded.xlsx.load(await workbook.xlsx.writeBuffer());
+  assert.ok(reloaded.views?.length > 0, '活頁簿要有視窗設定（bookViews）');
+  assert.ok(reloaded.worksheets[0].views?.length > 0, '工作表要有檢視設定（sheetViews）');
+});
+
+test('列印：寬度縮成一頁、每頁重複印標題列', () => {
+  const { pageSetup } = sheetOf();
+  assert.equal(pageSetup.fitToPage, true);
+  assert.equal(pageSetup.fitToWidth, 1);
+  assert.equal(pageSetup.fitToHeight, 0, '高度不限頁數');
+  assert.equal(pageSetup.printTitlesRow, '1:2');
 });
 
 test('欄位數與資料對不上時直接中止，不產出半張表', () => {
@@ -113,15 +130,18 @@ test('版面與上級發文的空白格式逐項相同', { skip: fs.existsSync(T
   for (let column = 1; column <= TRAFFIC_CASE_REPORT.columnMap.length; column += 1) {
     const label = `第 ${column} 欄`;
     assert.equal(actual.getRow(2).getCell(column).value, expected.getRow(2).getCell(column).value, `${label}的標題`);
+    // 使用者要求加寬的欄位（有 templateWidth）比對的是「當初照抄的範本值」，不是現在的欄寬。
+    const columnSpec = TRAFFIC_CASE_REPORT.columnMap[column - 1];
     assert.equal(
-      Math.round(actual.getColumn(column).width * 10) / 10,
+      Math.round((columnSpec.templateWidth ?? actual.getColumn(column).width) * 10) / 10,
       Math.round(expected.getColumn(column).width * 10) / 10,
       `${label}的欄寬`,
     );
     assert.equal(actual.getRow(2).getCell(column).font.name, expected.getRow(2).getCell(column).font.name, `${label}的字型`);
   }
   assert.equal(actual.getRow(1).height, expected.getRow(1).height, '標題列高');
-  assert.equal(actual.getRow(2).height, expected.getRow(2).height, '欄位列高');
+  // 欄位列會依「醫護人員／檢傷分級」兩行字加高一點，不低於範本即可。
+  assert.ok(actual.getRow(2).height >= expected.getRow(2).height, '欄位列高不低於範本');
   // 範本第 3 列起是已排好格式的空白資料列，字級與程式寫出來的要一致。
   assert.equal(actual.getRow(3).getCell(1).font.size, expected.getRow(3).getCell(1).font.size, '資料列字級');
 });
