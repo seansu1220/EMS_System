@@ -10,6 +10,7 @@ import {
   groupByDispatchNo,
   buildCaseSummary,
   countSummaries,
+  findVehiclesWithoutClosed,
   buildRecordList,
   isProgressUsable,
 } from './openCases.mjs';
@@ -63,6 +64,7 @@ test('buildCaseSummary 統整狀態，並以案件內部讀到的分隊為準', 
   assert.equal(summary.hasClosed, false);
   assert.equal(summary.recordCount, 2);
   assert.equal(summary.records.length, 2);
+  assert.deepEqual(summary.vehiclesWithoutClosed, ['平鎮91', '龍潭92']);
   assert.deepEqual(summary.squads, ['平鎮分隊', '龍潭分隊']);
   assert.deepEqual(summary.notes, []);
 });
@@ -102,14 +104,39 @@ test('buildCaseSummary 讀取失敗時「有沒有已結案」是不知道（nul
     GROUP,
   );
   assert.equal(summary.hasClosed, null);
+  assert.deepEqual(summary.vehiclesWithoutClosed, []);
   assert.equal(summary.error, '進不去');
 });
 
-test('countSummaries 失敗的不算進「沒有已結案」', () => {
+test('countSummaries 失敗的不算進「沒有已結案」，兩個數字都以案件為單位', () => {
   const counts = countSummaries([
-    { hasClosed: true }, { hasClosed: false }, { hasClosed: false }, { hasClosed: null },
+    { hasClosed: true, vehiclesWithoutClosed: [] },
+    { hasClosed: true, vehiclesWithoutClosed: ['新坡92', '新屋92'] },
+    { hasClosed: false, vehiclesWithoutClosed: ['龍潭91'] },
+    { hasClosed: false, vehiclesWithoutClosed: ['大湳95'] },
+    { hasClosed: null, vehiclesWithoutClosed: [] },
   ]);
-  assert.deepEqual(counts, { caseCount: 4, inspected: 3, withoutClosed: 2, withClosed: 1, failed: 1 });
+  assert.deepEqual(counts, {
+    caseCount: 5,
+    inspected: 4,
+    withoutClosed: 2,
+    withClosed: 2,
+    withUnclosedVehicle: 3,
+    failed: 1,
+  });
+});
+
+test('findVehiclesWithoutClosed 同一台車任一張已結案就算那台有結', () => {
+  const rows = [
+    { vehicle: '三民91', status: '已結案' },
+    { vehicle: '三民91', status: '已填寫' },
+    { vehicle: '大湳95', status: '已填寫' },
+    { vehicle: '大湳95', status: '已填寫(測)' },
+    { vehicle: '', status: '未填寫' },
+    { vehicle: '觀音91', status: '已結案' },
+  ];
+  assert.deepEqual(findVehiclesWithoutClosed(rows), ['大湳95', '（車輛讀不到）']);
+  assert.deepEqual(findVehiclesWithoutClosed([]), []);
 });
 
 test('buildRecordList 去掉空白與重複的 TEMSIS，沒有的欄位給空字串', () => {

@@ -832,6 +832,8 @@ export const OPEN_CASES = {
 
   /** 報表上「連一張已結案都沒有」那幾列的底色（淺黃），一眼就挑得出來。 */
   highlightArgb: 'FFFFF2CC',
+  /** 「別台車有結案、但有車一張都沒結」那幾列的底色（淺橘），與上一種分得開。 */
+  partialHighlightArgb: 'FFFCE4D6',
 
   /** 產出檔名（放在期間後面，例如 `2026-09-01至2026-09-30-未結案案件統整.xlsx`）。 */
   reportName: '未結案案件統整',

@@ -45,6 +45,8 @@ import { OPEN_CASES } from './config.mjs';
  * @property {number} recordCount 紀錄表張數
  * @property {string} statusText 例如 `已結案*1+已填寫*2+未填寫*1`
  * @property {boolean|null} hasClosed 有沒有任何一張已結案；讀取失敗時為 null（不知道）
+ * @property {string[]} vehiclesWithoutClosed 這件案子裡**一張已結案都沒有的車**
+ *   （同一台車有好幾張時，任一張已結案就不算）；讀取失敗時為空陣列，以 `hasClosed === null` 分辨
  * @property {string[]} openTemsis 這件案子裡被「未結案」查詢撈到的那幾張的 TEMSIS
  * @property {CaseRecordRow[]} records 案件內部讀到的每一張紀錄表（報表的明細分頁用）
  * @property {string[]} notes 要人留意的事（列數對不上、案件列表查到多筆…）
@@ -95,6 +97,30 @@ export function hasClosedRecord(statuses, closedStatus = OPEN_CASES.closedStatus
   return statuses.some((status) => normalizeStatus(status) === wanted);
 }
 
+/** 案件內部讀不到派遣車輛時，那幾張歸在這一台底下（不猜是哪台）。 */
+export const UNKNOWN_VEHICLE = '（車輛讀不到）';
+
+/**
+ * 找出案件裡**一張已結案都沒有的車**（使用者 2026-10-05 要的「依車輛」細篩）。
+ *
+ * 為什麼要以車為單位：同一台車常有兩張紀錄表（例如「已結案＋已填寫」，像是多開了一張），
+ * 只要其中一張已結案，那台車就算結了；反過來，整件案子有別台車結案，
+ * 不代表**每一台**都結了——只看整件案子會把這種漏掉。
+ *
+ * @param {CaseRecordRow[]} rows
+ * @returns {string[]} 沒有已結案的車（依第一次出現的順序）
+ */
+export function findVehiclesWithoutClosed(rows) {
+  const byVehicle = new Map();
+  for (const row of rows) {
+    const vehicle = String(row.vehicle ?? '').trim() || UNKNOWN_VEHICLE;
+    byVehicle.set(vehicle, [...(byVehicle.get(vehicle) ?? []), row.status]);
+  }
+  return [...byVehicle.entries()]
+    .filter(([, statuses]) => !hasClosedRecord(statuses))
+    .map(([vehicle]) => vehicle);
+}
+
 /**
  * 把查回指派案號的紀錄表依案號分組（同一件案子的幾台車只要進一次案件內部）。
  *
@@ -138,6 +164,7 @@ export function buildCaseSummary(inspection, group) {
       recordCount: 0,
       statusText: '',
       hasClosed: null,
+      vehiclesWithoutClosed: [],
       records: [],
       notes: [],
       error: inspection.error,
@@ -164,6 +191,7 @@ export function buildCaseSummary(inspection, group) {
     recordCount: inspection.rows.length,
     statusText: summarizeStatuses(statuses).text,
     hasClosed: hasClosedRecord(statuses),
+    vehiclesWithoutClosed: findVehiclesWithoutClosed(inspection.rows),
     records: inspection.rows,
     notes,
     error: null,
@@ -173,20 +201,27 @@ export function buildCaseSummary(inspection, group) {
 /**
  * 整份統整的數字。
  *
- * 「連一張已結案都沒有」只算**讀得到**的案件：讀取失敗的那幾件不知道答案，
- * 算進哪一邊都是猜，另外報一個數字。
+ * 兩個「沒結案」的數字都**以案件為單位**：
+ *   - `withoutClosed`：整件案子連一張已結案都沒有
+ *   - `withUnclosedVehicle`：案件裡**不是每一台車都有已結案**（含上一種，是它的上位集合）
+ *
+ * 只算**讀得到**的案件：讀取失敗的那幾件不知道答案，算進哪一邊都是猜，另外報一個數字。
  *
  * @param {CaseSummary[]} summaries
- * @returns {{caseCount: number, inspected: number, withoutClosed: number, withClosed: number, failed: number}}
+ * @returns {{caseCount: number, inspected: number, withoutClosed: number, withClosed: number,
+ *   withUnclosedVehicle: number, failed: number}}
  */
 export function countSummaries(summaries) {
   const inspected = summaries.filter((item) => item.hasClosed !== null);
   const withoutClosed = inspected.filter((item) => item.hasClosed === false).length;
+  const withUnclosedVehicle = inspected
+    .filter((item) => (item.vehiclesWithoutClosed ?? []).length > 0).length;
   return {
     caseCount: summaries.length,
     inspected: inspected.length,
     withoutClosed,
     withClosed: inspected.length - withoutClosed,
+    withUnclosedVehicle,
     failed: summaries.length - inspected.length,
   };
 }
