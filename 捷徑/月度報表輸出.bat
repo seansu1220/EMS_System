@@ -12,8 +12,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem Install packages on first run, or when a new package was added
-if not exist "node_modules\playwright-core\" (
+rem Install packages on first run, or when a new package was added.
+rem Check tesseract.js, not playwright-core: tesseract.js is the newest
+rem package (photo recognition). On a computer that already ran the older
+rem version, playwright-core exists, so npm install would be skipped and
+rem photo recognition would silently not work.
+if not exist "node_modules\tesseract.js\" (
   echo Installing required packages, please wait a few minutes...
   echo.
   call npm install
@@ -27,7 +31,7 @@ if not exist "node_modules\playwright-core\" (
 
 echo.
 echo ==================================================
-echo   Monthly Reports  ^(last month^)
+echo   Monthly Reports
 echo   --------------------------------------------
 echo   1. Prehospital Alert Ratio
 echo   2. 12-Lead ECG Prehospital Transmission Rate
@@ -46,8 +50,31 @@ echo   KEEP THIS WINDOW OPEN until it finishes.
 echo ==================================================
 echo.
 
-call npm run tool:ems -- monthly %*
+set "EMS_MONTH="
+set /p "EMS_MONTH=Month to run, format 2026-08 (just press Enter for last month): "
+echo.
+
+if "%EMS_MONTH%"=="" (
+  echo Running for LAST MONTH ...
+  echo.
+  call npm run tool:ems -- monthly %*
+) else (
+  echo Running for %EMS_MONTH% ...
+  echo.
+  call npm run tool:ems -- monthly --month=%EMS_MONTH% %*
+)
 
 echo.
+echo ==================================================
+echo   Finished. What to do next:
+echo.
+echo   The folder that just opened holds the review
+echo   list for this month - the summary above printed
+echo   its exact file name. Open it, fill in the
+echo   "your decision" column, save, then run this
+echo   shortcut again for the SAME month.
+echo ==================================================
+echo.
+start "" "tools\ems-report\out\internal"
 echo Press any key to close this window.
 pause >nul
