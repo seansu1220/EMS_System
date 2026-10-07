@@ -35,6 +35,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PATHS } from './config.mjs';
 import { buildListSheet } from './ekgLists.mjs';
+import { MEDIA_KIND } from './ekgMedia.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 
@@ -193,6 +194,8 @@ export function applyDecisions(outcomes, decisions) {
  * 兩種案件會進來：
  *   1. **判定不出來**的（讀不到時間、進不了案件內部…）
  *   2. **案件影音判不出內容**的（照片 OCR 認不出來、檔案讀取失敗）
+ *   3. **靠照片辨識判成 12 導程**的（2026-10-07 加）——那是程式從像素猜的，
+ *      已經算進分子了，要讓人有機會說「猜錯了」
  *
  * 同一件案子只出一列：判定是對「這一件算不算」下的，一件出好幾列
  * 會讓使用者可以在同一件上填出互相矛盾的答案。
@@ -208,9 +211,17 @@ export function buildReviewRows(outcomes, unknownVerdict) {
     const isUnknown = outcome.verdict === unknownVerdict;
     if (!isUnknown && reviews.length === 0) continue;
 
+    // 影音檔分兩種：判不出內容的（請他點開決定）、靠照片辨識判出來的（請他覆核）。
+    // 兩種的「要你做什麼」不一樣，寫在同一句會讓人不知道該不該動手。
+    const unreadable = reviews.filter((item) => item.kind !== MEDIA_KIND.twelveLead);
+    const recognized = reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead);
+
     const reasons = [];
     if (isUnknown) reasons.push('程式判定不出來');
-    if (reviews.length > 0) reasons.push(`案件影音有 ${reviews.length} 個檔案判不出內容`);
+    if (unreadable.length > 0) reasons.push(`案件影音有 ${unreadable.length} 個檔案判不出內容`);
+    if (recognized.length > 0) {
+      reasons.push(`案件影音有 ${recognized.length} 個檔案靠照片辨識判成 12 導程，請覆核`);
+    }
 
     rows.push([
       outcome.squad,

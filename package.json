@@ -12,11 +12,11 @@
     "test:rules": "node scripts/run-rules-test.mjs",
     "tool:lint": "eslint --config tools/eslint.config.mjs tools",
     "tool:ems": "node tools/ems-report/index.mjs",
-    "tool:ems:test": "npm run tool:lint && node --test tools/ems-report/*.test.mjs",
+    "tool:ems:test": "npm run tool:lint && node --test --test-concurrency=2 tools/ems-report/*.test.mjs",
     "tool:mci": "node tools/mci-perm/index.mjs",
-    "tool:mci:test": "npm run tool:lint && node --test tools/mci-perm/*.test.mjs",
+    "tool:mci:test": "npm run tool:lint && node --test --test-concurrency=2 tools/mci-perm/*.test.mjs",
     "tool:duty": "node tools/duty-watch/index.mjs",
-    "tool:duty:test": "npm run tool:lint && node --test tools/duty-watch/*.test.mjs",
+    "tool:duty:test": "npm run tool:lint && node --test --test-concurrency=2 tools/duty-watch/*.test.mjs",
     "deploy": "npm run build && firebase deploy"
   },
   "dependencies": {

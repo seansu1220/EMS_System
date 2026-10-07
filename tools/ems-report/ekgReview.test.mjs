@@ -158,7 +158,10 @@ test('整條來回：寫出去的檔案，填了判定之後讀得回來', async
   PATHS.internalDir = temporary;
   context.after(async () => {
     PATHS.internalDir = original;
-    await fs.rm(temporary, { recursive: true, force: true });
+    // ⚠ 刪不掉就算了。Windows 上剛寫完的 xlsx 偶爾還被鎖著（EBUSY／EPERM），
+    //   而清理失敗不代表測試失敗——這一段只是不要在暫存夾留垃圾。
+    //   不吞掉的話，整個測試檔會偶發地被判定為失敗（2026-10-07 踩到，連三次有一次）。
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
   });
 
   const rows = buildReviewRows([
@@ -199,7 +202,10 @@ test('清單一列都沒有時不刪舊檔——那裡面裝的是使用者的�
   PATHS.internalDir = temporary;
   context.after(async () => {
     PATHS.internalDir = original;
-    await fs.rm(temporary, { recursive: true, force: true });
+    // ⚠ 刪不掉就算了。Windows 上剛寫完的 xlsx 偶爾還被鎖著（EBUSY／EPERM），
+    //   而清理失敗不代表測試失敗——這一段只是不要在暫存夾留垃圾。
+    //   不吞掉的話，整個測試檔會偶發地被判定為失敗（2026-10-07 踩到，連三次有一次）。
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
   });
 
   await writeReviewList(buildReviewRows([outcome('T-1')], VERDICT.unknown), MONTH);
@@ -214,7 +220,10 @@ test('檔案不存在時安靜地回空的，不可以讓整個月報表跑不�
   PATHS.internalDir = temporary;
   context.after(async () => {
     PATHS.internalDir = original;
-    await fs.rm(temporary, { recursive: true, force: true });
+    // ⚠ 刪不掉就算了。Windows 上剛寫完的 xlsx 偶爾還被鎖著（EBUSY／EPERM），
+    //   而清理失敗不代表測試失敗——這一段只是不要在暫存夾留垃圾。
+    //   不吞掉的話，整個測試檔會偶發地被判定為失敗（2026-10-07 踩到，連三次有一次）。
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
   });
 
   const result = await readDecisions(MONTH);

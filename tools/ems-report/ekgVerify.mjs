@@ -519,12 +519,20 @@ async function inspectMediaRows(context, mediaRows, timeContext, arrival) {
     );
     // 檔名可能夾帶案件編號，畫面上只印類型與判讀結果。
     log.info(`　案件影音（${row.uploadTime || '時間不明'}）：${result.kind}——${result.why}`);
-    if (result.kind === MEDIA_KIND.twelveLead) {
-      confirmed.push(row);
-      continue;
-    }
-    // 只有「程式讀不出來」與「讀取失敗」要人看；確定不是心電圖的不必浪費使用者的時間。
-    if (result.kind === MEDIA_KIND.unreadable || result.kind === MEDIA_KIND.failed) {
+    if (result.kind === MEDIA_KIND.twelveLead) confirmed.push(row);
+
+    /**
+     * 要人看的有三種，**確定不是心電圖的不列**（不必浪費使用者的時間）：
+     *
+     *   - 程式讀不出內容、讀取失敗 → 請他點開看
+     *   - **靠照片辨識判成 12 導程的 → 請他覆核**（2026-10-07 加）
+     *
+     * 第三種是 2026-09 實跑抓到的：有一件靠照片辨識判成 12 導程，
+     * 但那一列的備註寫著「APP人形圖受傷部位拍照」，兩者明顯對不上。
+     * 照片辨識是程式從像素「猜」出來的，與「檔案類型欄明寫 12導程」的確定性差很多，
+     * 而它一旦判對就直接影響分子，卻完全沒有被人看過的機會。
+     */
+    if (result.kind !== MEDIA_KIND.notEcg) {
       reviews.push({
         fileName: link?.text || '(沒有檔案連結)',
         url: link?.href || '',

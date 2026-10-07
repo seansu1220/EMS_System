@@ -20,6 +20,7 @@ import { log } from './logger.mjs';
 import { maskCode } from './sheetFields.mjs';
 import { VERDICT, countsAsNumerator } from './ekgVerify.mjs';
 import { DECISION, REVIEW_COLUMN } from './ekgReview.mjs';
+import { MEDIA_KIND } from './ekgMedia.mjs';
 
 /** 檔名前綴。 */
 const SUMMARY_PREFIX = '心電圖執行報告';
@@ -62,6 +63,10 @@ function countVerdicts(outcomes) {
   };
 }
 
+/** 這一件裡「程式判不出內容」的影音檔（排掉已經判出是 12 導程、只要覆核的那些）。 */
+const unreadableMedia = (outcome) =>
+  (outcome?.mediaReviews ?? []).filter((item) => item.kind !== MEDIA_KIND.twelveLead);
+
 /**
  * 組出「要你確認的事」。**這是整份報告最重要的一段**，因此每一項都要寫成
  * 「發生什麼事 → 你要做什麼」，不能只丟一個數字。
@@ -81,7 +86,12 @@ function buildTodoList(outcomes, appeals) {
     );
   }
 
-  const mediaCount = outcomes.reduce((total, item) => total + (item.mediaReviews?.length ?? 0), 0);
+  // `mediaReviews` 現在也收「靠照片辨識判成 12 導程、要人覆核」的那些，
+  // 這裡要的是**判不出來**的件數，因此把已判出來的排掉。
+  const mediaCount = outcomes.reduce(
+    (total, item) => total + unreadableMedia(item).length,
+    0,
+  );
   if (mediaCount > 0) {
     todo.push(
       `有 **${mediaCount} 個「案件影音」檔程式讀不出內容**（照片辨識認不出導程名稱），目前不計入分子。`
@@ -222,7 +232,7 @@ function buildRemarkSection(outcomes, appeals) {
  */
 function buildMediaSection(outcomes) {
   const reviews = outcomes.flatMap((item) =>
-    (item.mediaReviews ?? []).map((review) => ({ item, review })));
+    unreadableMedia(item).map((review) => ({ item, review })));
   if (reviews.length === 0) return [];
 
   const lines = [
@@ -242,8 +252,48 @@ function buildMediaSection(outcomes) {
   }
   lines.push(
     '',
-    '> 檔案連結在「心電圖-案件影音待人工確認」那份 Excel 裡，點開就看得到原始檔案。',
-    '> 確認是 12 導程且在到院前傳的，填進分隊申訴表，下次跑就會補進分子。',
+    '> 檔案連結在「心電圖-人工判定」那份 Excel 裡，點開就看得到原始檔案。',
+    '> 確認是 12 導程且在到院前傳的，在那份的「你的判定」欄填「算」，再跑一次這個月就會計入。',
+    '',
+  );
+  return lines;
+}
+
+/**
+ * 靠照片辨識判成 12 導程、**要使用者覆核**的那幾件（2026-10-07 加）。
+ *
+ * 與上一段分開寫：那一段是「程式判不出來，請你決定」，
+ * 這一段是「程式已經判了、而且已經算進分子，但它是從像素猜的，請你確認沒猜錯」。
+ * 混在一起的話，使用者不知道哪些已經影響了數字。
+ */
+function buildMediaConfirmedSection(outcomes) {
+  const confirmed = outcomes.flatMap((item) =>
+    (item.mediaReviews ?? [])
+      .filter((review) => review.kind === MEDIA_KIND.twelveLead)
+      .map((review) => ({ item, review })));
+  if (confirmed.length === 0) return [];
+
+  const lines = [
+    '## 靠照片辨識判成 12 導程的案件（請覆核）',
+    '',
+    `共 ${confirmed.length} 個檔案。這些是程式**從照片的像素裡認出導程名稱**才判成 12 導程的，`
+      + '確定性不如「檔案類型欄明寫 12導程」。判錯會直接影響分子，所以列出來讓你確認。',
+    '',
+    '| 分隊 | 案件日期 | TEMSIS | 上傳時間 | 傳的時候到院了沒 | 辨識到什麼 | 該列備註 |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const { item, review } of confirmed) {
+    lines.push(
+      `| ${item.squad} | ${item.caseDate ?? '(讀不到)'} | ${maskCode(item.temsis)}`
+        + ` | ${review.uploadTime || '(讀不到)'} | ${review.timing} | ${review.why} | ${review.remark || '(空白)'} |`,
+    );
+  }
+  lines.push(
+    '',
+    `> ⚠ **備註與辨識結果對不上就要特別注意**。2026-09 實跑有一件辨識成 12 導程，`,
+    '> 但備註寫著「APP人形圖受傷部位拍照」——那多半不是心電圖。',
+    `> 覺得判錯了，就在「心電圖-人工判定」那份的「${REVIEW_COLUMN}」欄填「${DECISION.skip}」，`,
+    '> 再跑一次這個月就會把它排除。',
     '',
   );
   return lines;
@@ -351,6 +401,7 @@ export async function writeRunSummary(input) {
     ...buildExcludedSection(input.excluded),
     ...buildRemarkSection(outcomes, appeals),
     ...buildMediaSection(outcomes),
+    ...buildMediaConfirmedSection(outcomes),
     ...buildAppealSection(appeals),
     ...buildPendingSection(outcomes),
     '## 這次產出的檔案',

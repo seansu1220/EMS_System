@@ -104,6 +104,7 @@ import {
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
 import { applyAppealSheet } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
+import { bundleMonthlyOutputs } from './bundle.mjs';
 import { pruneOldOutputs, removeLegacyTwins } from './retention.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import {
@@ -1534,6 +1535,13 @@ async function runMonthlyFlow(session, monthRange, options) {
     else log.ok(`${step.name}：完成`);
   }
   log.info(`報表位置：${path.relative(process.cwd(), PATHS.reportDir)}`);
+
+  // 收成一個資料夾（使用者 2026-10-07 要求：一次月報表產出的檔案太多太散）。
+  // ⚠ 放在**丟例外之前**：就算有一份報表失敗，另一份已經產好的也該收進去讓人拿得走。
+  await bundleMonthlyOutputs(monthRange).catch((error) => {
+    log.warn(`收進月報表資料夾時出錯（原檔都還在 out/report 與 out/internal）：${error instanceof Error ? error.message : String(error)}`);
+  });
+
   if (failures.length > 0) {
     throw new Error(`${failures.length} 份報表沒有做成功（詳見上方說明）`);
   }

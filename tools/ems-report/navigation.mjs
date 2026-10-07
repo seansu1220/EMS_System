@@ -4,7 +4,7 @@
  * 這個系統登入後是 frameset 版面，且全站以 POST 導頁，
  * 因此 frame 物件會在每次導航後重建，取用前一律重新查找，不可快取。
  */
-import { SITE } from './config.mjs';
+import { SITE, UNLOCK } from './config.mjs';
 import { log } from './logger.mjs';
 
 /** 依名稱取得 frame；找不到即拋出可讀的錯誤。 */
@@ -111,6 +111,46 @@ async function clickRecordQueryMenu(page) {
 }
 
 /**
+ * 把內容框導到某個功能的網址，**被打斷就等一下重試**。
+ *
+ * ⚠ 這個重試是 2026-10-06 實跑踩出來的，不加會整份報表失敗：
+ *   `net::ERR_ABORTED` 的意思是「這次導覽被另一次導覽打斷了」，
+ *   不是網址錯、也不是網路斷。登入剛完成那一刻，主畫面的十個 frame 還在陸續載入，
+ *   這時對內容框下 `goto` 就會被隨後抵達的頁面打斷。
+ *
+ *   當天的紀錄：登入完成後 **6 毫秒**就開始跑第一份報表，0.2 秒後
+ *   「到院前預警比率」整份失敗；而同一次登入裡晚一秒才跑的心電圖報表
+ *   走同一個函式卻完全正常——差別只有時間。
+ *
+ *   因此失敗時**先等一下再試**，而不是直接放棄：這種被打斷的情形，
+ *   等畫面安定之後重試一次就會過。
+ *
+ * @param {import('playwright-core').Page} page
+ * @param {string} apName 功能代碼（`SITE.apNames` 裡的值）
+ * @param {number} [attempts] 最多試幾次
+ */
+async function gotoContentWithRetry(page, apName, attempts = 3) {
+  const url = SITE.contentUrl(apName);
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      // 每一輪都重新取得內容框：被打斷的那一次之後，frame 物件可能已經換掉了。
+      await getFrame(page, SITE.frames.content)
+        .goto(url, { waitUntil: 'domcontentloaded' });
+      return;
+    } catch (error) {
+      lastError = error;
+      // 訊息很長（Playwright 會附整段 call log），只取前面那句說明原因的。
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 80);
+      if (attempt >= attempts) break;
+      log.warn(`載入網址被打斷（第 ${attempt} 次：${message}），等畫面安定後重試`);
+      await page.waitForTimeout(UNLOCK.settleMs);
+    }
+  }
+  throw lastError;
+}
+
+/**
  * 導向「報表系統 → 救護紀錄表查詢」，並確保查詢表單真的可以開始填了。
  *
  * 主要路徑：觸發左側選單那個連結（走系統自己的導航流程）。
@@ -129,8 +169,7 @@ export async function gotoRecordQuery(page, options = {}) {
   let route = await clickRecordQueryMenu(page);
   if (!route) {
     log.warn('點選單沒有成功切換，改用直接載入網址的備援方式');
-    const content = getFrame(page, SITE.frames.content);
-    await content.goto(SITE.contentUrl(SITE.apNames.recordQuery), { waitUntil: 'domcontentloaded' });
+    await gotoContentWithRetry(page, SITE.apNames.recordQuery);
     if (!(await waitForContentAp(page, SITE.apNames.recordQuery))) {
       throw new Error('選單與直接載入網址都無法開啟救護紀錄表查詢頁');
     }
