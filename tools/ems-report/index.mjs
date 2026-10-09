@@ -1121,7 +1121,13 @@ async function checkAdjustSheet(monthRange) {
   }
 
   const columns = resolveAdjustColumns(rows);
-  log.ok(`日期欄判定為第 [${columns.dateColumn}] 欄、分隊欄判定為第 [${columns.squadColumn}] 欄`);
+  log.ok(
+    `日期欄判定為第 [${columns.dateColumn}] 欄、分隊欄${
+      columns.squadColumn >= 0
+        ? `判定為第 [${columns.squadColumn}] 欄`
+        : '沒有（不影響計算：要扣哪一隊是用 TEMSIS 回查系統決定的）'
+    }`,
+  );
   if (columns.temsisColumn < 0) {
     log.warn(
       'TEMSIS 欄判定不出來（沒有任何一欄的內容大多是 15 碼以上的數字）。'
@@ -1192,6 +1198,9 @@ async function adjustStats(stats, monthRange, unalertedCases, transportedTemsis)
     return noAdjustment(stats);
   }
 
+  if (columns.squadColumn < 0) {
+    log.info('試算表沒有分隊欄；要扣哪一隊一律以系統登記為準，不影響計算（見 1.13）。');
+  }
   const { inRange, outOfRange, unparsable } = collectAdjustRows(rows, columns, monthRange);
   log.info(
     `試算表 ${rows.length - 1} 列：期間內 ${inRange.length} 件、期間外 ${outOfRange} 件、`

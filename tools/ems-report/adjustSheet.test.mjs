@@ -152,12 +152,16 @@ test('collectAdjustRows 只取期間內的列，並保留原始內容與列號',
   const result = collectAdjustRows(rows, columns, { start: '2026-08-01', end: '2026-08-31' });
 
   assert.equal(result.outOfRange, 1);
-  assert.equal(result.unparsable, 2, '日期讀不出來與分隊空白都算無法判讀');
+  assert.equal(result.unparsable, 1, '只有日期讀不出來才算無法判讀');
+  // ⚠ 2026-10-09 改：**沒填分隊也要收**。實際要扣哪一隊是對帳時用 TEMSIS
+  //   回查系統決定的（見 adjustAudit），表上那一欄只用來比對有沒有抄錯。
+  //   舊版把沒分隊的列當成無法判讀而整列丟掉，等於該扣的沒扣。
   assert.deepEqual(
     result.inRange.map((item) => [item.squad, item.temsis, item.lineNumber]),
     [
       ['桃園分隊', '2026080510100311365603', 2],
       ['山腳分隊', '', 4],
+      ['', '2026081010100305322301', 6],
     ],
   );
   assert.equal(result.inRange[0].reason, '系統異常，到院才恢復');
@@ -183,4 +187,27 @@ test('resolveAdjustColumns 一併回傳 TEMSIS 欄與原因欄', () => {
   assert.deepEqual(resolveAdjustColumns(rows), {
     dateColumn: 1, squadColumn: 3, temsisColumn: 2, reasonColumn: 4,
   });
+});
+
+test('整張表沒有分隊欄也要跑得起來，不可以丟例外', () => {
+  // 2026-10-09 實跑踩到：使用者把表上的分隊欄拿掉，整份「到院前預警比率」報表
+  // 直接做不出來——而那一欄對計算根本沒有影響（扣哪一隊是用 TEMSIS 回查系統決定的）。
+  // 一個純提醒用的欄位不該讓整份報表停擺。
+  const rows = [
+    ['項次', '時間', '案號(TEMSIS ID)', '送往醫院', '扣除原因'],
+    ['1', '2026-08-05', '2026080510100311365603', '某醫院', '系統異常'],
+  ];
+  const columns = resolveAdjustColumns(rows);
+  assert.equal(columns.squadColumn, -1, '找不到就回 -1，不丟例外');
+  assert.ok(columns.dateColumn >= 0);
+  assert.ok(columns.temsisColumn >= 0, 'TEMSIS 欄才是對帳的鍵，這一欄仍然必要');
+
+  const result = collectAdjustRows(rows, columns, { start: '2026-08-01', end: '2026-08-31' });
+  assert.equal(result.inRange.length, 1);
+  assert.equal(result.inRange[0].squad, '');
+});
+
+test('日期欄找不到仍然要丟例外——那一欄是篩期間用的，少了就不知道這列算哪個月', () => {
+  const rows = [['項次', '分隊'], ['1', '桃園分隊']];
+  assert.throws(() => resolveAdjustColumns(rows), /找不到日期欄/);
 });

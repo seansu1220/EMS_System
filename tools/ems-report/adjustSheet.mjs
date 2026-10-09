@@ -193,7 +193,19 @@ export function resolveAdjustColumns(rows) {
   }
 
   if (dateColumn < 0) throw new Error('增減試算表中找不到日期欄（沒有任何一欄的內容大多是日期）');
-  if (squadColumn < 0) throw new Error('增減試算表中找不到分隊欄（沒有任何一欄的內容大多以分隊／大隊結尾）');
+
+  /**
+   * ⚠ **分隊欄找不到不算錯**（2026-10-09 改）。
+   *
+   * v1.36.0 把扣除改成逐列對帳之後，**實際要扣哪一隊是用 TEMSIS 回查系統決定的**
+   * （見 `adjustAudit.mjs`：`unalertedSquadOf.get(temsis)`）。表上那一欄只剩一個用途
+   * ——比對填表的人有沒有抄錯欄位，抄錯了就提醒一聲。
+   *
+   * 舊版在這裡丟例外，於是 2026-10-09 實跑時，使用者把表上的分隊欄拿掉之後，
+   * 整份「到院前預警比率」報表直接做不出來——而那一欄對計算根本沒有影響。
+   * 一個純提醒用的欄位不該讓整份報表停擺。
+   */
+  // 找不到就回 -1，呼叫端自己決定要不要提醒使用者（這一支不印東西，保持可測）。
   return {
     dateColumn,
     squadColumn,
@@ -253,12 +265,12 @@ export function countAdjustmentsBySquad(rows, columns, monthRange) {
       outOfRange += 1;
       continue;
     }
-    const squad = String(row[columns.squadColumn] ?? '').trim();
-    if (!squad) {
-      unparsable += 1;
-      continue;
-    }
-    counts.set(squad, (counts.get(squad) ?? 0) + 1);
+    // 分隊欄可能不存在（見 `resolveAdjustColumns`）。這一支只做診斷用的分隊分佈，
+    // 沒有分隊就歸到「未填分隊」，不當成讀不出來——那會讓診斷訊息看起來像整表壞掉。
+    const squad = columns.squadColumn >= 0
+      ? String(row[columns.squadColumn] ?? '').trim()
+      : '';
+    counts.set(squad || '(表上沒有分隊欄)', (counts.get(squad || '(表上沒有分隊欄)') ?? 0) + 1);
     inRange += 1;
   }
   return { counts, inRange, outOfRange, unparsable };
@@ -368,14 +380,12 @@ export function collectAdjustRows(rows, columns, monthRange) {
       outOfRange += 1;
       return;
     }
-    const squad = cell(row, columns.squadColumn);
-    if (!squad) {
-      unparsable += 1;
-      return;
-    }
+    // ⚠ 沒填分隊**不可以把整列丟掉**（2026-10-09 改）：實際要扣哪一隊是對帳時
+    //   用 TEMSIS 回查系統決定的，表上這一欄只用來比對有沒有抄錯。
+    //   舊版把沒分隊的列算成「無法判讀」而整列不處理，等於該扣的沒扣。
     inRange.push({
       temsis: cell(row, columns.temsisColumn),
-      squad,
+      squad: cell(row, columns.squadColumn),
       caseDate: cell(row, columns.dateColumn),
       isoDate,
       reason: cell(row, columns.reasonColumn),

@@ -85,7 +85,9 @@ export function auditAdjustments(adjustRows, unalertedSquadOf, transportedTemsis
       }
       used.add(temsis);
       // 表上填的分隊與案件實際分隊不同時照樣採計，但要講出來——多半是填表的人抄錯欄位。
-      const note = squad === row.squad
+      // ⚠ 表上**沒填**分隊（或整張表沒有這一欄）不算「填錯」，不要報成改扣：
+      //   那是正常情形（2026-10-09 起分隊欄為選填），每一列都報一次只是噪音。
+      const note = (!row.squad || squad === row.squad)
         ? '這一件確實是送醫但沒有到院前預警，扣除成立'
         : `這一件確實沒有到院前預警，扣除成立；但它是「${squad}」的案件，`
           + `表上填的是「${row.squad}」，已改扣「${squad}」`;
@@ -200,7 +202,10 @@ export function printAuditReport(results) {
   printRejected(results, AUDIT_OUTCOME.notFound, '這些 TEMSIS 在當月送醫案件裡查不到，不予扣除，請你確認');
 
   const misfiled = results.filter(
-    (result) => result.outcome === AUDIT_OUTCOME.approved && result.squad !== result.row.squad,
+    (result) => result.outcome === AUDIT_OUTCOME.approved
+      // 表上沒填分隊不算填錯（分隊欄是選填的），不列進「改扣」清單。
+      && result.row.squad
+      && result.squad !== result.row.squad,
   );
   if (misfiled.length > 0) {
     log.warn(`這些案件的分隊與表上填的不同，已改扣案件實際所屬分隊：${misfiled.length} 件`);
