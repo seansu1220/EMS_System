@@ -21,6 +21,10 @@ import { maskCode } from './sheetFields.mjs';
 import { VERDICT, countsAsNumerator } from './ekgVerify.mjs';
 import { DECISION, REVIEW_COLUMN } from './ekgReview.mjs';
 import { MEDIA_KIND } from './ekgMedia.mjs';
+import { EKG } from './config.mjs';
+
+/** 申訴表 TEMSIS 的正確長度（寫在報告上請人補齊時要講出數字）。 */
+const APPEAL_TEMSIS_LENGTH = EKG.appeal.temsisLength;
 
 /** 檔名前綴。 */
 const SUMMARY_PREFIX = '心電圖執行報告';
@@ -107,13 +111,12 @@ function buildTodoList(outcomes, appeals) {
     );
   }
 
-  const skipped = appeals?.skipped;
-  if (skipped?.noDate?.length > 0) {
-    todo.push(
-      `申訴表第 ${skipped.noDate.join('、')} 列的**案件日期看不出來，整列沒有處理**。`
-        + '請改成 `2026/07/08 06:20` 這種寫法（日期和時間之間要有冒號）。',
-    );
-  }
+  /**
+   * ⚠ 申訴表**填不完整**的那幾列不列進「要你確認的事」（使用者 2026-10-09 決定：
+   * 視為沒有提報）。那張表是累積的，同樣幾列每個月都會再出現一次，
+   * 當成待辦只會讓這一段越來越長、最後整段被跳過不看。
+   * 它們仍然列在下方的「分隊申訴表」那一段裡備查，見 `buildAppealSection()`。
+   */
   return todo;
 }
 
@@ -175,6 +178,19 @@ function buildAppealSection(appeals) {
         + ` | ${maskCode(item.appeal.temsis) || '(沒填)'} | ${item.outcome} | ${item.matchedBy || '配對不到'} |`,
     );
   }
+  const skippedRows = appeals.skipped?.noDate ?? [];
+  if (skippedRows.length > 0) {
+    lines.push(
+      '',
+      `另有 ${skippedRows.length} 列**填不完整**（TEMSIS 不完整、也讀不出案件日期），`
+        + `**視為沒有提報**：試算表第 ${skippedRows.join('、')} 列。`,
+      '',
+      '> 這幾列無從認出是系統裡的哪一件案子，因此不補分母也不補分子。',
+      `> 要讓它們算進去，請把 TEMSIS 補成完整的 ${APPEAL_TEMSIS_LENGTH} 碼，下次跑就會處理。`,
+      '> 列號留在這裡是為了備查——分隊來問「我明明填了為什麼沒算」時答得出來。',
+    );
+  }
+
   lines.push('');
   return lines;
 }

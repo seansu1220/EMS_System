@@ -126,7 +126,14 @@ test('申訴表填錯的地方要指出是第幾列', async () => {
       skipped: { example: 1, outOfRange: 21, noDate: ['30'] },
     },
   });
-  assert.match(text, /第 30 列的\*\*案件日期看不出來/);
+  // 2026-10-09 起：填不完整的列**視為沒有提報**，不再列進「要你確認的事」
+  //   （那張表是累積的，同樣幾列每個月都會再被唸一次）。
+  //   但列號仍要留在申訴那一段備查——分隊來問「我明明填了」時要答得出來。
+  const [, afterTodo] = text.split('## 要你確認的事');
+  const todoSection = afterTodo.split(/^## /m)[0];
+  assert.doesNotMatch(todoSection, /第 30 列/, '填不完整的列不該出現在待辦裡');
+  assert.match(text, /視為沒有提報/);
+  assert.match(text, /第 30 列/, '但列號仍要留在報告裡備查');
   assert.match(text, /\| 平鎮分隊 \| 2026\/7\/20 20:20 \| \*+2701 \| 補進分子 \| TEMSIS \|/);
 });
 

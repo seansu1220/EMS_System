@@ -1153,18 +1153,19 @@ async function checkEkgAppealSheet(monthRange) {
     log.ok(`TEMSIS 全部都是 ${EKG.appeal.temsisLength} 碼`);
   } else {
     log.warn(`有 ${wrong.length} / ${codes.length} 列的 TEMSIS 不是 ${EKG.appeal.temsisLength} 碼：${wrong.join('、')}`);
-    log.warn('　這幾列**完全無法處理**（申訴不會被算到）。');
+    // 用語與正式流程一致（使用者 2026-10-09 決定：填不完整的視為沒有提報）。
+    log.info('　這幾列無從認出是哪一件案子，一律**視為沒有提報**（不補分母也不補分子）。');
     if (columns.caseDate < 0 || columns.place < 0) {
       log.info('　表上沒有案件日期與發生地點欄，所以連「分隊＋地點＋時間相近」那條後備配對也用不了。');
     }
-    log.info('　請把這幾列的 TEMSIS 補成完整的 22 碼。');
+    log.info(`　要讓它們算進去，就把 TEMSIS 補成完整的 ${EKG.appeal.temsisLength} 碼，下次跑就會處理。`);
   }
 
   const { appeals, skipped } = parseAppeals(rows, monthRange);
   log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內可處理的申訴件數`);
   log.info(`期間內 ${appeals.length} 件、期間外 ${skipped.outOfRange} 件、範例列 ${skipped.example} 件`);
   if (skipped.noDate.length > 0) {
-    log.warn(`日期與 TEMSIS 都讀不出來、整列沒有處理：第 ${skipped.noDate.join('、')} 列`);
+    log.info(`日期與 TEMSIS 都讀不出來，視為沒有提報：第 ${skipped.noDate.join('、')} 列`);
   }
   log.info('正式執行還要逐件比對系統案件，對不上的不會被補，實際件數只會更少。');
 }

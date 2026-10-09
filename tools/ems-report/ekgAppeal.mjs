@@ -446,11 +446,20 @@ export function printAppealResults(results, skipped) {
   if (skipped.example > 0) log.info(`已跳過表上第 1 列的範例資料（${skipped.example} 列）`);
   if (skipped.outOfRange > 0) log.info(`不在查詢期間內：${skipped.outOfRange} 列（那張表是累積的）`);
   if (skipped.noDate.length > 0) {
-    // 這是**會漏掉申訴**的錯誤：分隊以為填了就會算，實際上這幾列從頭到尾沒被處理。
-    log.warn(
-      `案件日期看不出來、整列沒有處理（試算表第 ${skipped.noDate.join('、')} 列）。`
-        + '請回表上把日期補成 2026/07/08 06:20 這種寫法，或把 TEMSIS 補齊'
-        + `（${EKG.appeal.temsisLength} 碼，程式可以從它推出案件日期）。`,
+    /**
+     * **填不完整的列一律視為沒有提報**（使用者 2026-10-09 決定）。
+     *
+     * 這幾列既讀不出案件日期、TEMSIS 也不完整，無從認出是哪一件案子。
+     * 以前當成「要使用者去修」的待辦事項，但那張表是累積的，
+     * 同樣幾列每個月都會再被唸一次。
+     *
+     * ⚠ 仍然**逐列列出列號**：改成不唸不等於不留紀錄。
+     *   哪天分隊來問「我明明填了為什麼沒算」，要答得出是哪一列、為什麼。
+     */
+    log.info(
+      `以下各列的 TEMSIS 不完整、也讀不出案件日期，視為沒有提報（試算表第 ${
+        skipped.noDate.join('、')} 列）。`
+        + `要讓它們算進去，請把 TEMSIS 補成完整的 ${EKG.appeal.temsisLength} 碼。`,
     );
   }
 
@@ -460,7 +469,9 @@ export function printAppealResults(results, skipped) {
   }
   log.info(`這個月有 ${results.length} 件申訴：`);
   for (const result of results) {
-    const level = result.outcome === '無法處理' ? 'warn' : 'info';
+    // 「無法處理」＝那一列填不完整，視為沒有提報（使用者 2026-10-09 決定），
+    // 因此用一般訊息而不是警告——它不是要人動手的事，只是要留著備查。
+    const level = 'info';
     log[level](
       `　${result.squad || result.appeal.squad || '(分隊不明)'}　${result.appeal.caseDate}`
         + `　${maskCode(result.appeal.temsis) || '(沒填TEMSIS)'}`
