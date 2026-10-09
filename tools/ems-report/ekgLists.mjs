@@ -426,7 +426,7 @@ export function buildRemarkRows(outcomes, appealResults = []) {
     // 只是沒有理由可以列，略過不寫一列空的。
     if (!text) continue;
     rows.push([
-      result.appeal.squad,
+      result.squad || result.appeal.squad || '(分隊不明)',
       result.appeal.caseDate,
       result.appeal.temsis || '(沒填)',
       '(申訴表沒有這一欄)',

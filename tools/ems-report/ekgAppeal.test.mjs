@@ -7,6 +7,9 @@
  *   - 本來就算進分子的**不重複加**（否則分子會超過分母）
  *   - TEMSIS 長度不對**不可以**當成「系統查無此案」而分母分子亂加
  *   - 後備比對要三個條件同時成立，且配對到兩件以上時不猜
+ *
+ * 2026-10-09 起另外釘住：**只有 TEMSIS 是必填欄**。使用者會自己調整那張表的欄位，
+ * 而少一個推得出來的欄位不該讓整份報表停擺（實際踩過一次，見 3.14）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +19,7 @@ import {
   parseAppeals,
   matchAppeals,
   matchByPlaceAndTime,
+  resolveAppealColumns,
   tallyAdjustments,
 } from './ekgAppeal.mjs';
 import { VERDICT } from './ekgVerify.mjs';
@@ -101,12 +105,51 @@ test('只填日期時，不同天的還是不可以配對', () => {
   assert.equal(matchByPlaceAndTime(appeal, CASES), null);
 });
 
-test('日期看不懂的列要記下列號，讓人回表上修', () => {
+test('日期看不懂、但 TEMSIS 是好的 → 從 TEMSIS 推出日期，不可以丟掉整列', () => {
+  // 2026-10-09 改：TEMSIS 前 8 碼就是案發日期（實測 2026-09 的 284 件全部吻合）。
+  // 舊版把整列丟掉——申訴被默默漏掉，而分隊以為填了就會算。
   const { appeals, skipped } = parseAppeals(sheet(
     ['1', CODE_到院後, '看不懂的日期', '平鎮91', '某處', ''],
   ), MONTH);
+  assert.equal(appeals.length, 1);
+  assert.deepEqual(skipped.noDate, []);
+  // 表上原本寫了什麼也要留著：不然使用者看到一個正常的日期，
+  // 不會知道表上那一格其實寫錯了。
+  assert.match(appeals[0].caseDate, /看不懂的日期 → 2026-07-19（由 TEMSIS 推算）/);
+});
+
+test('日期看不懂、TEMSIS 也不完整 → 這時才記下列號請人回表上修', () => {
+  // 長度不對的 TEMSIS 多半是打錯或少貼，拿前 8 碼去推會得到一個看似合法卻錯誤的日期，
+  // 而日期決定這一列算哪個月。這種情況寧可不處理並講出來。
+  const { appeals, skipped } = parseAppeals(sheet(
+    ['1', '202607191010', '看不懂的日期', '平鎮91', '某處', ''],
+  ), MONTH);
   assert.equal(appeals.length, 0);
   assert.deepEqual(skipped.noDate, ['3']);
+});
+
+test('整張表沒有案件日期欄也要跑得起來', () => {
+  // 2026-10-09 實跑踩到：使用者把申訴表簡化成「項次｜TEMSIS ID｜備註」三欄，
+  // 整個心電圖報表就會在最後一步（套用申訴）失敗——而那時逐案查核已經跑了一個多小時。
+  const rows = [
+    ['項次', 'TEMSIS ID', '備註'],
+    ['1', CODE_已計入, '範例列'],
+    ['2', CODE_到院後, '系統連線異常'],
+  ];
+  const columns = resolveAppealColumns(rows);
+  assert.equal(columns.caseDate, -1);
+  assert.equal(columns.carNumber, -1);
+  assert.equal(columns.place, -1);
+  assert.ok(columns.temsis >= 0, 'TEMSIS 是唯一必填的欄');
+
+  const { appeals } = parseAppeals(rows, MONTH);
+  assert.equal(appeals.length, 1, '範例列跳過，剩下那一件靠 TEMSIS 推出日期而被處理');
+  assert.equal(appeals[0].squad, '', '沒有車號欄，分隊留空，由比對時從系統補');
+});
+
+test('沒有 TEMSIS 欄仍然要中止——那是認出案件的唯一鍵', () => {
+  const rows = [['項次', '案件日期', '備註'], ['1', '2026/07/19', 'x']];
+  assert.throws(() => resolveAppealColumns(rows), /TEMSIS/);
 });
 
 test('4 碼時間寫法的案件要被算進當月，不可以漏掉', () => {
@@ -142,12 +185,33 @@ test('只處理查詢期間內的列（那張表是累積的）', () => {
   assert.equal(skipped.outOfRange, 2);
 });
 
-test('車號推不出分隊的列不處理，並記下列號供人回表上補', () => {
+test('車號推不出分隊時照樣處理——配對到案件後分隊改用系統登記的', () => {
+  // 2026-10-09 改：表上填錯隊時，加到表上那一隊是錯的（那一隊的分母裡根本沒有這一件），
+  // 所以分隊一律以系統為準，表上那一欄只是後備。舊版在這裡就把整列丟掉。
   const { appeals, skipped } = parseAppeals(sheet(
     ['1', CODE_到院後, '2026/07/19 12:13', '99', '某處', ''],
   ), MONTH);
-  assert.equal(appeals.length, 0);
-  assert.deepEqual(skipped.noSquad, ['3'], '標題列是第 1 列、範例是第 2 列，所以這筆是第 3 列');
+  assert.equal(appeals.length, 1);
+  assert.equal(appeals[0].squad, '');
+
+  const [result] = matchAppeals(appeals, CASES);
+  assert.equal(result.outcome, '補進分子');
+  assert.equal(result.squad, '平鎮分隊', '分隊要從配對到的那件案子取');
+  assert.equal(tallyAdjustments([result]).numerator.get('平鎮分隊'), 1);
+});
+
+test('系統查不到、表上又推不出分隊 → 不猜，判無法處理並說明要補什麼', () => {
+  // 這條路要幫某一隊補 1 件到分母與分子，非得知道是哪一隊不可。
+  // 加到錯的分隊，等於憑空改動兩個分隊的成績。
+  const { appeals } = parseAppeals(sheet(
+    ['1', '2026073010100399999901', '2026/07/30 10:00', '99', '某處', ''],
+  ), MONTH);
+  const [result] = matchAppeals(appeals, CASES);
+  assert.equal(result.outcome, '無法處理');
+  assert.match(result.reason, /救護車編號/);
+  const adjustments = tallyAdjustments([result]);
+  assert.equal(adjustments.numerator.size, 0, '分隊不明就一個數字都不動');
+  assert.equal(adjustments.denominator.size, 0);
 });
 
 test('本來就算進分子的，不重複加（否則分子會超過分母）', () => {

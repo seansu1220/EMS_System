@@ -103,7 +103,7 @@ test('三項調整都要列出來，少列清冊會讓人以為程式沒處理',
         matchedBy: '',
         reason: '不在本次兩份查詢結果裡',
       }],
-      skipped: { example: 1, outOfRange: 0, noDate: [], noSquad: [] },
+      skipped: { example: 1, outOfRange: 0, noDate: [] },
     },
   });
   assert.match(text, /\| 分子 \| 龍岡分隊 1 件 \|/);
@@ -123,11 +123,10 @@ test('申訴表填錯的地方要指出是第幾列', async () => {
         matchedBy: 'TEMSIS',
         reason: '依申訴改列為到院前傳出',
       }],
-      skipped: { example: 1, outOfRange: 21, noDate: ['30'], noSquad: ['12'] },
+      skipped: { example: 1, outOfRange: 21, noDate: ['30'] },
     },
   });
   assert.match(text, /第 30 列的\*\*案件日期看不出來/);
-  assert.match(text, /第 12 列的\*\*救護車編號推不出分隊/);
   assert.match(text, /\| 平鎮分隊 \| 2026\/7\/20 20:20 \| \*+2701 \| 補進分子 \| TEMSIS \|/);
 });
 

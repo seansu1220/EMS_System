@@ -102,7 +102,12 @@ import {
   printAuditReport,
 } from './adjustAudit.mjs';
 import { buildDenominatorCases, writeLedger } from './ekgLedger.mjs';
-import { applyAppealSheet } from './ekgAppeal.mjs';
+import {
+  applyAppealSheet,
+  fetchAppealSheet,
+  resolveAppealColumns,
+  parseAppeals,
+} from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
 import { bundleMonthlyOutputs } from './bundle.mjs';
 import { pruneOldOutputs, removeLegacyTwins } from './retention.mjs';
@@ -136,13 +141,15 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 
 /** 可用的指令。 */
 const COMMANDS = [
-  'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe', 'check-sheet',
+  'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
+  'check-sheet', 'check-ekg-sheet',
   'unlock', 'unlock-online', 'unlock-watch', 'open-cases',
 ];
 
 /**
  * @typedef {Object} CliOptions
- * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'|'unlock'
+ * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
+ *   |'check-ekg-sheet'|'unlock'
  *   |'unlock-online'|'unlock-watch'|'open-cases'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
@@ -862,7 +869,8 @@ async function runEkgFlow(session, monthRange, options) {
   // 申訴補進來、系統查不到的那些案件，也要列進「有處置未勾選清冊」提醒補勾。
   const appealRows = (appeals?.results ?? [])
     .filter((result) => result.outcome === '新增案件')
-    .map((result) => [result.appeal.squad, result.appeal.caseDate, result.appeal.temsis || '(沒填)']);
+    // 分隊用實際要調整的那一個（見 ekgAppeal 的 AppealResult.squad）。
+    .map((result) => [result.squad || result.appeal.squad, result.appeal.caseDate, result.appeal.temsis || '(沒填)']);
   const missingProcedurePath = await writeMissingProcedureList(missingProcedure, {
     headers: numerator.table.headers,
     squadColumn: numerator.column,
@@ -1100,6 +1108,75 @@ function printVerifySummary(outcomes, totalCases) {
  * 檢查增減用的 Google 試算表能不能讀到，並印出結構供核對欄位。
  * 不需要開瀏覽器，也不需要登入救護系統。
  */
+async function checkEkgAppealSheet(monthRange) {
+  const rows = await fetchAppealSheet().catch((error) => {
+    log.warn(`申訴表讀取失敗：${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  });
+  if (rows === null) {
+    log.warn(`尚未設定 ${EKG.appeal.urlEnvKey}（位於 tools/ems-report/.env），或讀取失敗。`);
+    return;
+  }
+
+  const info = describeSheet(rows);
+  log.ok(`讀取成功：${info.rowCount} 列（含標題）、${info.columnCount} 欄`);
+  log.info('各欄結構（只顯示欄名與型態推測，不顯示任何內容）：');
+  for (const column of info.columns) {
+    const kinds = column.kinds.length > 0 ? `｜推測：${column.kinds.join('＋')}` : '';
+    log.info(`  [${column.index}] ${column.header || '(無標題)'} → ${column.filled} 筆有值、${column.distinct} 種${kinds}`);
+  }
+
+  let columns;
+  try {
+    columns = resolveAppealColumns(rows);
+  } catch (error) {
+    log.warn(error instanceof Error ? error.message : String(error));
+    log.warn('⚠ 這樣跑心電圖報表會在最後一步（套用申訴）整份失敗，請先補上那一欄。');
+    return;
+  }
+  log.ok(`TEMSIS 欄判定為第 [${columns.temsis}] 欄（**唯一必填**，認出案件就靠它）`);
+  const optional = { 案件日期: columns.caseDate, 救護車編號: columns.carNumber, 發生地點: columns.place, 備註: columns.remark };
+  for (const [name, index] of Object.entries(optional)) {
+    if (index >= 0) log.info(`　${name} → 第 [${index}] 欄`);
+    else log.info(`　${name} → 沒有（${EKG_OPTIONAL_EFFECT[name]}）`);
+  }
+
+  // TEMSIS 長度是現在最關鍵的資料品質問題：沒有案件日期與發生地點之後，
+  // 長度不對的那幾列完全無法處理，而使用者以為填了就會算。
+  const codes = rows.slice(1).map((row) => String(row[columns.temsis] ?? '').trim());
+  const wrong = [];
+  codes.forEach((code, index) => {
+    if (code && code.length !== EKG.appeal.temsisLength) wrong.push(`第 ${index + 2} 列（${code.length} 碼）`);
+    if (!code) wrong.push(`第 ${index + 2} 列（空白）`);
+  });
+  if (wrong.length === 0) {
+    log.ok(`TEMSIS 全部都是 ${EKG.appeal.temsisLength} 碼`);
+  } else {
+    log.warn(`有 ${wrong.length} / ${codes.length} 列的 TEMSIS 不是 ${EKG.appeal.temsisLength} 碼：${wrong.join('、')}`);
+    log.warn('　這幾列**完全無法處理**（申訴不會被算到）。');
+    if (columns.caseDate < 0 || columns.place < 0) {
+      log.info('　表上沒有案件日期與發生地點欄，所以連「分隊＋地點＋時間相近」那條後備配對也用不了。');
+    }
+    log.info('　請把這幾列的 TEMSIS 補成完整的 22 碼。');
+  }
+
+  const { appeals, skipped } = parseAppeals(rows, monthRange);
+  log.step(`試算：${monthRange.start} ~ ${monthRange.end} 期間內可處理的申訴件數`);
+  log.info(`期間內 ${appeals.length} 件、期間外 ${skipped.outOfRange} 件、範例列 ${skipped.example} 件`);
+  if (skipped.noDate.length > 0) {
+    log.warn(`日期與 TEMSIS 都讀不出來、整列沒有處理：第 ${skipped.noDate.join('、')} 列`);
+  }
+  log.info('正式執行還要逐件比對系統案件，對不上的不會被補，實際件數只會更少。');
+}
+
+/** 選填欄位少了會怎樣（講後果，不只講「沒有」）。 */
+const EKG_OPTIONAL_EFFECT = {
+  案件日期: '改從 TEMSIS 前 8 碼推算',
+  救護車編號: '分隊改用系統登記的；只有系統查不到的案件才需要它',
+  發生地點: '「分隊＋發生地點＋時間相近」那條後備配對用不了',
+  備註: '補述理由列不出來（純顯示用）',
+};
+
 async function checkAdjustSheet(monthRange) {
   const source = resolveSheetSource();
   if (!source) {
@@ -1457,6 +1534,10 @@ async function main() {
   }
 
   const monthRange = resolveMonthRange(options.month);
+  if (options.command === 'check-ekg-sheet') {
+    await checkEkgAppealSheet(monthRange);
+    return;
+  }
   if (options.command === 'check-sheet') {
     log.info(`試算期間：${monthRange.start} ~ ${monthRange.end}（${monthRange.label}）`);
     await checkAdjustSheet(monthRange);

@@ -29,7 +29,7 @@ import { parseDateTime } from './timeParse.mjs';
 /**
  * @typedef {Object} AppealRow 申訴表上的一列（只留比對要用的欄）
  * @property {string} temsis
- * @property {string} squad 由救護車編號推出的分隊
+ * @property {string} squad 由救護車編號推出的分隊；表上沒有那一欄或沒填時為空字串
  * @property {string} caseDate 案件日期原文
  * @property {number|null} epochMs 案件日期換算成毫秒（只有日期時為當天 00:00）
  * @property {boolean} hasTime 表上有沒有填時分。沒填時後備比對改成「同一天」
@@ -61,9 +61,11 @@ export function parseAppealDate(text) {
 /**
  * @typedef {Object} AppealResult 一列申訴的處理結果
  * @property {AppealRow} appeal
- * @property {'已計入'|'補進分子'|'新增案件'|'無法處理'} outcome
+ * @property {'已計入'|'補進分子'|'新增案件'|'無法處理'|'已排除'} outcome
  * @property {string} reason 寫給人看的說明
  * @property {string} matchedBy 用什麼條件配對到的（供複核）
+ * @property {string} squad **實際要調整的分隊**：配對到案件時用系統登記的那一個，
+ *   系統查不到時才用表上車號推出來的；兩者都沒有時為空字串（那種列一律不動數字）
  */
 
 /**
@@ -119,12 +121,14 @@ function columnIndexOf(headers, candidates) {
 }
 
 /**
- * 找出申訴表的四個關鍵欄。缺任何一欄就中止並列出實際欄名——
- * 猜錯欄位會產出看起來正常但完全錯誤的調整。
+ * 找出申訴表的各欄。
  *
- * 另外找 `EKG.appeal.optionalColumns` 裡那些**有更好、沒有也能跑**的欄
- * （目前只有備註）。它們找不到時回傳 -1，**絕不中止**：
- * 純顯示用的一欄不該讓整個申訴比對停擺。
+ * **只有 TEMSIS 是必填**（2026-10-09 起）：那是認出「這筆申訴是系統裡哪一件案子」
+ * 的唯一鍵，少了就真的算不出來，因此找不到會中止並列出實際欄名
+ * ——猜錯欄位會產出看起來正常但完全錯誤的調整。
+ *
+ * 其餘（案件日期、救護車編號、發生地點、備註）都是選填，找不到回 -1、**絕不中止**。
+ * 它們都有替代來源或只影響後備路線，詳見 `EKG.appeal.optionalColumns` 的說明。
  *
  * @param {string[][]} rows 含標題列的試算表內容
  * @returns {{temsis: number, caseDate: number, carNumber: number, place: number, remark: number}}
@@ -156,13 +160,14 @@ export function resolveAppealColumns(rows) {
  *
  * @param {string[][]} rows 含標題列
  * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {{appeals: AppealRow[], skipped: {example: number, outOfRange: number, noSquad: string[], noDate: number}}}
+ * @returns {{appeals: AppealRow[], skipped: {example: number, outOfRange: number, noDate: string[]}}}
  */
 export function parseAppeals(rows, monthRange) {
   const columns = resolveAppealColumns(rows);
   const body = rows.slice(1);
   // 跳過的列一律記**列號**而不只是件數：要人去修表，就得講得出修哪一列。
-  const skipped = { example: 0, outOfRange: 0, noSquad: [], noDate: [] };
+  // `noSquad` 在 2026-10-09 移除：推不出分隊已經不會丟掉整列了（見下方說明）。
+  const skipped = { example: 0, outOfRange: 0, noDate: [] };
   const appeals = [];
 
   for (const [position, row] of body.entries()) {
@@ -173,31 +178,55 @@ export function parseAppeals(rows, monthRange) {
       continue;
     }
 
+    const temsis = String(row[columns.temsis] ?? '').trim();
     const caseDate = String(row[columns.caseDate] ?? '').trim();
-    const parsed = parseAppealDate(normalizeSheetDateTime(caseDate));
+
+    /**
+     * 案件日期：先用表上那一欄，讀不出來就**從 TEMSIS 前 8 碼推**（2026-10-09 加）。
+     *
+     * 表上沒有這一欄、或某一列忘了填時，舊版把整列丟掉——申訴被默默漏掉，
+     * 而分隊以為填了就會算。TEMSIS 本身就帶著案發日期，沒必要為了一個
+     * 推得出來的值而放棄一整列。
+     */
+    const fromSheet = parseAppealDate(normalizeSheetDateTime(caseDate));
+    const parsed = fromSheet ?? dateFromTemsis(temsis);
     if (!parsed) {
       skipped.noDate.push(String(lineNumber));
       continue;
     }
+    /**
+     * 畫面與清冊上要**看得出這個日期是推算來的**，表上原本寫了什麼也要留著
+     * ——不然使用者看到一個正常的日期，不會知道表上那一格其實是空的或寫錯了。
+     */
+    const derivedDate = new Date(parsed.epochMs).toISOString().slice(0, 10);
+    const caseDateText = fromSheet
+      ? caseDate
+      : `${caseDate ? `${caseDate} → ` : ''}${derivedDate}（由 TEMSIS 推算）`;
     const isoDate = new Date(parsed.epochMs).toISOString().slice(0, 10);
     if (isoDate < monthRange.start || isoDate > monthRange.end) {
       skipped.outOfRange += 1;
       continue;
     }
 
+    /**
+     * 分隊：由救護車編號推出（`平鎮91` → `平鎮分隊`）。
+     *
+     * ⚠ **推不出來不再丟掉整列**（2026-10-09 改）。配對到系統案件時，
+     *   分隊會改用那件案子在系統裡登記的分隊（見 `matchAppeals`），那本來就比表上準。
+     *   只有「系統完全查不到的案件」才真的需要表上這一欄——
+     *   那種情形才會在比對階段被列為無法處理，而且說得出原因。
+     *   舊版在這裡就把整列丟掉，等於為了一個多數情況下用不到的值而漏掉申訴。
+     */
     const squad = squadFromCarNumber(row[columns.carNumber]);
-    if (!squad) {
-      // 分隊推不出來就不知道要加到哪一隊。**不猜**，列出列號請人補。
-      skipped.noSquad.push(String(lineNumber));
-      continue;
-    }
 
     appeals.push({
-      temsis: String(row[columns.temsis] ?? '').trim(),
+      temsis,
       squad,
-      caseDate,
+      caseDate: caseDateText,
       epochMs: parsed.epochMs,
       hasTime: parsed.hasTime,
+      // 沒有發生地點欄時 columns.place 是 -1，`row[-1]` 讀出 undefined，正好變成空字串
+      // （沒有地點就只是用不到「分隊＋地點＋時間」那條後備配對）。
       place: String(row[columns.place] ?? '').trim(),
       // 沒有備註欄時 columns.remark 是 -1，`row[-1]` 讀出 undefined，正好變成空字串。
       remark: String(row[columns.remark] ?? '').trim(),
@@ -205,6 +234,26 @@ export function parseAppeals(rows, monthRange) {
     });
   }
   return { appeals, skipped };
+}
+
+/**
+ * 從 TEMSIS 推出案件日期。
+ *
+ * TEMSIS 的前 8 碼就是案發日期（`20260905…` → 2026-09-05）。
+ * 實測 2026-09 的 284 件**全部吻合**，因此在表上沒有案件日期欄、
+ * 或那一格沒填時，拿它當來源是可靠的（2026-10-09 加）。
+ *
+ * ⚠ 只接受長度正確的 TEMSIS：長度不對的多半是打錯或少貼，
+ *   拿前 8 碼去推會得到一個看似合法卻錯誤的日期，而日期決定這一列算哪個月。
+ *
+ * @param {string} temsis
+ * @returns {{epochMs: number, hasTime: boolean}|null}
+ */
+export function dateFromTemsis(temsis) {
+  const code = String(temsis ?? '').trim();
+  if (code.length !== EKG.appeal.temsisLength) return null;
+  const parsed = parseAppealDate(`${code.slice(0, 4)}/${code.slice(4, 6)}/${code.slice(6, 8)}`);
+  return parsed;
 }
 
 /** 地點比對前先正規化：去掉全部空白與常見的區隔符號，避免「桃園市平鎮區…」寫法不一。 */
@@ -246,6 +295,10 @@ export function matchByPlaceAndTime(appeal, cases) {
  *
  * @param {AppealRow[]} appeals
  * @param {import('./ekgLedger.mjs').DenominatorCase[]} cases 分母裡的全部案件
+ * 每一筆結果都帶 `squad`＝**實際要調整的分隊**：配對到系統案件時用那件案子在系統裡
+ * 登記的分隊（那本來就比表上準，與第 1 章的對帳同一個原則，見 1.13），
+ * 只有系統查不到的案件才退而用表上推出來的分隊。
+ *
  * @returns {AppealResult[]}
  */
 export function matchAppeals(appeals, cases, excludedCases = []) {
@@ -278,25 +331,33 @@ export function matchAppeals(appeals, cases, excludedCases = []) {
           appeal,
           outcome: '已排除',
           matchedBy: excludedByTemsis.has(appeal.temsis) ? 'TEMSIS' : '分隊＋發生地點＋時間相近',
+          squad: excluded.squad,
           reason: '這件的處置勾了 CPR（OHCA 案件），已排除在分母與分子之外，不因申訴補回',
         };
       }
     }
 
     if (matched) {
+      // 分隊一律用系統登記的那一個：表上填錯隊時，加到表上那一隊是錯的
+      //   ——那一隊的分母裡根本沒有這一件（與 1.13 的對帳同一個理由）。
+      const note = (appeal.squad && appeal.squad !== matched.squad)
+        ? `；順帶一提，表上的車號推出來是「${appeal.squad}」，但系統登記為「${matched.squad}」，已用系統的`
+        : '';
       if (matched.counted) {
         return {
           appeal,
           outcome: '已計入',
           matchedBy,
-          reason: '這件本來就已經算進分子了，不重複加',
+          squad: matched.squad,
+          reason: `這件本來就已經算進分子了，不重複加${note}`,
         };
       }
       return {
         appeal,
         outcome: '補進分子',
         matchedBy,
-        reason: `原本${matched.hasTwelveLead ? '查核未通過' : '沒有 12 導程可查核'}，依申訴改列為到院前傳出`,
+        squad: matched.squad,
+        reason: `原本${matched.hasTwelveLead ? '查核未通過' : '沒有 12 導程可查核'}，依申訴改列為到院前傳出${note}`,
       };
     }
 
@@ -305,14 +366,36 @@ export function matchAppeals(appeals, cases, excludedCases = []) {
         appeal,
         outcome: '無法處理',
         matchedBy: '',
+        squad: appeal.squad,
         reason: `TEMSIS 只有 ${appeal.temsis.length} 碼（應為 ${EKG.appeal.temsisLength} 碼），`
           + '而分隊＋發生地點＋時間也配對不到案件。請回表上確認編號',
       };
     }
+
+    /**
+     * 系統查不到的案件要補 1 件到某一隊的分母與分子——**這時非得知道是哪一隊不可**。
+     *
+     * 配對得到案件時分隊可以從系統拿，但這條路沒有案件可拿。
+     * 表上又推不出分隊（沒有救護車編號欄、或那一格沒填）就**不猜**：
+     * 加到錯的分隊，等於憑空改動兩個分隊的成績。
+     */
+    if (!appeal.squad) {
+      return {
+        appeal,
+        outcome: '無法處理',
+        matchedBy: '',
+        squad: '',
+        reason: '這件不在本次兩份查詢結果裡，本來要幫它補分母與分子，'
+          + '但表上推不出是哪一個分隊（需要救護車編號，例如「平鎮91」），因此沒有處理。'
+          + '請在表上補救護車編號，或確認 TEMSIS 是否填對',
+      };
+    }
+
     return {
       appeal,
       outcome: '新增案件',
       matchedBy: '',
+      squad: appeal.squad,
       // ⚠ 措辭要講明是「**不在這兩份查詢結果裡**」，不是「系統裡沒有這件案子」。
       //   使用者 2026-08-10 看到舊寫法後回系統查，案件當然找得到，於是以為程式錯了。
       reason: '不在本次兩份查詢結果裡（既沒勾 EKG 處置、也沒上傳心電圖），'
@@ -335,7 +418,10 @@ export function tallyAdjustments(results) {
   const bump = (counts, squad) => counts.set(squad, (counts.get(squad) ?? 0) + 1);
 
   for (const result of results) {
-    const { squad } = result.appeal;
+    // ⚠ 用 `result.squad`（實際要調整的分隊），不是 `result.appeal.squad`（表上填的）。
+    //   表上填錯隊時，加到表上那一隊是錯的（與 1.13 的對帳同一個理由）。
+    const squad = result.squad || result.appeal.squad;
+    if (!squad) continue; // 分隊不明的一律不動數字（上面已判成「無法處理」並說明原因）。
     if (result.outcome === '補進分子') {
       bump(numerator, squad);
     } else if (result.outcome === '新增案件') {
@@ -363,11 +449,9 @@ export function printAppealResults(results, skipped) {
     // 這是**會漏掉申訴**的錯誤：分隊以為填了就會算，實際上這幾列從頭到尾沒被處理。
     log.warn(
       `案件日期看不出來、整列沒有處理（試算表第 ${skipped.noDate.join('、')} 列）。`
-        + '請回表上把日期補成 2026/07/08 06:20 這種寫法。',
+        + '請回表上把日期補成 2026/07/08 06:20 這種寫法，或把 TEMSIS 補齊'
+        + `（${EKG.appeal.temsisLength} 碼，程式可以從它推出案件日期）。`,
     );
-  }
-  if (skipped.noSquad.length > 0) {
-    log.warn(`救護車編號推不出分隊，這幾列沒有處理（試算表第 ${skipped.noSquad.join('、')} 列）`);
   }
 
   if (results.length === 0) {
@@ -378,7 +462,8 @@ export function printAppealResults(results, skipped) {
   for (const result of results) {
     const level = result.outcome === '無法處理' ? 'warn' : 'info';
     log[level](
-      `　${result.appeal.squad}　${result.appeal.caseDate}　${maskCode(result.appeal.temsis) || '(沒填TEMSIS)'}`
+      `　${result.squad || result.appeal.squad || '(分隊不明)'}　${result.appeal.caseDate}`
+        + `　${maskCode(result.appeal.temsis) || '(沒填TEMSIS)'}`
         + `　→　${result.outcome}${result.matchedBy ? `（以${result.matchedBy}配對）` : ''}`,
     );
     log.info(`　　${result.reason}`);

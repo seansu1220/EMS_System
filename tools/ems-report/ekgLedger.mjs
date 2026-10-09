@@ -247,7 +247,7 @@ export function buildLedgerWorkbook(rows, monthRange, appealResults = []) {
 
   if (appealResults.length > 0) {
     const appealRows = appealResults.map((result) => [
-      result.appeal.squad,
+      result.squad || result.appeal.squad || '(分隊不明)',
       result.appeal.caseDate,
       result.appeal.temsis || '(沒填)',
       result.outcome,

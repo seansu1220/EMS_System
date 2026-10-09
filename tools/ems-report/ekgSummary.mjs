@@ -114,12 +114,6 @@ function buildTodoList(outcomes, appeals) {
         + '請改成 `2026/07/08 06:20` 這種寫法（日期和時間之間要有冒號）。',
     );
   }
-  if (skipped?.noSquad?.length > 0) {
-    todo.push(
-      `申訴表第 ${skipped.noSquad.join('、')} 列的**救護車編號推不出分隊**，整列沒有處理。`
-        + '請補成 `平鎮91` 這種寫法。',
-    );
-  }
   return todo;
 }
 
@@ -177,8 +171,8 @@ function buildAppealSection(appeals) {
   );
   for (const item of appeals.results) {
     lines.push(
-      `| ${item.appeal.squad} | ${item.appeal.caseDate} | ${maskCode(item.appeal.temsis) || '(沒填)'}`
-        + ` | ${item.outcome} | ${item.matchedBy || '配對不到'} |`,
+      `| ${item.squad || item.appeal.squad || '(分隊不明)'} | ${item.appeal.caseDate}`
+        + ` | ${maskCode(item.appeal.temsis) || '(沒填)'} | ${item.outcome} | ${item.matchedBy || '配對不到'} |`,
     );
   }
   lines.push('');
@@ -216,8 +210,8 @@ function buildRemarkSection(outcomes, appeals) {
   }
   for (const item of fromAppeal) {
     lines.push(
-      `| ${item.appeal.squad} | ${item.appeal.caseDate} | ${maskCode(item.appeal.temsis) || '(沒填)'}`
-        + ` | 申訴表第 ${item.appeal.lineNumber} 列 | ${item.appeal.remark} |`,
+      `| ${item.squad || item.appeal.squad || '(分隊不明)'} | ${item.appeal.caseDate}`
+        + ` | ${maskCode(item.appeal.temsis) || '(沒填)'} | 申訴表第 ${item.appeal.lineNumber} 列 | ${item.appeal.remark} |`,
     );
   }
   lines.push('', '> 完整 TEMSIS 見「心電圖-到院後補述理由」那份。', '');
