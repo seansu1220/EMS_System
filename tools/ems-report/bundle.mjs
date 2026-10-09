@@ -12,17 +12,22 @@
  * 圖個方便把它們倒進同一個資料夾，遲早有人把整包寄出去。
  * 因此包裝後仍分成兩個子資料夾，名字就直接寫清楚能不能外發。
  *
- * ## ⚠ 人工判定清單**刻意不複製**
+ * ## 用**搬移**，不用複製（2026-10-10 改）
  *
- * 那一份是要使用者填完、下次跑再讀回去的（見 3.16）。複製一份進來，
- * 使用者十之八九會填副本——而程式只讀 `out/internal/` 的正本，
- * 於是「填了卻沒生效」，而且畫面上完全看不出來。
- * 所以這裡只在說明檔裡指路，不放副本。
+ * 原本是複製，於是同一份檔案在 `out/report/`、`out/internal/` 與這個資料夾
+ * 各有一份——使用者的原話是「internal 裡面還是很亂」。沒錯：
+ * 收納的目的就是「東西只在一個地方」，留副本等於沒收。
  *
- * ## 用複製，不用搬移
+ * 搬得走是因為**這些檔案程式都不會再讀回去**，它們是純產出。
+ * 程式會讀回去的只有兩個，兩個都不進子資料夾：
  *
- * 搬走的話，續跑要用的進度檔與人工判定清單都不見了，
- * 下個月重跑同一個月份就得從頭跑一兩個小時。
+ * | 檔案 | 在哪 | 為什麼 |
+ * | --- | --- | --- |
+ * | `心電圖查核進度.json` | `out/internal/` | 續跑用的中間產物，使用者不會去碰它 |
+ * | `心電圖-人工判定.xlsx` | **這個資料夾的最上層** | 要使用者填的那一份，就該跟報表放在一起（見 `ekgReview.mjs`） |
+ *
+ * 人工判定清單放在最上層、不放進兩個子資料夾：它既不是給分隊的產出，
+ * 也不是靜態紀錄，而是**要動手填的東西**，混進任何一個子資料夾都會被忽略。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -40,11 +45,10 @@ const SUBFOLDERS = {
 };
 
 /**
- * 不收進包裝資料夾的檔案。
+ * 不收進兩個子資料夾的檔案。
  *
- * - **人工判定清單**：要填正本，不能有副本（見檔頭說明）
- * - **查核進度檔**：程式續跑用的中間產物，不是給人看的東西
- * - **操作備忘**：每次都會複製到 `out/report/`，不屬於某一個月份
+ * - **人工判定清單**：由 `ekgReview.mjs` 直接寫在這個資料夾的**最上層**（見檔頭說明）
+ * - **查核進度檔**：程式續跑用的中間產物，不是給人看的東西，留在 `out/internal/`
  */
 const EXCLUDED_PREFIXES = ['心電圖-人工判定', '心電圖查核進度'];
 
@@ -83,32 +87,31 @@ export function buildReadme(monthRange, copied) {
     ...copied.internal.map((name) => `    ・${name}`),
     '',
     '────────────────────────────────────────',
-    '還有一份東西**刻意沒有放進來**：',
+    '★ 要你動手的只有一個檔案，就在這個資料夾裡：',
     '',
     `  ${reviewFileName}`,
     '',
-    '  那是「程式判不出來、要你看完填回去」的清單。',
-    '  它必須留在原處，程式下次跑才讀得到：',
+    '  那是「程式判不出來、要你看完決定」的清單。',
     '',
-    `    tools\\ems-report\\out\\internal\\${reviewFileName}`,
+    '  怎麼填：',
+    '   1. 點開「檔案連結（點開看）」欄的網址，看原始檔案',
+    `   2. 在「你的判定」欄填「算」或「不算」（有下拉選單）`,
+    '   3. 存檔',
+    '   4. 再跑一次「月度報表輸出.bat」，月份輸入同一個月',
     '',
-    '  填法：點開檔案裡的「檔案連結」欄看原始檔案，',
-    '  在「你的判定」欄填「算」或「不算」，存檔，',
-    '  然後再跑一次「月度報表輸出.bat」、月份輸入同一個月。',
     '  程式會照你的判定重算，產出最終版本的數字。',
-    '',
-    '  （如果把判定填在這個資料夾裡的副本上，程式讀不到，等於沒填。',
-    '   所以這裡不放副本。）',
+    '  這個資料夾裡沒有這個檔案，就代表這個月沒有要你看的案件。',
     '',
     '────────────────────────────────────────',
-    '這一包是從 out/report/ 與 out/internal/ 複製出來的，',
-    '原檔都還在原處，照樣保留三個月。',
+    '這一包就是這個月的全部產出，不會在別的地方留副本。',
+    '（例外：程式續跑用的進度檔留在 out/internal/，你不必理它。）',
+    '這個資料夾與其他產出一樣保留三個月。',
     '',
   ].join('\r\n');
 }
 
 /**
- * 把這個月的產出複製進包裝資料夾。
+ * 把這個月的產出搬進包裝資料夾。
  *
  * **失敗不往外拋**：報表都已經產好了，包裝只是方便拿，
  * 不該因為一個複製失敗就讓整次執行被判定為失敗。
@@ -135,10 +138,13 @@ export async function bundleMonthlyOutputs(monthRange) {
     await fs.mkdir(target, { recursive: true });
     for (const fileName of wanted) {
       try {
+        // 先複製再刪原檔，不用 rename：Windows 上 rename 到已存在的檔案會失敗，
+        // 而重跑同一個月份時目的地本來就有上一次的檔案。
         await fs.copyFile(path.join(source.from, fileName), path.join(target, fileName));
+        await fs.rm(path.join(source.from, fileName), { force: true });
         copied[source.key].push(fileName);
       } catch (error) {
-        log.warn(`${fileName} 複製進月報表資料夾時失敗（原檔還在原處）：${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`${fileName} 收進月報表資料夾時失敗（原檔還在原處）：${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
@@ -158,6 +164,6 @@ export async function bundleMonthlyOutputs(monthRange) {
   log.ok(`　${path.relative(process.cwd(), folder)}`);
   log.info(`　├ ${SUBFOLDERS.report}：${copied.report.length} 個檔案（可以直接發出去）`);
   log.info(`　└ ${SUBFOLDERS.internal}：${copied.internal.length} 個檔案（**不要發給分隊**）`);
-  log.info('　資料夾裡的「請先看我.txt」寫了哪些能發、以及要去哪裡填人工判定。');
+  log.info('　資料夾裡的「請先看我.txt」寫了哪些能發，以及要填的是哪一個檔案。');
   return { folder, ...copied };
 }

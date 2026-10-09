@@ -54,7 +54,7 @@ test('人工判定清單與進度檔不收進來', () => {
 test('可發給分隊的與不可外發的分在兩個子資料夾，不混在一起', async (context) => {
   const root = await withTemporaryOut(context);
   await write(PATHS.reportDir, '2026-09-心電圖到院前傳輸率.xlsx');
-  await write(PATHS.reportDir, '2026-09-心電圖待人工確認.xlsx');
+  await write(PATHS.reportDir, '2026-09-到院前預警比率.xlsx');
   await write(PATHS.internalDir, '2026-09-心電圖逐案判定.xlsx');
   await write(PATHS.internalDir, '2026-09-心電圖執行報告.md');
 
@@ -65,21 +65,34 @@ test('可發給分隊的與不可外發的分在兩個子資料夾，不混在�
   const 可發 = await fs.readdir(path.join(folder, '可發給分隊'));
   const 不可發 = await fs.readdir(path.join(folder, '內部用-不要外發'));
 
-  assert.deepEqual(可發.sort(), ['2026-09-心電圖到院前傳輸率.xlsx', '2026-09-心電圖待人工確認.xlsx']);
+  assert.deepEqual(可發.sort(), ['2026-09-到院前預警比率.xlsx', '2026-09-心電圖到院前傳輸率.xlsx']);
   assert.deepEqual(不可發.sort(), ['2026-09-心電圖執行報告.md', '2026-09-心電圖逐案判定.xlsx']);
   // 逐案判定表絕不可以出現在「可發給分隊」那一邊。
   assert.ok(!可發.some((name) => name.includes('逐案判定')));
 });
 
-test('是複製不是搬移——原檔要留在原處', async (context) => {
-  // 搬走的話，續跑要用的進度檔與人工判定清單都不見了，
-  // 下個月重跑同一個月份就得從頭跑一兩個小時。
+test('是搬移不是複製——原處不可以留副本', async (context) => {
+  // 2026-10-10 改：原本是複製，於是同一份檔案在 out/report、out/internal 與
+  // 月報表資料夾各有一份，使用者的原話是「internal 裡面還是很亂」。
+  // 收納的目的就是「東西只在一個地方」，留副本等於沒收。
   await withTemporaryOut(context);
   await write(PATHS.reportDir, '2026-09-心電圖到院前傳輸率.xlsx');
   await bundleMonthlyOutputs(MONTH);
-  await assert.doesNotReject(
+  await assert.rejects(
     fs.access(path.join(PATHS.reportDir, '2026-09-心電圖到院前傳輸率.xlsx')),
+    '原檔應該已經被搬走',
   );
+});
+
+test('重跑同一個月份：目的地已經有上一次的檔案也要能蓋過去', async (context) => {
+  // Windows 上 rename 到已存在的檔案會失敗，所以實作是「先複製再刪原檔」。
+  const root = await withTemporaryOut(context);
+  await write(PATHS.reportDir, '2026-09-心電圖到院前傳輸率.xlsx');
+  await bundleMonthlyOutputs(MONTH);
+  await write(PATHS.reportDir, '2026-09-心電圖到院前傳輸率.xlsx');
+  await assert.doesNotReject(bundleMonthlyOutputs(MONTH));
+  const 可發 = await fs.readdir(path.join(root, bundleFolderName(MONTH), '可發給分隊'));
+  assert.deepEqual(可發, ['2026-09-心電圖到院前傳輸率.xlsx']);
 });
 
 test('一個檔案都沒有時不生出空資料夾', async (context) => {
@@ -109,9 +122,10 @@ test('說明檔先講哪些不能外發，再指路去填人工判定', async (c
   );
   assert.match(readme, /不要發給分隊/);
   assert.match(readme, /2026-09-心電圖逐案判定\.xlsx/, '要逐檔列出來，不能只說「有幾個檔案」');
-  // 最容易出錯的就是填錯那一份，所以說明檔一定要寫出正本的完整路徑。
-  assert.match(readme, /out\\internal\\2026-09-心電圖-人工判定\.xlsx/);
-  assert.match(readme, /程式讀不到，等於沒填/);
+  // 使用者實際踩到的就是「不知道要去開哪一個檔案」，所以要指名、而且講在顯眼的位置。
+  assert.match(readme, /★ 要你動手的只有一個檔案/);
+  assert.match(readme, /2026-09-心電圖-人工判定\.xlsx/);
+  assert.match(readme, /不會在別的地方留副本/);
 });
 
 test('說明檔用 CRLF，記事本開起來才不會全部黏成一行', () => {

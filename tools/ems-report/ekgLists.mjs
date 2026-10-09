@@ -1,16 +1,20 @@
 /**
  * 心電圖流程的**附帶清單**（正式報表之外，給人拿去追蹤用的）。
  *
- *   1. `心電圖待人工確認`　程式判定不出來的案件，等使用者自己看
- *   2. `有處置未勾選清冊`　有上傳心電圖、但急救處置漏勾的案件，**用來提醒同仁記得點處置**
- *   3. `有EKG處置無12導程清冊`　反過來的那一邊，只有診斷指令會產出（見 `ekgDiagnose.mjs`）
- *   4. `到院後補述理由清冊`　到院後才傳、但備註寫了原因而仍計入分子的案件（2026-09-21 加）
+ *   1. `有處置未勾選清冊`　有上傳心電圖、但急救處置漏勾的案件，**用來提醒同仁記得點處置**
+ *   2. `有EKG處置無12導程清冊`　反過來的那一邊，只有診斷指令會產出（見 `ekgDiagnose.mjs`）
+ *   3. `到院後補述理由清冊`　到院後才傳、但備註寫了原因而仍計入分子的案件（2026-09-21 加）
  *
- * 第 4 份落在 `out/internal/`（不是 `out/report/`）：裡面是同仁自己打的字，
+ * 第 3 份落在 `out/internal/`（不是 `out/report/`）：裡面是同仁自己打的字，
  * 不該跟要發給分隊的報表放在一起。
  *
  * **要使用者看完回填判定的那一份不在這裡**，在 `ekgReview.mjs`——
  * 那一份要讀得回來、而且有填過判定的列永遠不能刪，性質與這幾份完全不同。
+ *
+ * ⚠ 2026-10-10 移除了 `心電圖待人工確認`：它與人工判定清單列的是同一批案件，
+ *   名字又幾乎一樣，而且因為落在 `out/report/` 而被收進「可發給分隊」
+ *   ——使用者實際上開錯了檔案，還因為兩邊件數不同（3 件 vs 5 件）而更混亂。
+ *   人工判定清單是它的超集合（多了影音那幾件與可回填的判定欄），留一份就夠。
  *
  * 版面比照正式報表：標題與欄名兩列置中，欄寬**依實際內容**計算
  * （只看欄名的話，「案件日期」這種短欄名配上長日期就會被截掉）。
@@ -97,67 +101,6 @@ async function writeWorkbook(workbook, filePath, hint) {
   return filePath;
 }
 
-/** 待人工確認清單的欄位（順序即輸出順序）。 */
-const PENDING_COLUMNS = ['分隊', '案件日期', 'TEMSIS', '到院時間', '讀到的上傳時間', '判定', '說明'];
-
-/**
- * 組出待人工確認清單的活頁簿（不寫檔）。與寫檔分開，讓測試能在記憶體中檢查版面，
- * 而不會動到使用者 out/report/ 底下的檔案。
- *
- * @param {import('./ekgVerify.mjs').VerifyOutcome[]} pending 已篩出「判定不出來」的案件
- * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @returns {ExcelJS.Workbook}
- */
-export function buildPendingWorkbook(pending, monthRange) {
-  const rows = pending.map((item) => [
-    item.squad,
-    item.caseDate ?? '(讀不到)',
-    item.temsis,
-    item.arrival ?? '(讀不到)',
-    item.upload ?? '(讀不到)',
-    item.verdict,
-    item.reason,
-  ]);
-  const workbook = new ExcelJS.Workbook();
-  buildListSheet(
-    workbook,
-    '待人工確認',
-    `${monthRange.label}　心電圖待人工確認清冊`,
-    PENDING_COLUMNS,
-    rows,
-    { wideColumns: ['說明'] },
-  );
-  return workbook;
-}
-
-/**
- * 把「判定不出來」的案件另外列成一份清單。
- *
- * 使用者 2026-08-03 決定：這些案件先不計入分子，改由他自己人工判定。
- * **這次沒有待確認案件時，會把上一輪留下的舊檔刪掉**——不刪的話，
- * 一份寫著「5 件判定不出來」的舊清單會一直躺著，看起來像是這次的結果。
- *
- * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
- * @param {import('./dateRange.mjs').MonthRange} monthRange
- * @param {string} unknownVerdict 代表「無法判定」的字串
- * @returns {Promise<string|null>} 檔案路徑；沒有待確認案件時回傳 null
- */
-export async function writePendingList(outcomes, monthRange, unknownVerdict) {
-  const filePath = path.join(PATHS.reportDir, monthlyFileName(monthRange, PENDING_LIST_NAME, 'xlsx'));
-  const pending = outcomes.filter((item) => item.verdict === unknownVerdict);
-  if (pending.length === 0) {
-    const removed = await fs.rm(filePath, { force: true }).then(() => true).catch(() => false);
-    if (removed) log.info('這次沒有判定不出來的案件；先前留下的待人工確認清單已一併清掉。');
-    return null;
-  }
-
-  const workbook = buildPendingWorkbook(pending, monthRange);
-  await writeWorkbook(workbook, filePath, '請關閉該檔案後重新執行；查核結果已存進度檔，不需要重跑。');
-  log.warn(`有 ${pending.length} 件判定不出來，已另外列出：${path.relative(process.cwd(), filePath)}`);
-  log.info('這些案件不計入分子。請自行到系統核對後，決定要不要把它們算進去。');
-  return filePath;
-}
-
 /**
  * 兩份差集清冊的檔名與用語。
  *
@@ -165,9 +108,6 @@ export async function writePendingList(outcomes, monthRange, unknownVerdict) {
  * 不會出現「檔名是新的、大標還是舊的」。大標刻意只寫用途，
  * 不寫成一長串條件說明（使用者 2026-08-05 指定）。
  */
-/** 待人工確認清冊的檔名（月份會加在最前面，見 `fileNames.mjs`）。 */
-const PENDING_LIST_NAME = '心電圖待人工確認';
-
 const MISSING_PROCEDURE_LIST = {
   prefix: '心電圖-有處置未勾選清冊',
   heading: '有處置未勾選清冊',

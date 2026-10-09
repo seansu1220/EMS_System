@@ -78,7 +78,7 @@ import {
   progressFilePath,
   VERDICT,
 } from './ekgVerify.mjs';
-import { writePendingList, writeMissingProcedureList, writeRemarkList } from './ekgLists.mjs';
+import { writeMissingProcedureList, writeRemarkList } from './ekgLists.mjs';
 import {
   readDecisions,
   applyDecisions,
@@ -747,7 +747,6 @@ async function runEkgFlow(session, monthRange, options) {
   );
 
   let verifiedCounts = numerator.counts;
-  let pendingPath = null;
   /** 上一輪使用者填的人工判定（沒跑查核時為空）。 */
   let reviewDecisions = { decisions: new Map(), rows: new Map(), unreadable: [] };
   /** 逐案查核結果，逐案判定表要用（沒查核時為空陣列）。 */
@@ -811,9 +810,6 @@ async function runEkgFlow(session, monthRange, options) {
       // 只查一個分隊時，重點就是「哪一件被判成什麼」，逐件印出來比寫檔有用。
       printSquadOutcomes(verifyOutcomes, options.squad);
       incomplete = `只查核了「${options.squad}」的 ${cases.length} 件`;
-    } else {
-      // 待人工確認清單是整月的；只查一個分隊時寫出去會把整月那份蓋成殘缺版本。
-      pendingPath = await writePendingList(verifyOutcomes, monthRange, VERDICT.unknown);
     }
     if (result.aborted) {
       incomplete = '查核中途被中止（連續多件判定不出來）';
@@ -955,7 +951,6 @@ async function runEkgFlow(session, monthRange, options) {
   if (missingProcedurePath) {
     produced.push(`${path.basename(missingProcedurePath)}（**提醒同仁記得點處置**用）`);
   }
-  if (pendingPath) produced.push(`${path.basename(pendingPath)}（判定不出來，要你人工看）`);
   if (remarkListPath) {
     produced.push(`out/internal/${path.basename(remarkListPath)}（到院後補述的理由，**請你覆核**）`);
   }

@@ -133,7 +133,7 @@ npm run tool:ems -- unlock --temsis=T115xxxx,T115yyyy
 - **每完成一件就存檔**：中途關掉視窗、當機、網路斷線都不必從頭跑，再執行一次會接著跑。
 - **連續 5 件判定不出來就停**：畫面改版時每件都會失敗，早點停下來看錯誤訊息。
 - **看不懂就不猜**：判定不出來的案件不計入分子，另外列成
-  `out/report/YYYY-MM-心電圖待人工確認.xlsx` 交給你自己看。
+  `out/YYYY-MM-月報表/YYYY-MM-心電圖-人工判定.xlsx` 交給你自己看、並把判定填回來。
 
 > ⚠ 這個功能**還沒對實際系統跑過**（那兩個查詢欄位不在既有的探測結果裡）。
 > 第一次請先雙擊 `捷徑\不常用\心電圖傳輸統計-試跑5件.bat`，
@@ -177,7 +177,7 @@ npm run tool:ems -- unlock --temsis=T115xxxx,T115yyyy
 | `workbook.mjs`／`xlsxNode.mjs` | 匯出檔解析 |
 | `aggregate.mjs`／`adjustSheet.mjs`／`report.mjs` | 分隊彙總、增減試算表、報表輸出 |
 | `ekgScrape.mjs` | 心電圖流程的兩次查詢與匯出（定位 EKG 勾選框與心電圖下拉） |
-| `ekgVerify.mjs` | 逐案查核上傳時間、進度存檔、待人工確認清單 |
+| `ekgVerify.mjs` | 逐案查核上傳時間、進度存檔、分隊彙總 |
 | `timeParse.mjs` | 日期時間解析與先後比較（純函式） |
 | `unlock.mjs` | 解鎖流程（查 TEMSIS → 讀案號 → 查案件 → 定位目標） |
 | `caseFlow.mjs` | 解鎖與心電圖查核共用的案件層級頁面操作 |

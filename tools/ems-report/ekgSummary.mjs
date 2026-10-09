@@ -80,26 +80,32 @@ const unreadableMedia = (outcome) =>
 function buildTodoList(outcomes, appeals) {
   const todo = [];
 
-  const pending = outcomes.filter((item) => item.verdict === VERDICT.unknown);
-  if (pending.length > 0) {
-    todo.push(
-      `**${pending.length} 件判定不出來**，目前不計入分子（比率會略低於實際）。`
-        + `請開「心電圖-人工判定」那份，看完在「${REVIEW_COLUMN}」欄填`
-        + `「${DECISION.count}」或「${DECISION.skip}」，存檔後再跑一次這個月，`
-        + '程式就會照你的判定重算。（「心電圖待人工確認」那份是同一批案件的唯讀版本。）',
-    );
-  }
-
-  // `mediaReviews` 現在也收「靠照片辨識判成 12 導程、要人覆核」的那些，
-  // 這裡要的是**判不出來**的件數，因此把已判出來的排掉。
-  const mediaCount = outcomes.reduce(
-    (total, item) => total + unreadableMedia(item).length,
-    0,
+  /**
+   * ⚠ 「要你看的」**只講一條、而且用件數講**（2026-10-10 改）。
+   *
+   * 原本分成兩條：「3 件判定不出來」與「7 個案件影音檔讀不出內容」。
+   * 使用者實際的反應是「我看有七件可是檔案裡面只有三件」——
+   * 7 是**檔案數**、3 是其中一種案件數，而真正要他看的是**5 件案子**。
+   * 三個數字同時出現，沒有一個對得上他要開的那份清單。
+   *
+   * 因此改成：以**人工判定清單的件數**為主（那是他要動手的單位），
+   * 檔案數只當補充說明。
+   */
+  const needsReview = outcomes.filter(
+    (item) => item.verdict === VERDICT.unknown || unreadableMedia(item).length > 0,
   );
-  if (mediaCount > 0) {
+  if (needsReview.length > 0) {
+    const pending = needsReview.filter((item) => item.verdict === VERDICT.unknown).length;
+    const mediaFiles = needsReview.reduce((total, item) => total + unreadableMedia(item).length, 0);
+    const parts = [];
+    if (pending > 0) parts.push(`${pending} 件是程式判定不出來`);
+    if (mediaFiles > 0) parts.push(`${mediaFiles} 個案件影音檔讀不出內容（照片辨識認不出導程名稱）`);
     todo.push(
-      `有 **${mediaCount} 個「案件影音」檔程式讀不出內容**（照片辨識認不出導程名稱），目前不計入分子。`
-        + '明細見「心電圖-人工判定」那份（有檔案連結，點開就看得到）。',
+      `**有 ${needsReview.length} 件案子要你看**（${parts.join('；')}），目前都不計入分子。`
+        + '請開這個資料夾裡的「心電圖-人工判定」那份——**要你動手的就只有那一個檔案**，'
+        + `裡面正好 ${needsReview.length} 列。點「檔案連結」欄看原始檔案，`
+        + `在「${REVIEW_COLUMN}」欄填「${DECISION.count}」或「${DECISION.skip}」，`
+        + '存檔後再跑一次這個月，程式就會照你的判定重算。',
     );
   }
 
@@ -317,7 +323,7 @@ function buildPendingSection(outcomes) {
   const lines = [
     '## 判定不出來的案件',
     '',
-    '這些**不計入分子**。要逐案核對請開「心電圖待人工確認」那份（有完整 TEMSIS）。',
+    '這些**不計入分子**。要逐案核對請開「心電圖-人工判定」那份（有完整 TEMSIS 與檔案連結）。',
     '',
     '| 分隊 | 案件日期 | TEMSIS | 原因 |',
     '| --- | --- | --- | --- |',

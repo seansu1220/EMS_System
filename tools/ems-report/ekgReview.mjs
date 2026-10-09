@@ -7,7 +7,7 @@
  *
  * ## 怎麼用（整個來回）
  *
- *   1. 跑一次月報表 → 產出 `{YYYY-MM}-心電圖-人工判定.xlsx`
+ *   1. 跑一次月報表 → 在 `out/{YYYY-MM}-月報表/` 裡產出 `{YYYY-MM}-心電圖-人工判定.xlsx`
  *   2. 使用者開檔案，點「檔案連結」欄的網址看原始檔案，在**「你的判定」欄**填
  *      **`算`** 或 **`不算`**（有下拉選單，不必自己打字），存檔
  *   3. 再跑一次同一個月 → 程式讀回這個檔案，把判定套進統計，產出最終報表
@@ -27,13 +27,14 @@
  * 填「算」就計入分子、填「不算」就不計入，不管程式自己判成什麼。
  * 這是刻意的——會走到這一步，就是因為程式判不準，人看過的結論不該被程式推翻。
  *
- * ⚠ 個資：這份含完整 TEMSIS 與**檔案下載網址**，只落在 `out/internal/`
+ * ⚠ 個資：這份含完整 TEMSIS 與**檔案下載網址**，只落在 `out/` 底下
  *   （已 gitignore、不上雲），終端機只印末 4 碼與件數，不印網址。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PATHS } from './config.mjs';
+import { bundleFolderName } from './bundle.mjs';
 import { buildListSheet } from './ekgLists.mjs';
 import { MEDIA_KIND } from './ekgMedia.mjs';
 import { monthlyFileName } from './fileNames.mjs';
@@ -70,9 +71,42 @@ export function parseDecision(text) {
   return '看不懂';
 }
 
-/** 人工判定清單的檔案路徑。 */
+/**
+ * 人工判定清單的檔案路徑：**月報表資料夾的最上層**（2026-10-10 改）。
+ *
+ * 原本放 `out/internal/`，但那是「使用者不必理」的資料夾，
+ * 而這一份偏偏是**唯一要使用者動手**的檔案——放在那裡他找不到
+ * （實際發生過：使用者去開了名字很像的「心電圖待人工確認」，件數還不一樣）。
+ *
+ * 放在資料夾最上層、不放進 `可發給分隊/` 或 `內部用-不要外發/`：
+ * 它既不是給分隊的產出，也不是靜態紀錄，而是要動手填的東西，
+ * 混進任何一個子資料夾都會被忽略。
+ */
 export function reviewFilePath(monthRange) {
+  return path.join(
+    PATHS.outDir,
+    bundleFolderName(monthRange),
+    monthlyFileName(monthRange, REVIEW.prefix, 'xlsx'),
+  );
+}
+
+/**
+ * 2026-10-10 以前的位置。
+ *
+ * ⚠ **非讀它不可**：使用者可能已經在舊位置那一份填好判定了，
+ *   換了位置就直接當成沒填的話，他的工等於白做（而且畫面上看不出來）。
+ *   讀到舊檔之後，下一次寫檔會寫到新位置、並把舊檔刪掉（自然搬家）。
+ */
+function legacyReviewFilePath(monthRange) {
   return path.join(PATHS.internalDir, monthlyFileName(monthRange, REVIEW.prefix, 'xlsx'));
+}
+
+/** 實際讀得到的那一份：新位置優先，沒有才回舊位置。 */
+async function existingReviewFilePath(monthRange) {
+  for (const candidate of [reviewFilePath(monthRange), legacyReviewFilePath(monthRange)]) {
+    if (await fs.access(candidate).then(() => true).catch(() => false)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -106,11 +140,10 @@ function findHeaderRow(sheet) {
  */
 export async function readDecisions(monthRange) {
   const empty = { decisions: new Map(), rows: new Map(), unreadable: [] };
-  const filePath = reviewFilePath(monthRange);
   // 先自己確認檔案在不在：ExcelJS 對「檔案不存在」丟的是一般的 Error（沒有 ENOENT），
   // 靠 catch 分辨不出來，第一次跑就會冒出一句「讀不起來」的警告，看起來像出事了。
-  const exists = await fs.access(filePath).then(() => true).catch(() => false);
-  if (!exists) return empty;
+  const filePath = await existingReviewFilePath(monthRange);
+  if (!filePath) return empty;
 
   const workbook = new ExcelJS.Workbook();
   try {
@@ -302,7 +335,7 @@ export async function writeReviewList(rows, monthRange) {
     return { filePath: null, pending: 0 };
   }
 
-  await fs.mkdir(PATHS.internalDir, { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const workbook = new ExcelJS.Workbook();
   const sheet = buildListSheet(
     workbook,
@@ -334,6 +367,11 @@ export async function writeReviewList(rows, monthRange) {
     }
     throw error;
   }
+
+  // 寫到新位置成功之後才把舊位置那一份刪掉（自然搬家）。
+  // 順序反了的話，寫檔失敗就會連使用者填過的判定一起弄丟。
+  const legacy = legacyReviewFilePath(monthRange);
+  if (legacy !== filePath) await fs.rm(legacy, { force: true }).catch(() => {});
 
   const decisionIndex = REVIEW_COLUMNS.indexOf(REVIEW_COLUMN);
   const pending = rows.filter((row) => !row[decisionIndex]).length;

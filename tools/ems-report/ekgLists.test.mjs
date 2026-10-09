@@ -11,7 +11,6 @@ import assert from 'node:assert/strict';
 import {
   buildEkgOnlyWorkbook,
   buildMissingProcedureWorkbook,
-  buildPendingWorkbook,
   buildRemarkRows,
 } from './ekgLists.mjs';
 import { displayWidth } from './sheetLayout.mjs';
@@ -115,28 +114,7 @@ test('有EKG處置無12導程清冊：版面一樣，但用語不可以跟另一
   assert.equal(detail.getCell(3, 3).value, ROWS[0]['TEMSIS ID']);
 });
 
-test('待人工確認清冊：標題兩列置中，TEMSIS 也完整顯示', () => {
-  const workbook = buildPendingWorkbook(
-    [{
-      squad: '內壢分隊',
-      caseDate: '2026/07/09 03:11:00',
-      temsis: '2026070910100310380401',
-      arrival: null,
-      upload: '2026/07/09 03:40:00',
-      verdict: '無法判定',
-      reason: '讀不到送達醫院時間',
-    }],
-    MONTH,
-  );
-  const sheet = workbook.getWorksheet('待人工確認');
-  assert.equal(sheet.getCell(1, 1).value, `${MONTH.label}　心電圖待人工確認清冊`);
-  assert.deepEqual(sheet.getRow(2).getCell(1).alignment, { horizontal: 'center', vertical: 'middle' });
-  // 這份也是拿著回系統把案件叫出來用的，遮起來反而不好對（使用者 2026-08-06 決定）。
-  assert.equal(sheet.getCell(2, 3).value, 'TEMSIS');
-  assert.equal(sheet.getCell(3, 3).value, '2026070910100310380401');
-});
-
-// ── 2026-09-21 新增的兩份清單 ────────────────────────────────────
+// ── 2026-09-21 新增的清單 ──────────────────────────────────────
 
 const 到院後有補述 = {
   squad: '平鎮分隊',
