@@ -100,10 +100,11 @@ export function classifyFileRows(rows, config = EKG.verify) {
  *
  * @param {string} text 備註原文
  * @param {{minLength: number, autoPatterns: string[]}} [config]
- * @param {{trustAsHuman?: boolean}} [options]
+ * @param {{trustAsHuman?: boolean, fileType?: string}} [options]
  *   `trustAsHuman`＝這一列的檔案類型是「案件影音」，代表是人自己上傳、自己打的字
  *   （使用者 2026-09-21 說明：設備自動傳的一律落在「12導程心電圖」那個類型），
  *   因此不套用機器樣板過濾，只看長度。
+ *   `fileType`＝這一列的檔案類型，用來排掉「備註只是重複類型名稱」的情形。
  * @returns {boolean}
  */
 export function isMeaningfulRemark(text, config = EKG.verify.remark, options = {}) {
@@ -111,6 +112,17 @@ export function isMeaningfulRemark(text, config = EKG.verify.remark, options = {
   if (!original) return false;
 
   let residue = original;
+
+  /**
+   * ⚠ **備註只是把檔案類型再寫一次，不算補述**（2026-10-10 加）。
+   *
+   * 2026-09 實跑抓到一件：檔案類型是「案件影音」，備註也只寫「案件影音」
+   * ——那是在說「這是什麼」，不是「為什麼沒能在到院前上傳」，卻讓那一件補進了分子。
+   *
+   * 這個過濾連 `trustAsHuman` 的情形也要做：人自己打的字同樣可能只是複述類型。
+   */
+  if (options.fileType) residue = residue.split(String(options.fileType).trim()).join('');
+
   if (!options.trustAsHuman) {
     for (const pattern of config.autoPatterns ?? []) {
       if (!pattern) continue;

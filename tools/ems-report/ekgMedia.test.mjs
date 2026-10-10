@@ -292,3 +292,27 @@ test('生命徵象畫面的字不算機器字樣（HR、BPM 刻意不收）', ()
   // 收了的話，「只拍了監視器畫面、根本沒做 12 導程」的照片也會被算進去。
   assert.equal(looksLikeTwelveLead(normalizeOcrText('HR 88 BPM SpO2 99 V2 V3')).is, false);
 });
+
+// ── 備註只是複述檔案類型（2026-09 實跑抓到）──────────────────────
+
+test('備註只是把檔案類型再寫一次，不算補述', () => {
+  // 2026-09 實跑：檔案類型「案件影音」、備註也只寫「案件影音」，
+  // 那是在說「這是什麼」，不是「為什麼沒能在到院前上傳」，卻讓那件補進了分子。
+  assert.equal(
+    isMeaningfulRemark('案件影音', EKG.verify.remark, { trustAsHuman: true, fileType: '案件影音' }),
+    false,
+  );
+  // 這個過濾連「人自己打的字」也要做——人同樣可能只是複述類型。
+  assert.equal(
+    isMeaningfulRemark('12導程心電圖', EKG.verify.remark, { fileType: '12導程心電圖' }),
+    false,
+  );
+});
+
+test('複述類型之後還有寫原因的，照樣算補述', () => {
+  assert.equal(
+    isMeaningfulRemark('案件影音，現場無訊號改拍照補傳', EKG.verify.remark,
+      { trustAsHuman: true, fileType: '案件影音' }),
+    true,
+  );
+});

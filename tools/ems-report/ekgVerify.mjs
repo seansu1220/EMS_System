@@ -446,10 +446,18 @@ export function pickEarliestFileRow(rows, timeContext) {
   return earliest;
 }
 
-/** 一列檔案清單的描述（寫進理由、清單用）。檔名可能夾帶編號，故截短。 */
-const describeFileRow = (row) => `${row?.fileType || '(未填類型)'}／${
-  row?.links?.[0]?.text || '(沒有檔案連結)'
-}`.slice(0, 60);
+/**
+ * 一列檔案清單的描述（寫進理由、清單用）。
+ *
+ * ⚠ **只寫檔案類型，絕不寫檔名**（2026-10-10 修）。
+ *   2026-09 實跑印出了 `12導程心電圖／楊玉全心電圖.pdf`、`陳勝倉-心電圖.pdf`
+ *   ——**同仁是用患者姓名當檔名的**，於是姓名進了終端機、`last-run.log`、
+ *   補述理由清冊與執行報告。那是個資，而且 `maskCode` 只遮數字，遮不掉姓名。
+ *
+ *   檔名對「這個理由合不合理」的判斷毫無幫助，拿掉沒有任何損失；
+ *   要追哪一個檔案，逐案判定表上有完整 TEMSIS，回系統一查就有。
+ */
+const describeFileRow = (row) => String(row?.fileType || '(未填類型)').slice(0, 30);
 
 /**
  * 到院後才傳時，找出補述原因的那一句（使用者 2026-09-21 定的規則）。
@@ -472,7 +480,8 @@ function remarkOf(preferredRow, candidates = []) {
   for (const row of [preferredRow, ...candidates].filter(Boolean)) {
     const trustAsHuman = (EKG.verify.mediaMarkers ?? []).some((marker) =>
       String(row.fileType ?? '').includes(marker));
-    if (!isMeaningfulRemark(row.remark, EKG.verify.remark, { trustAsHuman })) continue;
+    const options = { trustAsHuman, fileType: row.fileType };
+    if (!isMeaningfulRemark(row.remark, EKG.verify.remark, options)) continue;
     return { text: String(row.remark).trim(), from: describeFileRow(row) };
   }
   return null;
