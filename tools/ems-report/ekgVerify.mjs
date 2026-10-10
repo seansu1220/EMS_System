@@ -59,7 +59,7 @@ import {
   isMeaningfulRemark,
 } from './ekgMedia.mjs';
 // 人工判定的兩個值。`ekgReview.mjs` 不反過來 import 本檔，因此沒有循環相依。
-import { DECISION as MANUAL_DECISION } from './ekgReview.mjs';
+import { DECISION as MANUAL_DECISION, savePhotoForReview } from './ekgReview.mjs';
 import { readImageText, closeOcr } from './ekgOcr.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
@@ -91,6 +91,7 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {string} kind 判讀結果（見 `MEDIA_KIND`）
  * @property {string} why 判斷依據
  * @property {string} remark 這一列的備註原文
+ * @property {string} [savedAs] 下載到「要你看的照片」資料夾之後的檔名（存不下來時沒有這個欄位）
  */
 
 /**
@@ -506,9 +507,11 @@ function remarkOf(preferredRow, candidates = []) {
  * @param {import('./pageFinder.mjs').FileRow[]} mediaRows
  * @param {{defaultYear?: number, defaultDate?: string}} timeContext
  * @param {import('./timeParse.mjs').ParsedTime|null} arrival 到院時間（判斷前後用）
+ * @param {{monthRange: object, squad: string, temsis: string, caseDate: string}} saveContext
+ *   判不出來的檔案要存去哪、檔名怎麼取（見 `savePhotoForReview`）
  * @returns {Promise<{confirmed: import('./pageFinder.mjs').FileRow[], reviews: MediaReview[]}>}
  */
-async function inspectMediaRows(context, mediaRows, timeContext, arrival) {
+async function inspectMediaRows(context, mediaRows, timeContext, arrival, saveContext) {
   const withTime = mediaRows
     .map((row) => ({ row, time: parseDateTime(row?.uploadTime, timeContext) }))
     .sort((left, right) => (left.time?.epochMs ?? Infinity) - (right.time?.epochMs ?? Infinity))
@@ -516,15 +519,24 @@ async function inspectMediaRows(context, mediaRows, timeContext, arrival) {
 
   const confirmed = [];
   const reviews = [];
-  for (const { row, time } of withTime) {
+  for (const [position, { row, time }] of withTime.entries()) {
     const link = row.links?.[0];
     const result = await inspectMediaFile(
       context.request,
       link ?? { text: '', href: '' },
       EKG.verify.media,
-      // 照片辨識要用到瀏覽器，因此用注入的方式給進去——`ekgMedia.mjs` 才能維持
-      // 「純函式 ＋ 一個 fetch」，不必為了測試而開瀏覽器。
-      { readImageText: (bytes, mimeType, shouldStop) => readImageText(context, bytes, mimeType, shouldStop) },
+      // 照片辨識與存檔都用注入的方式給進去——`ekgMedia.mjs` 才能維持
+      // 「純函式 ＋ 一個 fetch」，不必為了測試而開瀏覽器、也不碰檔案系統。
+      {
+        readImageText: (bytes, mimeType, shouldStop) => readImageText(context, bytes, mimeType, shouldStop),
+        onNeedsReview: (bytes, fileName) => savePhotoForReview(
+          saveContext.monthRange,
+          saveContext,
+          position + 1,
+          fileName,
+          bytes,
+        ),
+      },
     );
     // 檔名可能夾帶案件編號，畫面上只印類型與判讀結果。
     log.info(`　案件影音（${row.uploadTime || '時間不明'}）：${result.kind}——${result.why}`);
@@ -550,6 +562,7 @@ async function inspectMediaRows(context, mediaRows, timeContext, arrival) {
         kind: result.kind,
         why: result.why,
         remark: row.remark || '',
+        savedAs: result.savedAs,
       });
     }
   }
@@ -761,7 +774,12 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     && compareUploadToArrival(picked.time, arrival).verdict === VERDICT.before;
   if (EKG.verify.media.enabled && !alreadyBeforeArrival && files.media.length > 0) {
     log.info(`「案件影音」有 ${files.media.length} 個檔案，抓回來判讀是不是 12 導程`);
-    const media = await inspectMediaRows(context, files.media, localContext, arrival);
+    const media = await inspectMediaRows(context, files.media, localContext, arrival, {
+      monthRange: range,
+      squad: target.squad,
+      temsis: target.temsis,
+      caseDate,
+    });
     mediaReviews = media.reviews;
     remarkCandidates = [...remarkCandidates, ...media.confirmed];
     const mediaPick = pickEarliestFileRow(media.confirmed, localContext);

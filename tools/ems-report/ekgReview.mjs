@@ -45,9 +45,12 @@ const REVIEW = { prefix: '心電圖-人工判定', heading: '心電圖人工判�
 
 /** 欄位順序即輸出順序。 */
 export const REVIEW_COLUMNS = [
-  '分隊', '案件日期', 'TEMSIS', '為什麼要你看', '到院時間', '上傳時間',
-  '相關檔案', '程式判讀', '判斷依據', '檔案連結（點開看）', '你的判定', '你的備註',
+  '處理狀態', '分隊', '案件日期', 'TEMSIS', '為什麼要你看', '到院時間', '上傳時間',
+  '要看的檔案（已下載）', '程式判讀', '判斷依據', '你的判定', '你的備註',
 ];
+
+/** 「處理狀態」欄的兩個值。填過判定的就不必再看了。 */
+const STATUS = { todo: '★ 還沒填', done: '已填，不用再看' };
 
 /** 使用者要填的那一欄，以及兩個合法的值。 */
 export const REVIEW_COLUMN = '你的判定';
@@ -99,6 +102,63 @@ export function reviewFilePath(monthRange) {
  */
 function legacyReviewFilePath(monthRange) {
   return path.join(PATHS.internalDir, monthlyFileName(monthRange, REVIEW.prefix, 'xlsx'));
+}
+
+/**
+ * 要人看的檔案**實際下載下來**放哪裡（2026-10-10 加）。
+ *
+ * 使用者原話：「人工判定的圖片部分，我希望直接幫我載下來，
+ * 因為你給的那個網址點進去不會有圖片，而且也沒辦法直接點。」
+ *
+ * 兩個問題都是真的：
+ *   1. 那串網址要**帶著登入 Cookie** 才下載得到，直接貼進瀏覽器是空的
+ *   2. 它在 Excel 裡是純文字，不是超連結，點不動
+ *
+ * 既然程式查核當下本來就把檔案抓下來判讀過了，順手存一份最省事。
+ *
+ * ⚠ 個資：存下來的是**患者的心電圖影像**。因此：
+ *   - 只存「要人看的」那幾個（判不出內容、讀取失敗），不是全部影音
+ *   - 放在月報表資料夾裡（已 gitignore、不上雲），跟著資料夾一起受保留期限管
+ *   - 檔名只用分隊／日期／TEMSIS 末 4 碼，**不沿用原始檔名**
+ *     （實跑看過同仁拿患者姓名當檔名）
+ */
+export function reviewPhotoDir(monthRange) {
+  return path.join(PATHS.outDir, bundleFolderName(monthRange), PHOTO_FOLDER);
+}
+
+/** 放下載檔案的子資料夾名稱。 */
+const PHOTO_FOLDER = '要你看的照片';
+
+/**
+ * 把一個要人看的檔案存下來。
+ *
+ * 檔名**固定可重現**（同一件案子的同一個序號永遠同名），重跑時直接覆蓋，
+ * 不會每跑一次就多一份。
+ *
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {{squad: string, temsis: string, caseDate?: string}} caseInfo
+ * @param {number} index 這一件案子的第幾個檔案（1 起算）
+ * @param {string} originalName 原始檔名（只拿副檔名用）
+ * @param {Buffer|Uint8Array} bytes
+ * @returns {Promise<string|null>} 存好的檔名；失敗時回傳 null
+ */
+export async function savePhotoForReview(monthRange, caseInfo, index, originalName, bytes) {
+  const extension = (String(originalName).split(/[?#]/)[0].split('.').pop() || 'bin')
+    .toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+  // 日期取月日即可，檔名不必長；TEMSIS 只取末 4 碼（與畫面上同一個標準）。
+  const day = String(caseInfo.caseDate ?? '').replace(/\D/g, '').slice(4, 8) || '0000';
+  const tail = String(caseInfo.temsis ?? '').slice(-4) || '0000';
+  const fileName = `${caseInfo.squad || '未知分隊'}-${day}-${tail}-${index}.${extension}`;
+
+  try {
+    const directory = reviewPhotoDir(monthRange);
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, fileName), bytes);
+    return fileName;
+  } catch (error) {
+    log.warn(`要你看的檔案存不下來（清單上會改放網址）：${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
 }
 
 /** 實際讀得到的那一份：新位置優先，沒有才回舊位置。 */
@@ -275,7 +335,15 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
       reasons.push(`案件影音有 ${recognized.length} 個檔案靠照片辨識判成 12 導程，請覆核`);
     }
 
+    /**
+     * 「要看的檔案」寫**下載下來的檔名**，不寫網址（2026-10-10 改）。
+     * 那串網址要帶著登入 Cookie 才下載得到、在 Excel 裡又是純文字點不動，
+     * 使用者實際點過一次是空的。存不下來時才退回放網址。
+     */
+    const files = reviews.map((item) => item.savedAs || item.url || item.fileName);
+
     rows.push([
+      STATUS.todo,
       outcome.squad,
       outcome.caseDate || '(讀不到)',
       outcome.temsis,
@@ -283,10 +351,9 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
       outcome.arrival || '(讀不到)',
       // 影音那幾列各有自己的上傳時間，逐案判定的上傳時間可能是別的來源，兩個都給。
       outcome.upload || reviews.map((item) => item.uploadTime).filter(Boolean).join('、') || '(讀不到)',
-      reviews.map((item) => item.fileName).join('\n') || '(沒有檔案)',
+      files.join('\n') || '(沒有檔案)',
       reviews.map((item) => item.kind).join('\n') || outcome.verdict,
       reviews.map((item) => item.why).join('\n') || outcome.reason,
-      reviews.map((item) => item.url).filter(Boolean).join('\n'),
       '',
       '',
     ]);
@@ -321,6 +388,7 @@ export function mergeReviewRows(freshRows, previousRows, decisions) {
     return copy;
   });
 
+  const statusIndex = REVIEW_COLUMNS.indexOf('處理狀態');
   const kept = new Set(freshRows.map((row) => row[temsisIndex]));
   for (const [temsis, previous] of previousRows) {
     if (kept.has(temsis) || !decisions.has(temsis)) continue;
@@ -329,10 +397,23 @@ export function mergeReviewRows(freshRows, previousRows, decisions) {
     merged.push(carried);
   }
 
+  /**
+   * 填過判定的那幾列標成「已填」。
+   *
+   * ⚠ 2026-10-10 加。使用者填完五件、再跑一次之後問「為什麼還是有五個人工判定案件」
+   * ——判定其實全部生效了，但那幾列還留在檔案裡（刻意的，判定要留著），
+   * 而每一列的「為什麼要你看」仍寫著「程式判定不出來」，看起來像還沒做完。
+   * 加一欄直接寫狀態，開檔案第一眼就分得出哪幾列還要動手。
+   */
+  const squadIndex = REVIEW_COLUMNS.indexOf('分隊');
+  for (const row of merged) {
+    row[statusIndex] = row[decisionIndex] ? STATUS.done : STATUS.todo;
+  }
+
   // 還沒填判定的排前面：使用者開檔案要做的事就是填那些。
   return merged.sort(
-    (left, right) => String(left[decisionIndex] || '').localeCompare(String(right[decisionIndex] || ''))
-      || String(left[0]).localeCompare(String(right[0]), 'zh-Hant'),
+    (left, right) => String(left[statusIndex]).localeCompare(String(right[statusIndex]), 'zh-Hant')
+      || String(left[squadIndex]).localeCompare(String(right[squadIndex]), 'zh-Hant'),
   );
 }
 
@@ -356,13 +437,20 @@ export async function writeReviewList(rows, monthRange) {
 
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const workbook = new ExcelJS.Workbook();
+  // 大標直接寫「還有幾件要填」：使用者開檔案第一眼要知道的就是這個。
+  const todoCount = rows.filter((row) => !row[REVIEW_COLUMNS.indexOf(REVIEW_COLUMN)]).length;
+  const title = todoCount === 0
+    ? `${monthRange.label}　${REVIEW.heading}　←　全部都填好了，不用再動`
+    : `${monthRange.label}　${REVIEW.heading}　←　還有 ${todoCount} 件要填（共 ${rows.length} 件）`
+      + `：在「${REVIEW_COLUMN}」欄填「${DECISION.count}」或「${DECISION.skip}」，存檔後再跑一次`;
+
   const sheet = buildListSheet(
     workbook,
     '人工判定',
-    `${monthRange.label}　${REVIEW.heading}　←　看完後在「${REVIEW_COLUMN}」欄填「${DECISION.count}」或「${DECISION.skip}」，存檔後再跑一次`,
+    title,
     REVIEW_COLUMNS,
     rows,
-    { wideColumns: ['為什麼要你看', '判斷依據', '檔案連結（點開看）', '你的備註'] },
+    { wideColumns: ['為什麼要你看', '判斷依據', '要看的檔案（已下載）', '你的備註'] },
   );
 
   // 下拉選單：這一欄是整條來回的關鍵，打錯字就整列失效，能點就不要讓人打字。
@@ -392,8 +480,9 @@ export async function writeReviewList(rows, monthRange) {
   const legacy = legacyReviewFilePath(monthRange);
   if (legacy !== filePath) await fs.rm(legacy, { force: true }).catch(() => {});
 
-  const decisionIndex = REVIEW_COLUMNS.indexOf(REVIEW_COLUMN);
-  const pending = rows.filter((row) => !row[decisionIndex]).length;
-  log.ok(`人工判定清單已寫出：${path.relative(process.cwd(), filePath)}（共 ${rows.length} 件）`);
-  return { filePath, pending };
+  log.ok(
+    `人工判定清單已寫出：${path.relative(process.cwd(), filePath)}`
+      + `（共 ${rows.length} 件，${todoCount === 0 ? '**全部都填好了**' : `其中 ${todoCount} 件還沒填`}）`,
+  );
+  return { filePath, pending: todoCount };
 }

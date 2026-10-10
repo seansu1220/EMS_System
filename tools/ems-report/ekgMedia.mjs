@@ -333,10 +333,12 @@ async function inspectImage(bytes, fileName, mimeType, config, readImageText) {
  * @param {import('playwright-core').APIRequestContext} request `session.context.request`
  * @param {{text: string, href: string}} link 檔案連結（絕對網址）
  * @param {typeof EKG.verify.media} [config]
- * @param {{readImageText?: Function}} [options]
+ * @param {{readImageText?: Function, onNeedsReview?: Function}} [options]
  *   `readImageText`＝照片辨識函式（由 `ekgOcr.mjs` 注入）。
  *   刻意用注入而不是直接 import：那一支要用到瀏覽器，
  *   直接相依會讓這裡的純函式測試也得開瀏覽器。
+ *   `onNeedsReview(bytes, fileName)`＝判不出來時把檔案交出去存檔，
+ *   回傳存好的檔名。同樣用注入：本檔不碰檔案系統。
  * @returns {Promise<{kind: string, why: string}>}
  */
 export async function inspectMediaFile(request, link, config = EKG.verify.media, options = {}) {
@@ -381,13 +383,32 @@ export async function inspectMediaFile(request, link, config = EKG.verify.media,
     if (bytes.length > config.maxBytes) {
       return { kind: MEDIA_KIND.notEcg, why: '檔案超過大小上限，當成影音不判讀' };
     }
-    if (handling === 'image') {
-      const mimeType = mimeTypeOf(fileName, response.headers()['content-type']);
-      return inspectImage(bytes, fileName, mimeType, config, options.readImageText);
+    const result = handling === 'image'
+      ? await inspectImage(
+        bytes,
+        fileName,
+        mimeTypeOf(fileName, response.headers()['content-type']),
+        config,
+        options.readImageText,
+      )
+      : await (async () => {
+        const verdict = looksLikeTwelveLead(await bytesToText(bytes, fileName), config);
+        return { kind: verdict.is ? MEDIA_KIND.twelveLead : MEDIA_KIND.notEcg, why: verdict.why };
+      })();
+
+    /**
+     * 判不出來的檔案**順手存一份給使用者看**（2026-10-10 加）。
+     *
+     * 使用者原話：「人工判定的圖片部分，我希望直接幫我載下來，
+     * 因為你給的那個網址點進去不會有圖片，而且也沒辦法直接點。」
+     * 反正位元組已經在手上了，交給呼叫端決定要不要落檔最省事
+     * ——本檔仍然不碰檔案系統，維持「純函式 ＋ 一個 fetch」。
+     */
+    if (result.kind === MEDIA_KIND.unreadable || result.kind === MEDIA_KIND.failed) {
+      const savedAs = await options.onNeedsReview?.(bytes, fileName);
+      if (savedAs) return { ...result, savedAs };
     }
-    const text = await bytesToText(bytes, fileName);
-    const verdict = looksLikeTwelveLead(text, config);
-    return { kind: verdict.is ? MEDIA_KIND.twelveLead : MEDIA_KIND.notEcg, why: verdict.why };
+    return result;
   } catch (error) {
     // 讀不動不代表不是心電圖（可能是加密 PDF、壞檔）。**回「讀取失敗」而不是「不是」**，
     // 這樣它會進人工判定清單，而不是默默被當成沒做。

@@ -39,6 +39,7 @@ const outcome = (temsis, extra = {}) => ({
 });
 
 const mediaReview = (extra = {}) => ({
+  savedAs: '平鎮分隊-0906-0201-1.jpg',
   fileName: 'IMG_0001.jpg',
   url: 'https://emsdt.tyfd.gov.tw/AppFileExplorer/download/2026/07/9/IMG_0001.jpg',
   uploadTime: '2026/07/06 12:40:45',
@@ -108,8 +109,11 @@ test('要人看的兩種案件都會進清單，同一件只出一列', () => {
   assert.match(String(at(rows[0], '為什麼要你看')), /判定不出來/);
   assert.match(String(at(rows[1], '為什麼要你看')), /2 個檔案/);
   // 一件出好幾列的話，使用者可以在同一件上填出互相矛盾的答案。
-  assert.equal(at(rows[1], '相關檔案').split('\n').length, 2, '同一件的多個檔案放在同一格');
-  assert.match(String(at(rows[1], '檔案連結（點開看）')), /^https:\/\//);
+  const 檔案欄 = String(at(rows[1], '要看的檔案（已下載）'));
+  assert.equal(檔案欄.split(String.fromCharCode(10)).length, 2, '同一件的多個檔案放在同一格');
+  // 2026-10-10 改：寫下載下來的檔名，不寫網址——那串網址要帶登入 Cookie
+  //   才下載得到、在 Excel 裡又是純文字點不動，使用者實際點過一次是空的。
+  assert.match(String(at(rows[1], '要看的檔案（已下載）')), /平鎮分隊-/);
 });
 
 test('合併：這次還要看的案件，沿用上次填的判定與備註', () => {
@@ -141,13 +145,23 @@ test('合併：上次沒填判定、這次也不用看的案件，就不必留�
   assert.deepEqual(mergeReviewRows([], previous, new Map()), []);
 });
 
-test('沒填的排前面：使用者開檔案要做的事就是填那些', () => {
-  const rows = [
-    ['甲隊', '', 'T-1', '', '', '', '', '', '', '', DECISION.count, ''],
-    ['乙隊', '', 'T-2', '', '', '', '', '', '', '', '', ''],
-  ];
-  const merged = mergeReviewRows(rows, new Map(), new Map());
-  assert.equal(at(merged[0], 'TEMSIS'), 'T-2');
+test('沒填的排前面，而且填過的要標成「已填」', () => {
+  // 2026-10-10 加「處理狀態」欄：使用者填完五件再跑一次之後問
+  // 「為什麼還是有五個人工判定案件」——判定其實全部生效了，
+  // 但那幾列還留在檔案裡（刻意的，判定要留著），看起來像還沒做完。
+  const row = (squad, temsis, decision) => REVIEW_COLUMNS.map((name) => {
+    if (name === '分隊') return squad;
+    if (name === 'TEMSIS') return temsis;
+    if (name === REVIEW_COLUMN) return decision;
+    return '';
+  });
+  const merged = mergeReviewRows(
+    [row('甲隊', 'T-1', DECISION.count), row('乙隊', 'T-2', '')], new Map(), new Map(),
+  );
+
+  assert.equal(at(merged[0], 'TEMSIS'), 'T-2', '還沒填的要排在最前面');
+  assert.match(String(at(merged[0], '處理狀態')), /還沒填/);
+  assert.match(String(at(merged[1], '處理狀態')), /已填/);
 });
 
 test('整條來回：寫出去的檔案，填了判定之後讀得回來', async (context) => {
