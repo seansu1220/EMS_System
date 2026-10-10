@@ -894,7 +894,7 @@ async function runEkgFlow(session, monthRange, options) {
     // 覆蓋等於把使用者填的東西丟了。
     const reviewList = await writeReviewList(
       mergeReviewRows(
-        buildReviewRows(verifyOutcomes, VERDICT.unknown),
+        buildReviewRows(verifyOutcomes, VERDICT.unknown, countsAsNumerator),
         reviewDecisions.rows,
         reviewDecisions.decisions,
       ),

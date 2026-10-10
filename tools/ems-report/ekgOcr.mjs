@@ -24,6 +24,11 @@
  * 門檻用**百分位**而不是固定亮度：固定門檻碰到曝光不足或過曝的照片就整張全黑或全白，
  * 而「最暗的 N% 像素當成墨水」會自動跟著照片的亮度走。
  *
+ * ⚠ **亮字配暗底的照片要反過來取**（2026-10-10 實測）。翻拍 ZOLL 機器螢幕
+ *   是綠字／白字配深藍底，「取最暗的像素」剛好把字丟掉、只留背景
+ *   ——使用者提供的三張這種照片，原本一張都認不出來。
+ *   因此 `passes` 裡同時有正常極性與反相兩種輪次。
+ *
  * ⚠ 百分位只在**「不是紙」的像素**上算（亮度 ≤ `paperLuminanceFrom`）。
  *   這一條是成敗關鍵：在整張圖上算的話，同一張心電圖「拍得緊」與
  *   「四周留很多白」會得到完全不同的門檻，後者一個導程名稱都認不出來。
@@ -75,11 +80,19 @@ async function getWorker() {
     }
     const { ocr } = EKG.verify.media;
     log.info(`準備照片辨識（第一次執行會下載約 4 MB 的語言資料到 ${ocr.cacheDir}）`);
-    return tesseract.createWorker(ocr.language, 1, {
+    const worker = await tesseract.createWorker(ocr.language, 1, {
       cachePath: path.join(PATHS.toolDir, ocr.cacheDir),
       // Tesseract 自己的進度訊息很吵（每張圖幾十行），這支流程已經有自己的紀錄。
       logger: () => {},
     });
+    /**
+     * ⚠ **版面分析一定要設成「稀疏文字」**（2026-10-10 實測）。
+     * 導程名稱是散落在波形旁邊的孤立短字，不是一段一段的文章；
+     * 預設的自動版面分析會試著把它們拼成段落而整組讀丟。
+     * 同一張翻拍照片，換成稀疏文字之後從「一個都認不出」變成認出五、六個。
+     */
+    await worker.setParameters({ tessedit_pageseg_mode: String(ocr.pageSegMode) });
+    return worker;
   })().catch((error) => {
     log.warn(`照片辨識準備失敗（照片會改列給你自己看）：${error instanceof Error ? error.message : String(error)}`);
     return null;
@@ -106,13 +119,15 @@ export async function closeOcr() {
  *
  * ⚠ 參數包成一個物件：`page.evaluate()` 只餵一個參數給頁面端的函式。
  *
- * @param {{dataUrl: string, percentileOfInk: number, dropColor: boolean, maxEdge: number,
- *   paperFrom: number, saturationFrom: number}} params
+ * @param {{dataUrl: string, percentileOfInk: number, invert: boolean, targetEdge: number,
+ *   maxUpscale: number, paperFrom: number, screenDarkTo: number}} params
  * @returns {Promise<string|null>} `data:image/png;base64,…`；圖片讀不進來時回傳 null
  */
 function thresholdInPage(params) {
   return (async () => {
-    const { dataUrl, percentileOfInk, dropColor, maxEdge, paperFrom, saturationFrom } = params;
+    const {
+      dataUrl, percentileOfInk, invert, targetEdge, maxUpscale, paperFrom, screenDarkTo,
+    } = params;
     const image = new Image();
     image.src = dataUrl;
     try {
@@ -121,8 +136,9 @@ function thresholdInPage(params) {
       return null; // 壞檔、或瀏覽器不認得這種格式（例如 heic）
     }
 
-    // 縮圖：手機照片動輒 4000×3000，OCR 一張要十幾秒。
-    const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
+    // 縮放到固定長邊：手機照片要縮小（OCR 才跑得快），
+    // 翻拍螢幕的照片要**放大**（螢幕上的導程名稱只有十幾像素高，不放大讀不到）。
+    const scale = Math.min(maxUpscale, targetEdge / Math.max(image.width, image.height));
     const width = Math.max(1, Math.round(image.width * scale));
     const height = Math.max(1, Math.round(image.height * scale));
 
@@ -138,33 +154,44 @@ function thresholdInPage(params) {
     const histogram = new Uint32Array(256);
     const luminance = new Uint8Array(data.length / 4);
     for (let offset = 0, index = 0; offset < data.length; offset += 4, index += 1) {
-      const red = data[offset];
-      const green = data[offset + 1];
-      const blue = data[offset + 2];
-      // 有顏色的（心電圖紙的粉紅格線）直接當成紙，不讓它參與門檻計算。
-      const colored = Math.max(red, green, blue) - Math.min(red, green, blue) >= saturationFrom;
-      const value = (dropColor && colored) ? 255 : (0.299 * red + 0.587 * green + 0.114 * blue) | 0;
+      const value = (0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2]) | 0;
       luminance[index] = value;
       histogram[value] += 1;
     }
 
-    // ⚠ 百分位只在「不是紙」的像素上算。在整張圖上算的話，
+    // ⚠ 百分位只在「不是背景」的像素上算。在整張圖上算的話，
     //   同一張心電圖拍得緊或四周留很多白會得到完全不同的門檻（2026-09-21 實測）。
+    //   反相時背景是暗的，因此排掉的是最暗那一段。
     let inkCandidates = 0;
-    for (let value = 0; value <= paperFrom; value += 1) inkCandidates += histogram[value];
-    const wanted = Math.max(1, Math.floor((inkCandidates * percentileOfInk) / 100));
-    let accumulated = 0;
-    let cut = 0;
-    for (let value = 0; value < 256; value += 1) {
-      accumulated += histogram[value];
-      if (accumulated >= wanted) {
-        cut = value;
-        break;
+    let cut = invert ? 255 : 0;
+    if (invert) {
+      for (let value = screenDarkTo; value < 256; value += 1) inkCandidates += histogram[value];
+      const wanted = Math.max(1, Math.floor((inkCandidates * percentileOfInk) / 100));
+      let accumulated = 0;
+      for (let value = 255; value >= 0; value -= 1) {
+        accumulated += histogram[value];
+        if (accumulated >= wanted) {
+          cut = value;
+          break;
+        }
+      }
+    } else {
+      for (let value = 0; value <= paperFrom; value += 1) inkCandidates += histogram[value];
+      const wanted = Math.max(1, Math.floor((inkCandidates * percentileOfInk) / 100));
+      let accumulated = 0;
+      for (let value = 0; value < 256; value += 1) {
+        accumulated += histogram[value];
+        if (accumulated >= wanted) {
+          cut = value;
+          break;
+        }
       }
     }
 
     for (let offset = 0, index = 0; offset < data.length; offset += 4, index += 1) {
-      const value = luminance[index] <= cut ? 0 : 255;
+      // 不論正相反相，輸出一律是**黑字白底**——Tesseract 只認得這一種。
+      const isInk = invert ? luminance[index] >= cut : luminance[index] <= cut;
+      const value = isInk ? 0 : 255;
       data[offset] = value;
       data[offset + 1] = value;
       data[offset + 2] = value;
@@ -182,7 +209,7 @@ function thresholdInPage(params) {
  *
  * @param {import('playwright-core').BrowserContext} context
  * @param {string} dataUrl
- * @param {{dropColor: boolean, percentileOfInk: number}} pass 這一輪的參數
+ * @param {{invert: boolean, percentileOfInk: number}} pass 這一輪的參數
  * @returns {Promise<Buffer|null>}
  */
 async function toMonochromePng(context, dataUrl, pass) {
@@ -193,10 +220,11 @@ async function toMonochromePng(context, dataUrl, pass) {
     const result = await page.evaluate(thresholdInPage, {
       dataUrl,
       percentileOfInk: pass.percentileOfInk,
-      dropColor: pass.dropColor,
-      maxEdge: ocr.maxEdgePixels,
+      invert: Boolean(pass.invert),
+      targetEdge: ocr.targetEdgePixels,
+      maxUpscale: ocr.maxUpscale,
       paperFrom: ocr.paperLuminanceFrom,
-      saturationFrom: ocr.colorSaturationFrom,
+      screenDarkTo: ocr.screenDarkTo,
     });
     return result ? Buffer.from(String(result).split(',')[1], 'base64') : null;
   } finally {
@@ -231,7 +259,7 @@ export async function readImageText(context, bytes, mimeType, shouldStop = () =>
 
   for (const pass of ocr.passes) {
     rounds += 1;
-    const label = `${pass.dropColor ? '去色' : '不去色'} ${pass.percentileOfInk}%`;
+    const label = `${pass.invert ? '反相' : '正相'} ${pass.percentileOfInk}%`;
     const png = await toMonochromePng(context, dataUrl, pass).catch((error) => {
       log.info(`　照片轉黑白失敗（${label}）：${error instanceof Error ? error.message : String(error)}`);
       return null;

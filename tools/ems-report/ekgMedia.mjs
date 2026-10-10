@@ -159,11 +159,36 @@ export function looksLikeTwelveLead(text, config = EKG.verify.media) {
   if (hits.length >= config.minLeadMarkers) {
     return { is: true, why: `檔案內容出現 ${hits.length} 個導程名稱（${hits.join('、')}）` };
   }
+
+  /**
+   * **機器／心電圖紙的字樣 ＋ 較少的導程名稱**也算數（使用者 2026-10-10 建議）。
+   *
+   * 翻拍螢幕的照片，波形旁邊那些導程名稱又小又糊，常常只讀得到兩三個；
+   * 但畫面上的 `ZOLL`、紙上的 `1.0 cm/mV` 這類字又大又清楚。
+   * 「這是一台心電圖機」本身就是很強的證據，導程名稱只是用來確認
+   * 它顯示的是 12 導程，而不是單一導程的心律監測。
+   */
+  const devices = (config.deviceMarkers ?? []).filter((marker) => {
+    const wanted = String(marker ?? '').replace(/\s+/g, '').toUpperCase();
+    return wanted !== '' && squeezed.includes(wanted);
+  });
+  if (devices.length > 0 && hits.length >= config.minLeadMarkersWithDevice) {
+    return {
+      is: true,
+      why: `檔案內容出現心電圖機器字樣（${devices.join('、')}）`
+        + ` ＋ ${hits.length} 個導程名稱（${hits.join('、')}）`,
+    };
+  }
+
+  const found = [
+    hits.length > 0 ? `${hits.length} 個導程名稱（${hits.join('、')}）` : '',
+    devices.length > 0 ? `機器字樣（${devices.join('、')}）` : '',
+  ].filter(Boolean).join('、');
   return {
     is: false,
-    why: hits.length > 0
-      ? `只出現 ${hits.length} 個導程名稱（${hits.join('、')}），不足 ${config.minLeadMarkers} 個，不能斷定`
-      : '檔案內容沒有任何 12 導程或導程名稱的字樣',
+    why: found
+      ? `只讀到 ${found}，不足以斷定是 12 導程`
+      : '檔案內容沒有任何 12 導程、導程名稱或心電圖機器的字樣',
   };
 }
 

@@ -235,19 +235,38 @@ export function applyDecisions(outcomes, decisions) {
  *
  * @param {import('./ekgVerify.mjs').VerifyOutcome[]} outcomes
  * @param {string} unknownVerdict 代表「無法判定」的字串
+ * @param {(outcome: import('./ekgVerify.mjs').VerifyOutcome) => boolean} [isCounted]
+ *   這一件算不算進分子（傳 `ekgVerify.countsAsNumerator`）。
+ *   本檔不直接 import 它，因為 `ekgVerify` 會 import 本檔取用 `DECISION`，直接相依會繞圈。
  * @returns {string[][]} 與 {@link REVIEW_COLUMNS} 同順序（最後兩欄留白給使用者填）
  */
-export function buildReviewRows(outcomes, unknownVerdict) {
+export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => false) {
   const rows = [];
   for (const outcome of outcomes ?? []) {
     const reviews = outcome.mediaReviews ?? [];
     const isUnknown = outcome.verdict === unknownVerdict;
-    if (!isUnknown && reviews.length === 0) continue;
 
     // 影音檔分兩種：判不出內容的（請他點開決定）、靠照片辨識判出來的（請他覆核）。
     // 兩種的「要你做什麼」不一樣，寫在同一句會讓人不知道該不該動手。
-    const unreadable = reviews.filter((item) => item.kind !== MEDIA_KIND.twelveLead);
     const recognized = reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead);
+
+    /**
+     * ⚠ **這一件已經算進分子了，判不出內容的那些檔案就不必再列**
+     * （使用者 2026-10-10 指正：「只要有一個判讀得出來確定是 12 導程心電圖，
+     * 那就可以上傳了」）。
+     *
+     * 理由：那些檔案唯一可能的影響，是讓這一件**被算進分子**——
+     * 而它已經算進去了，看了也不會改變任何數字，只是白白佔掉清單篇幅。
+     * 舊版不管算沒算進去一律列出來，於是清單裡混著一堆「看了也沒用」的列。
+     *
+     * 靠照片辨識判出來的那幾件**照樣要列**：那是程式從像素猜的，
+     * 使用者有可能說「猜錯了」而把它改成不算。
+     */
+    const unreadable = isCounted(outcome)
+      ? []
+      : reviews.filter((item) => item.kind !== MEDIA_KIND.twelveLead);
+
+    if (!isUnknown && unreadable.length === 0 && recognized.length === 0) continue;
 
     const reasons = [];
     if (isUnknown) reasons.push('程式判定不出來');

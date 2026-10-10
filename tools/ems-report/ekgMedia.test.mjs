@@ -262,3 +262,33 @@ test('照片：沒接上辨識功能時要講明，不可以裝作判過了', as
   assert.equal(result.kind, MEDIA_KIND.unreadable);
   assert.match(result.why, /沒有啟用照片辨識/);
 });
+
+// ── 翻拍機器螢幕的照片（使用者 2026-10-10 提供實際案例）────────────
+
+test('機器字樣 ＋ 2 個以上導程名稱就算數', () => {
+  // 翻拍螢幕的照片，波形旁邊的導程名稱又小又糊，常常只讀得到兩三個；
+  // 但畫面上的 ZOLL、紙上的 1.0 cm/mV 又大又清楚。合起來就足以斷定。
+  const 龍岡實測 = 'ZIN(AN) RAR Rm 47 |. Led [oe Es 2 ZOLL 1:68:93 00:12:46 v2 111 v3 72 ve vs';
+  assert.equal(looksLikeTwelveLead(normalizeOcrText(龍岡實測)).is, true);
+
+  const 埔心實測 = 'ZOLL wn RE BRAY 1.0 cm/mV vi 62 v2 v4 v5 ve';
+  assert.equal(looksLikeTwelveLead(normalizeOcrText(埔心實測)).is, true);
+});
+
+test('OCR 把 ZOLL 的 O 讀成數字 0 也要認得', () => {
+  // 實測列印出來的報告讀成 `Z0LL® X Series®`。
+  const 青埔實測 = 'Z0LL® X Series® 12 2026-09-08 09:06:49 V2 V3 V5';
+  assert.equal(looksLikeTwelveLead(normalizeOcrText(青埔實測)).is, true);
+});
+
+test('只有機器字樣、導程名稱不足兩個 → 仍然判不出來', () => {
+  // 只拍了監視器外觀、沒拍到 12 導程畫面的照片不可以算進去。
+  const result = looksLikeTwelveLead(normalizeOcrText('ZOLL X Series 00:12:46 V2'));
+  assert.equal(result.is, false);
+  assert.match(result.why, /不足以斷定/);
+});
+
+test('生命徵象畫面的字不算機器字樣（HR、BPM 刻意不收）', () => {
+  // 收了的話，「只拍了監視器畫面、根本沒做 12 導程」的照片也會被算進去。
+  assert.equal(looksLikeTwelveLead(normalizeOcrText('HR 88 BPM SpO2 99 V2 V3')).is, false);
+});
