@@ -11,7 +11,7 @@
  */
 
 /** 我們會產出的副檔名。認不出副檔名的檔案一律不動。 */
-const EXTENSIONS = 'xlsx|xls|md|csv|json';
+const EXTENSIONS = 'xlsx|xls|md|csv|json|pdf';
 
 /** 新寫法：`2026-08-心電圖到院前傳輸率.xlsx`。 */
 const CURRENT_PATTERN = new RegExp(`^(\\d{4})-(\\d{2})-(.+)\\.(${EXTENSIONS})$`, 'i');
@@ -35,6 +35,9 @@ export const MONTHLY_OUTPUT_NAMES = [
   '心電圖到院前傳輸率',
   '心電圖-有處置未勾選清冊',
   '心電圖-有EKG處置無12導程清冊',
+  // 給同仁看的篩選說明 PDF（`guidePdf.mjs`，名稱與 `GUIDES.items` 一致）
+  '到院前預警比率怎麼篩',
+  '心電圖傳輸率怎麼篩',
   // 2026-10-10 移除的產出，**檔名要留在名單裡**：舊月份資料夾裡還躺著幾份，
   // 名單裡沒有它就認不出是我們產的，保留期限到了永遠不會被清掉。
   '心電圖待人工確認',

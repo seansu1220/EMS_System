@@ -79,7 +79,7 @@ export function buildReadme(monthRange, copied) {
     '這個資料夾裡有兩個子資料夾，請務必分清楚：',
     '',
     `【${SUBFOLDERS.report}】`,
-    '  只有分隊層級的統計數字，可以直接發出去。',
+    '  只有分隊層級的統計數字，以及給同仁看的篩選說明（怎麼篩.pdf），可以直接發出去。',
     ...copied.report.map((name) => `    ・${name}`),
     '',
     `【${SUBFOLDERS.internal}】`,

@@ -189,6 +189,9 @@ foreach ($doc in @('README.md', '.env.example')) {
   $docPath = Join-Path $sourceDir $doc
   if (Test-Path $docPath) { Copy-Item -Path $docPath -Destination $toolRoot -Force }
 }
+# 篩選說明的原始檔（月報表會把它印成 PDF 放進「可發給分隊」，少了這個資料夾就只會警告、不會有說明）
+$guideDir = Join-Path $sourceDir '篩選說明'
+if (Test-Path $guideDir) { Copy-Item -Path $guideDir -Destination $toolRoot -Recurse -Force }
 
 # 註：第 8 章的「來文格式」版面已經記在 config.mjs 的 layout 裡（使用者 2026-09-01 決定），
 # 不需要把範本檔一起帶出去，少一個會被移走或改壞的相依。

@@ -26,11 +26,13 @@
  *   npm run tool:ems -- unlock-watch --execute   常駐監看：有人送出申請就立刻處理
  *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
  *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
+ *   npm run tool:ems -- guides               把篩選說明印成 PDF（放在 out/篩選說明/，不必登入）
  *
  * 任何指令都可加 --fresh-login：捨棄上次保存的登入狀態，強制重新登入。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
 import { resolveMonthRange, getRecentRange, buildCustomRange, countRangeDays } from './dateRange.mjs';
@@ -110,6 +112,7 @@ import {
 } from './ekgAppeal.mjs';
 import { writeRunSummary } from './ekgSummary.mjs';
 import { bundleMonthlyOutputs } from './bundle.mjs';
+import { writeGuidePdfs } from './guidePdf.mjs';
 import { pruneOldOutputs, removeLegacyTwins } from './retention.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import {
@@ -123,6 +126,7 @@ import {
   TRAFFIC_CASE_REPORT,
   UNLOCK,
   OPEN_CASES,
+  GUIDES,
 } from './config.mjs';
 import { excludeOhcaCases, temsisSetOf, EXCLUDED_REASON } from './ekgExclude.mjs';
 import {
@@ -143,14 +147,14 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
   'check-sheet', 'check-ekg-sheet',
-  'unlock', 'unlock-online', 'unlock-watch', 'open-cases',
+  'unlock', 'unlock-online', 'unlock-watch', 'open-cases', 'guides',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
  *   |'check-ekg-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'|'open-cases'} command
+ *   |'unlock-online'|'unlock-watch'|'open-cases'|'guides'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -1508,6 +1512,24 @@ async function runOpenCasesCommand(options) {
   if (!result.aborted && result.skipped === 0) await removeProgress(range);
 }
 
+/**
+ * 單獨產出篩選說明 PDF（不必登入、不必跑報表）。
+ *
+ * 放在固定的 `out/篩選說明/`，不進月報表資料夾：那個資料夾的「請先看我.txt」
+ * 是依實際搬進去的檔案寫的，單獨補檔案進去會跟說明對不起來。
+ */
+async function runGuidesCommand() {
+  const written = await writeGuidePdfs(GUIDES.standaloneDir);
+  if (written.length === 0) {
+    throw new Error('篩選說明一份都沒有印出來（原因見上方警告）');
+  }
+  log.info(`位置：${path.relative(process.cwd(), GUIDES.standaloneDir)}`);
+  // 批次檔只能寫 ASCII，中文路徑寫不進去，因此由這裡開資料夾。
+  if (process.platform === 'win32') {
+    spawn('explorer', [GUIDES.standaloneDir], { detached: true, stdio: 'ignore' }).unref();
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   log.step(`救護紀錄表查詢工具｜指令：${options.command}`);
@@ -1526,6 +1548,10 @@ async function main() {
   }
   if (options.command === 'open-cases') {
     await runOpenCasesCommand(options);
+    return;
+  }
+  if (options.command === 'guides') {
+    await runGuidesCommand();
     return;
   }
 
@@ -1621,6 +1647,10 @@ async function runMonthlyFlow(session, monthRange, options) {
     else log.ok(`${step.name}：完成`);
   }
   log.info(`報表位置：${path.relative(process.cwd(), PATHS.reportDir)}`);
+
+  // 篩選說明 PDF 跟著這個月的報表一起放進「可發給分隊」（使用者 2026-10-12 要求）。
+  // 兩份都失敗就不印：只有說明的資料夾會讓人以為報表跑成功了。
+  if (failures.length < steps.length) await writeGuidePdfs(PATHS.reportDir, monthRange);
 
   // 收成一個資料夾（使用者 2026-10-07 要求：一次月報表產出的檔案太多太散）。
   // ⚠ 放在**丟例外之前**：就算有一份報表失敗，另一份已經產好的也該收進去讓人拿得走。

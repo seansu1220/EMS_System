@@ -144,6 +144,30 @@ export const BROWSER = {
 };
 
 /**
+ * 給分隊同仁看的「篩選說明」PDF（`guidePdf.mjs`，使用者 2026-10-12 要求）。
+ *
+ * 同仁會問「怎麼篩」，想自己照著做一次核對數字。原始檔是 `篩選說明/` 裡的 HTML
+ * （進版控、多台電腦同步得到），跑月報表時印成 PDF 放進「可發給分隊」。
+ *
+ * `name` 同時是產出檔名（`{YYYY-MM}-{name}.pdf`），也要列進 `MONTHLY_OUTPUT_NAMES`，
+ * 否則月報表資料夾收不進去、保留期限也清不掉。
+ */
+export const GUIDES = {
+  /** 原始檔所在資料夾。 */
+  sourceDir: path.join(TOOL_DIR, '篩選說明'),
+  /** 共用樣式，印 PDF 時嵌進每一份說明。 */
+  styleFile: '樣式.css',
+  /** 單獨產出（`guides` 指令）時放哪裡：不屬於哪一個月，所以不進月報表資料夾。 */
+  standaloneDir: path.join(TOOL_DIR, 'out', '篩選說明'),
+  items: [
+    { name: '到院前預警比率怎麼篩', source: '到院前預警比率怎麼篩.html' },
+    { name: '心電圖傳輸率怎麼篩', source: '心電圖傳輸率怎麼篩.html' },
+  ],
+  /** 印 PDF 的版面（邊界寫在樣式檔的 `@page`，這裡只管紙張與背景色）。 */
+  pdf: { format: 'A4', printBackground: true, preferCSSPageSize: true },
+};
+
+/**
  * 輸出路徑。整個 out/ 皆為 gitignore 範圍，且原始明細預設用完即刪。
  */
 export const PATHS = {
