@@ -1,5 +1,5 @@
 /**
- * 舊月份產出清理的測試（純函式，不碰檔案）。
+ * 舊月份產出清理的測試（最後一項會在暫存資料夾裡實際建檔、刪檔）。
  *
  * 這支會**刪使用者的檔案**，所以邊界要釘死：
  *   - 認不出月份的檔案一個都不能碰
@@ -7,7 +7,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectExpiredFiles } from './retention.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { pruneOldOutputs, selectExpiredFiles } from './retention.mjs';
+import { PATHS } from './config.mjs';
 
 const FILES = [
   '心電圖到院前傳輸率-2026-07.xlsx',
@@ -98,4 +102,44 @@ test('使用者自己放的「月份在前」檔案不會被刪', () => {
     '2026-01-分隊回覆.xlsx',
   ], 1);
   assert.deepEqual(expired, []);
+});
+
+test('最近幾個月可以由別處的檔名決定（三處合起來算）', () => {
+  // out/report/ 只剩 7、8 月的舊檔，但新月份都在月報表資料夾裡。
+  const reportFiles = ['到院前預警比率-2026-07.xlsx', '到院前預警比率-2026-08.xlsx'];
+  const reference = [...reportFiles, '2026-09-月報表.xlsx', '2026-10-月報表.xlsx', '2026-11-月報表.xlsx'];
+  const { keptMonths, expired } = selectExpiredFiles(reportFiles, 3, reference);
+  assert.deepEqual(keptMonths, ['2026-11', '2026-10', '2026-09']);
+  assert.deepEqual(expired.sort(), reportFiles.sort());
+});
+
+test('out/report 不再有新檔進來時，舊檔照樣會隨月報表資料夾的月份被清掉', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ems-retention-'));
+  const original = { outDir: PATHS.outDir, reportDir: PATHS.reportDir, internalDir: PATHS.internalDir };
+  Object.assign(PATHS, {
+    outDir: root,
+    reportDir: path.join(root, 'report'),
+    internalDir: path.join(root, 'internal'),
+  });
+  context.after(async () => {
+    Object.assign(PATHS, original);
+    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+  });
+
+  await fs.mkdir(PATHS.reportDir, { recursive: true });
+  await fs.mkdir(PATHS.internalDir, { recursive: true });
+  for (const name of ['到院前預警比率-2026-07.xlsx', '到院前預警比率-2026-08.xlsx', '月度報表怎麼跑.md']) {
+    await fs.writeFile(path.join(PATHS.reportDir, name), '');
+  }
+  await fs.writeFile(path.join(PATHS.internalDir, '心電圖逐案判定-2026-08.xlsx'), '');
+  for (const month of ['2026-07', '2026-09', '2026-10', '2026-11']) {
+    await fs.mkdir(path.join(root, `${month}-月報表`, '可發給分隊'), { recursive: true });
+  }
+
+  await pruneOldOutputs(3);
+
+  assert.deepEqual(await fs.readdir(PATHS.reportDir), ['月度報表怎麼跑.md']);
+  assert.deepEqual(await fs.readdir(PATHS.internalDir), []);
+  const folders = (await fs.readdir(root)).filter((name) => name.endsWith('月報表')).sort();
+  assert.deepEqual(folders, ['2026-09-月報表', '2026-10-月報表', '2026-11-月報表']);
 });

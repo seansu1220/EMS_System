@@ -8,6 +8,11 @@
  * ⚠ 保留哪幾個月是**依檔名裡最新的月份**往回算，不是依今天的日期：
  *   補跑舊月份時（`--month=2026-05`）不該把比它新的檔案掃掉。
  *
+ * ⚠ 「最新的月份」是 `out/report/`、`out/internal/`、月報表資料夾**三處合起來**算的
+ *   （2026-10-13 修正）。原本各算各的，而 2026-10 起產出改成搬進月報表資料夾，
+ *   `out/report/` 不再有新月份的檔案進來——裡面的 7、8 月舊檔就永遠是
+ *   「這個資料夾最新的三個月」，永遠不會被清掉。
+ *
  * ⚠ 只刪**認得出來的產出檔**（見 `fileNames.mjs` 的 `monthOfOutputFile`）。
  *   2026-09-05 起年月改放在檔名最前面，而「2026-08-分隊回覆.xlsx」正是使用者
  *   自己也會取的名字，因此新寫法**要對得上產出檔名單**才算數；舊寫法（年月在後）
@@ -29,11 +34,13 @@ import { log } from './logger.mjs';
  *
  * @param {string[]} fileNames 同一個資料夾裡的檔名（不含路徑）
  * @param {number} [keepMonths] 保留幾個月份
+ * @param {string[]} [referenceNames] 拿來決定「最近幾個月是哪幾個月」的檔名，
+ *   預設就是 `fileNames` 自己。清理時傳入**所有存放位置合起來**的檔名（見檔頭說明）
  * @returns {{expired: string[], keptMonths: string[]}}
  *   `expired` 是該刪的檔名；`keptMonths` 是保留下來的月份標籤（新到舊）
  */
-export function selectExpiredFiles(fileNames, keepMonths = REPORT_RETENTION_MONTHS) {
-  const months = [...new Set(fileNames.map(monthOfOutputFile).filter(Boolean))].sort().reverse();
+export function selectExpiredFiles(fileNames, keepMonths = REPORT_RETENTION_MONTHS, referenceNames = fileNames) {
+  const months = [...new Set(referenceNames.map(monthOfOutputFile).filter(Boolean))].sort().reverse();
   const keptMonths = months.slice(0, Math.max(0, keepMonths));
   const kept = new Set(keptMonths);
 
@@ -47,12 +54,26 @@ export function selectExpiredFiles(fileNames, keepMonths = REPORT_RETENTION_MONT
   };
 }
 
-/** 掃一個資料夾並刪掉過期檔；回傳刪掉的檔名。 */
-async function pruneDirectory(directory, keepMonths) {
-  const fileNames = await fs.readdir(directory).catch(() => null);
-  if (fileNames === null) return []; // 資料夾還不存在屬正常（第一次跑）。
+/** 讀一個資料夾的檔名；資料夾還不存在屬正常（第一次跑），回傳空陣列。 */
+async function listFileNames(directory) {
+  return (await fs.readdir(directory).catch(() => null)) ?? [];
+}
 
-  const { expired } = selectExpiredFiles(fileNames, keepMonths);
+/** 月報表資料夾的名字借用檔名規則時，後面接的副檔名（見 `pruneBundleFolders`）。 */
+const BUNDLE_AS_FILE_SUFFIX = '.xlsx';
+
+/** 列出 `out/` 底下的月報表資料夾，並轉成「借用檔名規則」的樣子（`2026-09-月報表.xlsx`）。 */
+async function listBundleFoldersAsFileNames() {
+  const entries = await fs.readdir(PATHS.outDir, { withFileTypes: true }).catch(() => null);
+  if (entries === null) return [];
+  return entries
+    .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}-月報表$/.test(entry.name))
+    .map((entry) => `${entry.name}${BUNDLE_AS_FILE_SUFFIX}`);
+}
+
+/** 刪掉一個資料夾裡的過期檔；回傳刪掉的檔名。 */
+async function pruneDirectory(directory, fileNames, keepMonths, referenceNames) {
+  const { expired } = selectExpiredFiles(fileNames, keepMonths, referenceNames);
   const removed = [];
   for (const fileName of expired) {
     try {
@@ -69,28 +90,21 @@ async function pruneDirectory(directory, keepMonths) {
 /**
  * 清掉 `out/` 底下過期的**月報表包裝資料夾**（`{YYYY-MM}-月報表`，見 `bundle.mjs`）。
  *
- * 不清的話每個月多一個資料夾，一年之後 `out/` 底下躺著十幾包
- * ——而裡面的檔案本來就與 `out/report`、`out/internal` 的正本同進退。
+ * 不清的話每個月多一個資料夾，一年之後 `out/` 底下躺著十幾包。
  *
  * 判定月份用的是同一套 `selectExpiredFiles`：把資料夾名字後面接上 `.xlsx`
  * 來借用檔名規則。這樣「保留幾個月」只有一套邏輯，不會兩邊各算各的。
  *
+ * @param {string[]} folderFileNames {@link listBundleFoldersAsFileNames} 的結果
  * @param {number} keepMonths
+ * @param {string[]} referenceNames 三處合起來的檔名
  * @returns {Promise<string[]>} 刪掉的資料夾名
  */
-async function pruneBundleFolders(keepMonths) {
-  const entries = await fs.readdir(PATHS.outDir, { withFileTypes: true }).catch(() => null);
-  if (entries === null) return [];
-
-  const folderNames = entries
-    .filter((entry) => entry.isDirectory() && /^\d{4}-\d{2}-月報表$/.test(entry.name))
-    .map((entry) => entry.name);
-  if (folderNames.length === 0) return [];
-
-  const { expired } = selectExpiredFiles(folderNames.map((name) => `${name}.xlsx`), keepMonths);
+async function pruneBundleFolders(folderFileNames, keepMonths, referenceNames) {
+  const { expired } = selectExpiredFiles(folderFileNames, keepMonths, referenceNames);
   const removed = [];
   for (const fileName of expired) {
-    const folderName = fileName.replace(/\.xlsx$/, '');
+    const folderName = fileName.slice(0, -BUNDLE_AS_FILE_SUFFIX.length);
     try {
       await fs.rm(path.join(PATHS.outDir, folderName), { recursive: true, force: true });
       removed.push(`${folderName}（整個資料夾）`);
@@ -108,11 +122,17 @@ async function pruneBundleFolders(keepMonths) {
  * @returns {Promise<string[]>} 刪掉的檔名
  */
 export async function pruneOldOutputs(keepMonths = REPORT_RETENTION_MONTHS) {
-  const removed = [];
-  for (const directory of [PATHS.reportDir, PATHS.internalDir]) {
-    removed.push(...await pruneDirectory(directory, keepMonths));
-  }
-  removed.push(...await pruneBundleFolders(keepMonths));
+  const reportFiles = await listFileNames(PATHS.reportDir);
+  const internalFiles = await listFileNames(PATHS.internalDir);
+  const bundleFolders = await listBundleFoldersAsFileNames();
+  // 三處合起來決定「最近幾個月」：只看單一資料夾的話，不再有新檔進來的那一處永遠清不掉。
+  const referenceNames = [...reportFiles, ...internalFiles, ...bundleFolders];
+
+  const removed = [
+    ...await pruneDirectory(PATHS.reportDir, reportFiles, keepMonths, referenceNames),
+    ...await pruneDirectory(PATHS.internalDir, internalFiles, keepMonths, referenceNames),
+    ...await pruneBundleFolders(bundleFolders, keepMonths, referenceNames),
+  ];
 
   if (removed.length === 0) return removed;
   log.step('清掉過期的舊月份產出');
