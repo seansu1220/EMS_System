@@ -10,7 +10,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { pageSignature } from './grantFlow.mjs';
 import {
+  buildShowAllEntries,
   filterEntriesByUnit,
   filterUnits,
   pickUnits,
@@ -238,4 +240,78 @@ test('取消分隊：關鍵字對不上時挑不到任何單位（呼叫端據�
 test('取消分隊：關鍵字可以給多個', () => {
   const { targets } = splitUnitsByKeyword(混合下拉, ['分隊', '特搜']);
   assert.deepEqual(targets.map((option) => option.text), ['特搜大隊', '測試甲分隊', '測試乙分隊']);
+});
+
+test('顯示全部：每一列對回單位下拉，帶出 value 與查詢用的姓氏', () => {
+  const { entries, unmatched } = buildShowAllEntries(
+    [{ name: '測O甲', account: 'A1***01', unit: '測試甲分隊' }],
+    OPTIONS,
+  );
+  assert.equal(unmatched.length, 0);
+  assert.deepEqual(entries, [
+    { unit: '測試甲分隊', unitValue: 'B1', name: '測O甲', searchName: '測', rowText: '測O甲', rowAccount: 'A1***01', lineNumber: 0 },
+  ]);
+});
+
+test('顯示全部：單位要一模一樣才算，「測試乙分隊」不會誤對到「測試乙分隊第二救護隊」', () => {
+  const { entries } = buildShowAllEntries([{ name: '測O乙', account: 'x', unit: '測試乙分隊第二救護隊' }], OPTIONS);
+  assert.equal(entries[0].unitValue, 'B3');
+});
+
+test('顯示全部：下拉裡找不到的單位不猜，列進 unmatched', () => {
+  const { entries, unmatched } = buildShowAllEntries(
+    [
+      { name: '測O丙', account: 'x1', unit: '外縣市某分隊' },
+      { name: '測O丁', account: 'x2', unit: '外縣市某分隊' },
+      { name: '測O戊', account: 'x3', unit: '' },
+    ],
+    OPTIONS,
+  );
+  assert.equal(entries.length, 0);
+  assert.deepEqual(unmatched.map((miss) => [miss.unit, miss.count]), [['外縣市某分隊', 2], ['（單位欄是空的）', 1]]);
+});
+
+test('顯示全部：保留單位的人不進名單', () => {
+  const { entries, kept } = buildShowAllEntries(
+    [
+      { name: '測O甲', account: 'x1', unit: '緊急救護科' },
+      { name: '測O乙', account: 'x2', unit: '測試甲分隊' },
+    ],
+    OPTIONS,
+    ['緊急救護科'],
+  );
+  assert.deepEqual(entries.map((entry) => entry.unit), ['測試甲分隊']);
+  assert.deepEqual(kept, [{ unit: '緊急救護科', count: 1 }]);
+});
+
+test('顯示全部：沒有保留單位時，每個單位的人都進名單', () => {
+  const { entries, kept } = buildShowAllEntries(
+    [
+      { name: '測O甲', account: 'x1', unit: '緊急救護科' },
+      { name: '測O乙', account: 'x2', unit: '測試甲分隊' },
+    ],
+    OPTIONS,
+    [],
+  );
+  assert.equal(entries.length, 2);
+  assert.equal(kept.length, 0);
+});
+
+test('顯示全部：同名不同帳號是兩個人，完全重複的列才併掉', () => {
+  const { entries, duplicateCount } = buildShowAllEntries(
+    [
+      { name: '李O城', account: 'A1***01', unit: '測試甲分隊' },
+      { name: '李O城', account: 'A1***02', unit: '測試甲分隊' },
+      { name: '李O城', account: 'A1***02', unit: '測試甲分隊' },
+    ],
+    OPTIONS,
+  );
+  assert.equal(entries.length, 2);
+  assert.equal(duplicateCount, 1);
+});
+
+test('翻頁指紋：第一列同名但整頁不同時，指紋不一樣', () => {
+  const before = pageSignature({ values: ['陳O宏', '林O華'], accounts: ['a1', 'a2'] });
+  const after = pageSignature({ values: ['陳O宏', '張O明'], accounts: ['b1', 'b2'] });
+  assert.notEqual(before, after);
 });

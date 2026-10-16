@@ -179,6 +179,20 @@ export const SITE = {
      */
     resultAccountHeaders: ['帳號', '使用者帳號', '登入帳號'],
     /**
+     * 查詢結果表格裡「單位」那一欄的標題文字。
+     *
+     * 只有「顯示全部」掃名單時用得到（見 unitSweep.sweepShowAll）：按「顯示全部」
+     * 列出來的是全機關的人，每個人屬於哪個單位只能從這一欄讀——
+     * 之後逐位處理時還是要「選單位＋填姓氏」查回這個人。
+     */
+    resultUnitHeaders: ['單位', '部門', '所屬單位', '單位名稱', '服務單位'],
+    /**
+     * 查詢頁上「列出全部人員」的按鈕（2026-08-20 探測所得：按下去是全機關約 2,258 位）。
+     *
+     * 一律**完全相符**比對，免得誤中別的按鈕。
+     */
+    showAllTexts: ['顯示全部'],
+    /**
      * 分頁的「下一頁」控制項（DataTables 常見的幾種寫法都列上）。
      *
      * ⚠ 一律**完全相符**比對：用包含比對時「下一頁」會連「上一頁」都不中，
@@ -352,6 +366,76 @@ export const CLEAR_STATIONS = {
   keepUnits() {
     return CLEAR_ALL.keepUnits();
   },
+};
+
+/**
+ * 「取消其他子系統權限」的設定：所有人除了 MCI、ACS、DQC 以外，其他子系統的權限全部取消。
+ *
+ * 使用者 2026-10-17 的要求：「把所有人除了 MCI 大傷系統、ACS 耗材管理系統以及
+ * DQC DACPR 系統外，其他系統的權限都取消掉」，作法是**取消子系統前面的勾選框**
+ * （使用者確認：取消勾選後，角色下拉會連動變回「請選擇權限」）。
+ *
+ * ⚠ 代碼就是權限畫面上的 id（`#ATM` 勾選框、`#ATMselect` 下拉），**一定要用 id**：
+ *   這一頁子系統名稱與下拉在版面上是錯開的（見 SITE.flow.subsystemCode 的說明）。
+ * ⚠ 「FOS 急救先鋒管理系統」在系統裡的 id 是 **`VDS`**，不是 FOS（2026-08-18 探測所得）。
+ */
+export const CLEAR_OTHERS = {
+  /**
+   * 要取消的子系統（畫面上的 id）。
+   *
+   * 13 個子系統扣掉保留的 3 個。名稱對照：
+   * ATM 救護技術員、ADG 救護派遣指引、AAM 救護車出勤與事故、CPM 急救技能課程、
+   * DSM 數據分析統計、VDS＝FOS 急救先鋒、MMS 指導醫師、FIS 五級檢傷、
+   * PAC 救護服務證明、EWFA 救護負荷與疲勞分析。
+   */
+  clearCodes: ['ATM', 'ADG', 'AAM', 'CPM', 'DSM', 'VDS', 'MMS', 'FIS', 'PAC', 'EWFA'],
+
+  /**
+   * **一定不能動**的子系統。只拿來檢查 `clearCodes` 有沒有寫錯——
+   * 兩邊有交集時整支停手（見 otherSubsystems.resolveClearCodes）。
+   */
+  keepCodes: ['MCI', 'ACS', 'DQC'],
+
+  /** 訊息裡給人看的子系統名稱（id 不直觀的那幾個靠這裡翻譯）。 */
+  displayNames: {
+    ATM: 'ATM 救護技術員管理系統',
+    ADG: 'ADG 救護派遣指引系統',
+    AAM: 'AAM 救護車出勤與事故管理系統',
+    CPM: 'CPM 急救技能課程宣導及管理系統',
+    DSM: 'DSM 數據分析統計管理系統',
+    VDS: 'FOS 急救先鋒管理系統',
+    MMS: 'MMS 指導醫師資訊整合系統',
+    FIS: 'FIS 五級檢傷系統',
+    PAC: 'PAC 救護服務證明線上申請系統',
+    EWFA: 'EWFA 救護負荷與疲勞分析儀表板',
+  },
+
+  /**
+   * 這些單位的人一個都不動（**包含**比對）。
+   *
+   * 使用者的要求是「所有人」，因此預設**不保留任何單位**。要留的話在 `.env` 設
+   * `SSO_KEEP_UNITS=緊急救護科`（逗號分隔）。刻意不沿用 `MCI_KEEP_UNITS`：
+   * 那一份預設留緊急救護科，是大傷權限那件事的規則，不是這一件的。
+   *
+   * @returns {string[]}
+   */
+  keepUnits() {
+    const raw = (process.env.SSO_KEEP_UNITS ?? '').trim();
+    if (!raw) return [];
+    return raw
+      .split(/[,，、]/)
+      .map((unit) => unit.trim())
+      .filter(Boolean);
+  },
+};
+
+/** 「顯示全部」掃名單的設定（見 unitSweep.sweepShowAll）。 */
+export const SHOW_ALL_SWEEP = {
+  /**
+   * 最多翻幾頁。純粹是翻頁按鈕壞掉時的保險：
+   * 2026-08-20 探測時全部是 2,258 項（226 頁），留一倍以上的餘裕。
+   */
+  maxPages: 600,
 };
 
 /** 瀏覽器啟動設定。使用本機已安裝的 Chrome 或 Edge，不另外下載 Chromium。 */

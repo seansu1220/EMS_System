@@ -504,10 +504,14 @@ export async function readStableCount(page, timeoutMs = TIMING.pageReadyTimeoutM
  * 帳號是同一列上唯一還分得出人的欄位。這一頁沒有帳號欄時 `accounts` 全是空字串，
  * 呼叫端就只能靠姓名認人（少一項依據，不會壞掉）。
  *
- * @returns {Promise<{ok:boolean, values:string[], accounts:string[],
- *   headers:string[], reason?:string}>}
+ * 單位欄只有「顯示全部」掃全機關時才要（`withUnits`），平常不讀：
+ * 少讀一欄就少一項個資經手。
+ *
+ * @param {{withUnits?: boolean}} [options]
+ * @returns {Promise<{ok:boolean, values:string[], accounts:string[], units:string[],
+ *   unitIndex:number, headers:string[], reason?:string}>}
  */
-export async function readResultNames(session) {
+export async function readResultNames(session, options = {}) {
   /** 讀不到時，把「這個 frame 看到了哪些欄位標題」留下來當排查線索。 */
   let diagnosis = null;
 
@@ -517,14 +521,19 @@ export async function readResultNames(session) {
       SITE.flow.resultNameHeaders,
       SITE.flow.rowActionTexts,
       SITE.flow.resultAccountHeaders,
+      options.withUnits ? SITE.flow.resultUnitHeaders : [],
     ).catch(() => null);
-    if (result?.ok) return { ...result, accounts: result.extras ?? [] };
+    if (result?.ok) {
+      return { ...result, accounts: result.extras ?? [], units: result.units ?? [], unitIndex: result.unitIndex ?? -1 };
+    }
     if (result && !diagnosis) diagnosis = result;
   }
   return {
     ok: false,
     values: [],
     accounts: [],
+    units: [],
+    unitIndex: -1,
     headers: diagnosis?.headers ?? [],
     reason: diagnosis?.reason ?? '讀不到查詢結果表格',
   };
@@ -538,10 +547,15 @@ export async function readResultNames(session) {
  *   而重複的姓名會蓋掉「還沒讀到的人」的位置，整個單位就漏了。
  *   判定方式是「第一列的姓名變了」。
  *
+ * ⚠ 「顯示全部」一翻就是兩百多頁，相鄰兩頁第一列剛好都是 `陳O宏` 並不稀奇
+ *   （姓名是遮過的）。這時要改傳 `signatureBefore`（整頁的姓名＋帳號，見
+ *   {@link pageSignature}），以「整頁內容變了」為準，否則會誤判成翻到底而提早收工。
+ *
  * @param {string} firstNameBefore 翻頁前第一列的姓名
+ * @param {string} [signatureBefore] 翻頁前整頁的指紋；有給就改用它判斷
  * @returns {Promise<boolean>} 有沒有真的翻到下一頁
  */
-export async function goToNextPage(session, firstNameBefore) {
+export async function goToNextPage(session, firstNameBefore, signatureBefore = '') {
   const page = activePage(session);
   const clicked = await onSomeFrame(page, async (frame) => {
     const hits = await findClickables(frame, SITE.flow.nextPageTexts, { exact: true });
@@ -554,9 +568,26 @@ export async function goToNextPage(session, firstNameBefore) {
   while (Date.now() < deadline) {
     await page.waitForTimeout(TIMING.pollIntervalMs);
     const column = await readResultNames(session);
-    if (column.ok && column.values[0] && column.values[0] !== firstNameBefore) return true;
+    if (!column.ok || !column.values[0]) continue;
+    if (signatureBefore ? pageSignature(column) !== signatureBefore : column.values[0] !== firstNameBefore) {
+      return true;
+    }
   }
   return false;
+}
+
+/**
+ * 一頁結果表格的「指紋」：整頁的姓名＋帳號接起來。
+ *
+ * 純函式。給 {@link goToNextPage} 判斷「真的換頁了沒」——比只看第一列可靠。
+ *
+ * @param {{values?: string[], accounts?: string[]}} column
+ * @returns {string}
+ */
+export function pageSignature(column) {
+  const names = column?.values ?? [];
+  const accounts = column?.accounts ?? [];
+  return names.map((name, index) => `${name}｜${accounts[index] ?? ''}`).join('\n');
 }
 
 /** 等畫面上的「載入中」消失（等不到就算了，後面的判斷自己會擋）。 */
@@ -792,7 +823,7 @@ async function clickRowByDisplayName(session, rowText, rowAccount) {
     if (!column.ok || column.values.length === 0) {
       return { ok: false, reason: '讀不到結果表格，沒辦法認出是哪一列', pages: pageIndex + 1 };
     }
-    if (!(await goToNextPage(session, column.values[0]))) {
+    if (!(await goToNextPage(session, column.values[0], pageSignature(column)))) {
       const why = canUseAccount ? '翻完所有頁都沒有姓名與帳號都相符的那一列' : '翻完所有頁都沒有這一列';
       return { ok: false, reason: why, pages: pageIndex + 1 };
     }
@@ -832,7 +863,7 @@ async function accountsOfSameName(session, rowText) {
  * @returns {Promise<{ok: true, frame: import('playwright-core').Frame}
  *   | {ok: false, result: object, detail: string}>}
  */
-async function locatePerson(session, entry) {
+export async function locatePerson(session, entry) {
   const fail = (result) => ({ ok: false, result, detail: result.detail });
 
   const opened = await openAccountPermissionPage(session);
@@ -1190,7 +1221,7 @@ export async function revokeAll(session, entries, options = {}) {
  *
  * @param {(session: object, entry: object, options: object) => Promise<GrantResult>} handleOne
  */
-async function runBatch(session, entries, options, handleOne) {
+export async function runBatch(session, entries, options, handleOne) {
   /** @type {GrantResult[]} */
   const results = [];
   const startedAt = Date.now();

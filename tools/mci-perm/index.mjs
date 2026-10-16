@@ -24,10 +24,12 @@
  *   npm run tool:mci -- clear-all --execute      真的把所有人的 MCI 權限取消（保留單位除外）
  *   npm run tool:mci -- clear-stations           試跑：只掃各分隊，看每個人現在的狀態
  *   npm run tool:mci -- clear-stations --execute 真的把各分隊的 MCI 權限取消（科室、大隊不動）
+ *   npm run tool:mci -- clear-others             試跑：用「顯示全部」列出全機關，看每個人勾了哪些子系統
+ *   npm run tool:mci -- clear-others --execute   真的把 MCI、ACS、DQC 以外的子系統權限全部取消
  *   npm run tool:mci -- probe                    探測頁面結構（開發／改版卡住時用）
  *   npm run tool:mci -- probe --unit=X --name=Y  連結果畫面與權限畫面一起探測（不會按確定）
  *
- * `grant-units`、`clear-all` 與 `clear-stations` 都可以再加：
+ * `grant-units`、`clear-all`、`clear-stations` 與 `clear-others` 都可以再加：
  *   --unit=大溪分隊   只處理其中一個單位（先拿小單位試流程）
  *   --rescan         重新掃一次名單（預設沿用上次掃到的，省十分鐘）
  *   --restart        名單與進度全部捨棄，整份從頭跑
@@ -44,9 +46,10 @@
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { CLEAR_ALL, CLEAR_STATIONS, GRANT_UNITS, PATHS, SITE } from './config.mjs';
+import { CLEAR_ALL, CLEAR_OTHERS, CLEAR_STATIONS, GRANT_UNITS, PATHS, SITE } from './config.mjs';
 import { grantAll, openAccountPermissionPage, revokeAll, waitForOptions } from './grantFlow.mjs';
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
+import { clearOthersAll, displayNameOf, resolveClearCodes } from './otherSubsystems.mjs';
 import { runProbe } from './probe.mjs';
 import { describeRosterLocation, readRosterFiles, resolveRosterInput } from './roster.mjs';
 import {
@@ -70,17 +73,18 @@ import {
   splitUnits,
   splitUnitsByKeyword,
   sweepAllUnits,
+  sweepShowAll,
   withSearchNames,
 } from './unitSweep.mjs';
 
-const COMMANDS = ['grant', 'grant-units', 'clear-all', 'clear-stations', 'probe'];
+const COMMANDS = ['grant', 'grant-units', 'clear-all', 'clear-stations', 'clear-others', 'probe'];
 
 /** 終端機最多先列幾筆問題列（其餘寫進結果檔，免得洗掉畫面）。 */
 const PROBLEM_PREVIEW = 10;
 
 /**
  * @typedef {Object} CliOptions
- * @property {'grant'|'grant-units'|'clear-all'|'clear-stations'|'probe'} command
+ * @property {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'probe'} command
  * @property {boolean} execute 真的按下確定
  * @property {boolean} freshLogin
  * @property {string[]} files 名單檔路徑（空陣列代表改用互動貼上；可以不只一份）
@@ -113,7 +117,7 @@ export function parseArgs(args) {
     throw new Error(`--limit 要給正整數，收到的是「${limitText}」`);
   }
   return {
-    command: /** @type {'grant'|'grant-units'|'clear-all'|'clear-stations'|'probe'} */ (command),
+    command: /** @type {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'probe'} */ (command),
     execute: args.includes('--execute'),
     /** 開通後回頭再查一次，確認真的存進去了（預設開啟）。 */
     verify: !args.includes('--no-verify'),
@@ -292,6 +296,11 @@ async function runGrant(options) {
  * @property {string} action 結果檔上的動作名稱（「開通」／「取消」）
  * @property {(count: number) => string[]} confirmLines 正式執行前要講的話（第一行會用警告色）
  * @property {string} dryRunNote 試跑模式的說明
+ * @property {(session: object, unitOptions: import('./unitSweep.mjs').UnitOption[]) =>
+ *   Promise<{entries: import('./roster.mjs').RosterEntry[], problems: import('./unitSweep.mjs').UnitProblem[]}>} [collect]
+ *   有給就不逐單位掃，改用它列出名單（`clear-others` 用「顯示全部」）；`chooseTargets` 這時用不到
+ * @property {string} [reportTitle] 結果檔的標題（不給就是「大量傷患系統權限○○結果」）
+ * @property {string} [reportFilePrefix] 結果檔的檔名開頭（不給就是「○○結果」）
  */
 
 /**
@@ -343,6 +352,7 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
   if (!ready) throw new Error('等不到單位清單載入（下拉一直是空的），這次不動任何人');
 
   const unitOptions = await readUnitOptions(opened.frame);
+  if (plan.collect) return collectWithPlan(session, options, rosterFile, plan, unitOptions);
   const targets = plan.chooseTargets(unitOptions);
 
   let workUnits = targets;
@@ -370,6 +380,31 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
     log.ok(`掃描完成：共 ${swept.entries.length} 位，名單已存到 ${rosterFile}`);
   }
   return { entries: swept.entries, unitProblems: swept.problems };
+}
+
+/**
+ * 用 plan 自己的方式列出名單（`clear-others` 的「顯示全部」），再套 `--unit` 與快取規則。
+ *
+ * 快取規則與逐單位掃描一致：`--unit` 時不存快取（那份檔案代表整個範圍的名單）。
+ * 「顯示全部」一定是全機關一起讀，`--unit` 只能在讀完之後篩。
+ *
+ * @param {SweepPlan} plan
+ * @param {import('./unitSweep.mjs').UnitOption[]} unitOptions
+ */
+async function collectWithPlan(session, options, rosterFile, plan, unitOptions) {
+  log.step('按「顯示全部」，把全機關的人一頁一頁列出來');
+  log.info('（這一步只查詢、不改任何東西，兩百多頁大約要十分鐘）');
+  const swept = await plan.collect(session, unitOptions);
+
+  if (!options.unit) {
+    await saveRoster(rosterFile, swept.entries);
+    log.ok(`掃描完成：共 ${swept.entries.length} 位，名單已存到 ${rosterFile}`);
+    return { entries: swept.entries, unitProblems: swept.problems };
+  }
+  const picked = filterEntriesByUnit(swept.entries, options.unit);
+  if (picked.length === 0) throw new Error(`掃到的名單裡沒有單位含「${options.unit}」的人`);
+  log.ok(`掃描完成：依 --unit=${options.unit} 挑出 ${picked.length} 位（沒有更新名單快取）`);
+  return { entries: picked, unitProblems: swept.problems };
 }
 
 /**
@@ -449,6 +484,8 @@ async function runUnitSweep(options, plan) {
     const filePath = await writeResultReport(results, {
       execute: options.execute,
       action: plan.action,
+      title: plan.reportTitle,
+      filePrefix: plan.reportFilePrefix,
       unitProblems,
     });
     log.ok(`結果清單：${filePath}`);
@@ -602,6 +639,43 @@ function grantUnitsPlan() {
   };
 }
 
+/**
+ * clear-others：所有人除了 MCI、ACS、DQC 以外，其他 10 個子系統的權限全部取消。
+ *
+ * 使用者 2026-10-17 的要求：「把所有人除了 MCI 大傷系統、ACS 耗材管理系統以及
+ * DQC DACPR 系統外，其他系統的權限都取消掉」。名單改用查詢頁的「顯示全部」
+ * 逐頁讀（使用者指定的掃法），每個人只取消勾選框（下拉會連動）。
+ *
+ * @returns {SweepPlan}
+ */
+function clearOthersPlan() {
+  const codes = resolveClearCodes(CLEAR_OTHERS.clearCodes, CLEAR_OTHERS.keepCodes);
+  const keepUnits = CLEAR_OTHERS.keepUnits();
+  const names = codes.map((code) => displayNameOf(code).split(' ')[0]).join('、');
+  const keepText = keepUnits.length > 0 ? keepUnits.join('、') : '（沒有，所有人都處理）';
+  return {
+    label: '取消其他子系統',
+    title: '取消其他子系統權限：MCI、ACS、DQC 以外的子系統，有勾的全部取消',
+    intro: [
+      `要取消的 ${codes.length} 個：${names}`,
+      `保留不動：${CLEAR_OTHERS.keepCodes.join('、')}（大量傷患、救護器材與耗材、DA-CPR 品管）`,
+      `保留不動的單位：${keepText}（在 .env 用 SSO_KEEP_UNITS 可以改）`,
+    ],
+    chooseTargets: () => [],
+    collect: (session, unitOptions) => sweepShowAll(session, unitOptions, keepUnits),
+    handleAll: clearOthersAll,
+    action: '取消',
+    reportTitle: '一站通其他子系統權限取消結果',
+    reportFilePrefix: '取消其他子系統結果',
+    confirmLines: (count) => [
+      `即將檢查 ${count} 位，把 ${names} 這 ${codes.length} 個子系統有勾的取消掉，這會真的寫進系統。`,
+      `MCI、ACS、DQC 不會被動到；保留單位：${keepText}`,
+      '這些子系統本來就都沒勾的人會直接跳過，一顆確定都不會按。',
+    ],
+    dryRunNote: '試跑模式：只會看每個人現在勾了哪些子系統，不會取消任何權限',
+  };
+}
+
 /** 執行 probe 指令。 */
 async function runProbeCommand(options) {
   const session = await startSession({ freshLogin: options.freshLogin });
@@ -619,6 +693,7 @@ async function main() {
   if (options.command === 'probe') await runProbeCommand(options);
   else if (options.command === 'clear-all') await runUnitSweep(options, clearAllPlan());
   else if (options.command === 'clear-stations') await runUnitSweep(options, clearStationsPlan());
+  else if (options.command === 'clear-others') await runUnitSweep(options, clearOthersPlan());
   else if (options.command === 'grant-units') await runUnitSweep(options, grantUnitsPlan());
   else await runGrant(options);
 }

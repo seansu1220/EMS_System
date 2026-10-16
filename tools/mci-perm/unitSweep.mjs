@@ -20,12 +20,14 @@
  *   同單位兩位都顯示成 `李O城` 時就分不出是哪一位（2026-08-24 實跑踩過）。
  *   取出的內容只留在記憶體與 `out/` 底下的名單／結果檔，姓名寫進 log 前一律經過 `maskName`。
  */
-import { SITE, UNIT_SWEEP } from './config.mjs';
-import { listOptions } from './domFind.mjs';
+import { SHOW_ALL_SWEEP, SITE, TIMING, UNIT_SWEEP } from './config.mjs';
+import { clickMatch, findClickables, listOptions } from './domFind.mjs';
 import {
   activePage,
+  onSomeFrame,
   goToNextPage,
   openAccountPermissionPage,
+  pageSignature,
   readResultNames,
   readStableCount,
   submitSearch,
@@ -350,7 +352,7 @@ export async function collectUnitRoster(session, unitOption) {
     // 系統自己說共幾項，收滿就不必再翻（最後一頁的「下一頁」點下去也不會動，
     // 每個單位白等 6 秒，76 個單位就是快 8 分鐘）。
     if (total !== null && people.length >= total) break;
-    if (!(await goToNextPage(session, firstOnPage))) break;
+    if (!(await goToNextPage(session, firstOnPage, pageSignature(column)))) break;
   }
 
   return { ok: true, people, total, hasAccounts };
@@ -425,4 +427,188 @@ export async function sweepAllUnits(session, targets) {
   }
 
   return { entries, problems };
+}
+
+/**
+ * @typedef {Object} ShowAllRow 「顯示全部」表格上的一列（都是畫面上顯示的樣子，姓名與帳號是遮過的）
+ * @property {string} name
+ * @property {string} account
+ * @property {string} unit
+ */
+
+/**
+ * 把「顯示全部」讀到的每一列，對回單位下拉的選項，組成可以逐位處理的名單。
+ *
+ * 純函式，有測試守著。為什麼要對回下拉：逐位處理時還是得「選單位＋填姓氏」
+ * 查回這個人（見 grantFlow.locatePerson），而選單位要用下拉的 value 才精準。
+ *
+ * 三種人不會進名單：
+ *   - 單位在保留清單裡（**包含**比對）→ 記進 `kept`，一個都不動
+ *   - 表格上的單位在下拉裡找不到一模一樣的寫法 → 記進 `unmatched`（**不猜**：
+ *     選錯單位就查不到人，或更糟——查到同單位同姓的另一位）
+ *   - 姓名、帳號、單位三者都一樣的重複列 → 併成一筆
+ *
+ * @param {ShowAllRow[]} rows
+ * @param {UnitOption[]} unitOptions 單位下拉的所有選項
+ * @param {string[]} [keepUnits] 一個都不動的單位
+ * @param {string[]} [placeholders] 「請選擇」這類不是單位的選項
+ * @returns {{entries: import('./roster.mjs').RosterEntry[],
+ *   kept: {unit: string, count: number}[],
+ *   unmatched: {unit: string, count: number, reason: string}[], duplicateCount: number}}
+ */
+export function buildShowAllEntries(rows, unitOptions, keepUnits = [], placeholders = SITE.flow.unitPlaceholderTexts) {
+  const usable = (unitOptions ?? []).filter((option) => {
+    const text = String(option?.text ?? '').trim();
+    if (!text || !option?.value) return false;
+    return !(placeholders ?? []).some((word) => squeeze(text) === squeeze(word));
+  });
+
+  /** @type {import('./roster.mjs').RosterEntry[]} */
+  const entries = [];
+  /** @type {Map<string, number>} */
+  const kept = new Map();
+  /** @type {Map<string, {count: number, reason: string}>} */
+  const unmatched = new Map();
+  const seen = new Set();
+  let duplicateCount = 0;
+
+  for (const row of rows ?? []) {
+    const name = String(row?.name ?? '').trim();
+    if (!name) continue;
+    const account = String(row?.account ?? '').trim();
+    const unit = String(row?.unit ?? '').trim();
+
+    const key = `${name}｜${account}｜${unit}`;
+    if (seen.has(key)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(key);
+
+    if (unit && (keepUnits ?? []).some((word) => word && squeeze(unit).includes(squeeze(word)))) {
+      kept.set(unit, (kept.get(unit) ?? 0) + 1);
+      continue;
+    }
+
+    const hits = usable.filter((option) => squeeze(option.text) === squeeze(unit));
+    if (hits.length !== 1) {
+      const label = unit || '（單位欄是空的）';
+      const reason = hits.length === 0 ? '單位下拉裡沒有一模一樣的寫法' : `單位下拉裡有 ${hits.length} 個同名的選項，分不出是哪一個`;
+      const previous = unmatched.get(label);
+      unmatched.set(label, { count: (previous?.count ?? 0) + 1, reason });
+      continue;
+    }
+
+    const { searchName, masked } = splitMaskedName(name);
+    entries.push({
+      unit: hits[0].text,
+      unitValue: hits[0].value,
+      name,
+      searchName,
+      rowText: masked ? name : '',
+      rowAccount: account,
+      lineNumber: 0,
+    });
+  }
+
+  return {
+    entries,
+    kept: [...kept.entries()].map(([unit, count]) => ({ unit, count })),
+    unmatched: [...unmatched.entries()].map(([unit, value]) => ({ unit, ...value })),
+    duplicateCount,
+  };
+}
+
+/** 在查詢頁按下「顯示全部」。 */
+async function clickShowAll(session) {
+  const found = await onSomeFrame(activePage(session), async (frame) => {
+    const hits = await findClickables(frame, SITE.flow.showAllTexts, { exact: true });
+    if (hits.length === 0) return null;
+    return (await clickMatch(frame, SITE.flow.showAllTexts, 0, { exact: true })) ? true : null;
+  });
+  return Boolean(found);
+}
+
+/**
+ * 按「顯示全部」，把全機關的人一頁一頁讀下來（只查詢，不改任何東西）。
+ *
+ * 使用者 2026-10-17 指定的掃法：查詢頁的「顯示全部」按下去就是全部的人
+ *（2026-08-20 探測時是 2,258 項、226 頁），再從頁面下方的分頁一頁一頁翻。
+ * 比「一個單位一個單位查」少選 76 次單位，也不會漏掉不在單位下拉裡的人
+ * ——那種人會被列進 `problems`，讓承辦人看得到。
+ *
+ * ⚠ 讀不到「單位」欄就整支停手：沒有單位就無從查回這個人，
+ *   硬做只會整份「查無此人」。
+ *
+ * @param {import('./session.mjs').PermSession} session
+ * @returns {Promise<{rows: ShowAllRow[], total: number|null, problems: UnitProblem[]}>}
+ */
+export async function readShowAllRows(session) {
+  const opened = await openAccountPermissionPage(session);
+  if (!opened.ok) throw new Error(`進不去「帳號子系統權限」畫面：${opened.step}｜${opened.detail}`);
+
+  if (!(await clickShowAll(session))) {
+    throw new Error(`查詢頁上找不到「${SITE.flow.showAllTexts.join('／')}」按鈕，這次不動任何人`);
+  }
+  const page = activePage(session);
+  await page.waitForTimeout(TIMING.querySettleMs);
+  await waitWhileLoading(page);
+  const total = await readStableCount(page);
+  log.info(`  「顯示全部」：系統顯示共 ${total ?? '（讀不到）'} 項`);
+
+  /** @type {ShowAllRow[]} */
+  const rows = [];
+  /** @type {UnitProblem[]} */
+  const problems = [];
+
+  for (let pageIndex = 0; pageIndex < SHOW_ALL_SWEEP.maxPages; pageIndex += 1) {
+    const column = await readResultNames(session, { withUnits: true });
+    if (!column.ok || (pageIndex === 0 && column.unitIndex < 0)) {
+      const headers = column.headers.length ? `（看到的欄位標題：${column.headers.join('、')}）` : '';
+      const reason = column.ok ? '結果表格裡找不到「單位」欄' : column.reason;
+      if (pageIndex === 0) throw new Error(`讀不到「顯示全部」的結果：${reason}${headers}，這次不動任何人`);
+      problems.push({ unit: '（顯示全部）', reason: `第 ${pageIndex + 1} 頁${reason}${headers}` });
+      break;
+    }
+    if (pageIndex === 0) log.info(`    結果表格欄位：${column.headers.filter(Boolean).join('｜')}`);
+
+    for (const [index, value] of column.values.entries()) {
+      rows.push({ name: value, account: column.accounts[index] ?? '', unit: column.units[index] ?? '' });
+    }
+    if ((pageIndex + 1) % 20 === 0) log.info(`    已讀 ${pageIndex + 1} 頁、${rows.length} 列`);
+
+    if (total !== null && rows.length >= total) break;
+    if (!(await goToNextPage(session, column.values[0] ?? '', pageSignature(column)))) break;
+  }
+
+  // 少讀到人要講明白：沒讀到的人不會被處理，而且畫面上看不出來。
+  if (total !== null && rows.length < total) {
+    problems.push({
+      unit: '（顯示全部）',
+      reason: `系統說共 ${total} 項，只讀到 ${rows.length} 列（翻頁中斷）；沒讀到的人這次不會被處理，請加 --rescan 重掃`,
+    });
+  }
+  return { rows, total, problems };
+}
+
+/**
+ * 用「顯示全部」掃出全機關的名單，並對回單位下拉。
+ *
+ * @param {import('./session.mjs').PermSession} session
+ * @param {UnitOption[]} unitOptions
+ * @param {string[]} keepUnits 一個都不動的單位
+ * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[], problems: UnitProblem[]}>}
+ */
+export async function sweepShowAll(session, unitOptions, keepUnits) {
+  const { rows, problems } = await readShowAllRows(session);
+  const built = buildShowAllEntries(rows, unitOptions, keepUnits);
+
+  log.ok(`讀到 ${rows.length} 列，可以處理的 ${built.entries.length} 位`);
+  if (built.duplicateCount > 0) log.info(`  （重複出現的 ${built.duplicateCount} 列已併成一筆）`);
+  for (const hit of built.kept) log.ok(`  保留不動：${hit.unit} ${hit.count} 位`);
+  for (const miss of built.unmatched) {
+    log.warn(`  ${miss.unit}：${miss.count} 位沒辦法處理（${miss.reason}）`);
+    problems.push({ unit: miss.unit, reason: `${miss.count} 位沒有處理：${miss.reason}` });
+  }
+  return { entries: built.entries, problems };
 }

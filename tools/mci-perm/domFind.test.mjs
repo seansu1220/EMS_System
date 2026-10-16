@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { BROWSER, SITE } from './config.mjs';
+import { BROWSER, CLEAR_OTHERS, SITE } from './config.mjs';
 import {
   clickMatch,
   countDataRows,
@@ -694,4 +694,65 @@ test('「下一頁」用完全相符比對，不會誤按「上一頁」', { ski
   const hits = await findClickables(frame, SITE.flow.nextPageTexts, { exact: true });
   assert.equal(hits.length, 1);
   assert.equal(hits[0].text, '下一頁');
+});
+
+test('顯示全部：讀姓名欄時可以順便讀單位欄（位置一一對應）', { skip }, async () => {
+  await page.setContent(`
+    <table>
+      <tr><th>帳號</th><th>姓名</th><th>縣市別</th><th>單位</th><th>功能</th></tr>
+      <tr><td>test01</td><td>測O甲</td><td>測試市</td><td>測試甲分隊</td><td><input type="button" value="設定"></td></tr>
+      <tr><td>test02</td><td>測O乙</td><td>測試市</td><td>測試科</td><td><input type="button" value="設定"></td></tr>
+    </table>`);
+  const column = await readResultColumn(
+    page.mainFrame(),
+    SITE.flow.resultNameHeaders,
+    SITE.flow.rowActionTexts,
+    SITE.flow.resultAccountHeaders,
+    SITE.flow.resultUnitHeaders,
+  );
+  assert.equal(column.ok, true);
+  assert.deepEqual(column.values, ['測O甲', '測O乙']);
+  assert.deepEqual(column.extras, ['test01', 'test02']);
+  assert.deepEqual(column.units, ['測試甲分隊', '測試科']);
+});
+
+test('顯示全部：沒有單位欄時 unitIndex 是 -1（呼叫端據此停手）', { skip }, async () => {
+  await page.setContent(`
+    <table>
+      <tr><th>姓名</th><th>功能</th></tr>
+      <tr><td>測O甲</td><td><input type="button" value="設定"></td></tr>
+    </table>`);
+  const column = await readResultColumn(
+    page.mainFrame(),
+    SITE.flow.resultNameHeaders,
+    SITE.flow.rowActionTexts,
+    [],
+    SITE.flow.resultUnitHeaders,
+  );
+  assert.equal(column.ok, true);
+  assert.equal(column.unitIndex, -1);
+  assert.deepEqual(column.units, ['']);
+});
+
+test('取消其他子系統：10 個勾選框取消後，MCI、ACS、DQC 仍然勾著', { skip }, async () => {
+  // 仿照真實版面：13 個子系統全部勾起來，下拉與名稱刻意錯開（真實畫面就是這樣）。
+  const allCodes = [...CLEAR_OTHERS.clearCodes, ...CLEAR_OTHERS.keepCodes];
+  await page.setContent(
+    `<table>${allCodes
+      .map(
+        (code, index) =>
+          `<tr><td><input type="checkbox" id="${code}" name="subSystem[]" checked>${code}</td>` +
+          `<td><select id="${allCodes[(index + 1) % allCodes.length]}select"><option>請選擇權限</option></select></td></tr>`,
+      )
+      .join('')}</table>`,
+  );
+  const frame = page.mainFrame();
+  for (const code of CLEAR_OTHERS.clearCodes) {
+    const result = await setVisibleCheckbox(frame, `#${code}`, false);
+    assert.equal(result.ok, true);
+    assert.equal(result.checked, false);
+  }
+  for (const code of CLEAR_OTHERS.keepCodes) {
+    assert.equal(await frame.$eval(`#${code}`, (element) => element.checked), true, `${code} 不該被取消`);
+  }
 });

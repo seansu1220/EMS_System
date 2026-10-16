@@ -551,6 +551,8 @@ function queryPage(params) {
     const wanted = params.headers || [];
     // 第二欄是「有就更好」：帳號欄用來把同名的兩列分開（見 config.resultAccountHeaders）。
     const extraWanted = params.extraHeaders || [];
+    // 第三欄（單位）：只有「顯示全部」掃全機關時要——那時一張表裡混著各單位的人。
+    const unitWanted = params.unitHeaders || [];
     const requireTexts = params.requireTexts || [];
     const tables = Array.prototype.slice.call(document.querySelectorAll('table')).filter(isVisible);
     const seenHeaders = [];
@@ -597,17 +599,20 @@ function queryPage(params) {
       if (columnIndex < 0) continue;
       // 讀不到第二欄只是少一項辨識依據，不該讓整張表作廢（回傳空字串，呼叫端自己退回只比姓名）。
       const extraIndex = extraWanted.length > 0 ? findColumn(extraWanted) : -1;
+      const unitIndex = unitWanted.length > 0 ? findColumn(unitWanted) : -1;
 
       const values = [];
       const extras = [];
+      const units = [];
       for (const row of rows) {
         if (row === headerRow) continue;
         const cells = Array.prototype.slice.call(row.querySelectorAll('td'));
         if (cells.length === 0) continue; // 標題列或分隔列
         values.push(clean(cells[columnIndex] ? cells[columnIndex].textContent : ''));
         extras.push(extraIndex >= 0 && cells[extraIndex] ? clean(cells[extraIndex].textContent) : '');
+        units.push(unitIndex >= 0 && cells[unitIndex] ? clean(cells[unitIndex].textContent) : '');
       }
-      return { ok: true, columnIndex, extraIndex, headers, values, extras };
+      return { ok: true, columnIndex, extraIndex, unitIndex, headers, values, extras, units };
     }
 
     return {
@@ -616,6 +621,7 @@ function queryPage(params) {
       headers: seenHeaders.slice(0, 20),
       values: [],
       extras: [],
+      units: [],
     };
   }
 
@@ -877,7 +883,7 @@ export async function listOptions(frame, selector) {
 /**
  * 從查詢結果表格讀出某一欄的內容。
  *
- * ⚠ 這是本模組**唯一會取出資料列內容**的函式，而且只讀兩欄：姓名與帳號。
+ * ⚠ 這是本模組**唯一會取出資料列內容**的函式，而且只讀姓名、帳號（與「顯示全部」時的單位）。
  *   不先知道一個單位裡有誰，就沒辦法逐一處理；不連帳號一起抄，遮蔽後撞名的
  *   兩位（同單位兩個 `李O城`）就分不出是哪一列。這兩欄在畫面上本來就是
  *   遮蔽過的（`許O軒`、`A1*****621`），取出後只留在記憶體與 `out/` 底下的
@@ -887,15 +893,18 @@ export async function listOptions(frame, selector) {
  * @param {string[]} [requireTexts] 表格裡一定要有的字（用來認出「這張才是結果表」）
  * @param {string[]} [extraHeaders] 順便讀的第二欄（帳號）。找不到這一欄不算失敗，
  *   `extras` 會是一串空字串——呼叫端就只能靠姓名認人
- * @returns {Promise<{ok:boolean, columnIndex?:number, extraIndex?:number,
- *   headers:string[], values:string[], extras:string[], reason?:string}>}
+ * @param {string[]} [unitHeaders] 順便讀的第三欄（單位），只有「顯示全部」掃全機關時給。
+ *   找不到時 `units` 是一串空字串，由呼叫端決定要不要停手（`unitIndex` 為 -1）
+ * @returns {Promise<{ok:boolean, columnIndex?:number, extraIndex?:number, unitIndex?:number,
+ *   headers:string[], values:string[], extras:string[], units:string[], reason?:string}>}
  */
-export async function readResultColumn(frame, headerCandidates, requireTexts = [], extraHeaders = []) {
+export async function readResultColumn(frame, headerCandidates, requireTexts = [], extraHeaders = [], unitHeaders = []) {
   return frame.evaluate(queryPage, {
     mode: 'columnValues',
     headers: headerCandidates,
     requireTexts,
     extraHeaders,
+    unitHeaders,
   });
 }
 

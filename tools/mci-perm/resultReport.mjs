@@ -74,7 +74,7 @@ function timestamp(date = new Date()) {
  *   因此只落在 `out/result/`，不可外流、不可上傳。
  *
  * @param {import('./grantFlow.mjs').GrantResult[]} results
- * @param {{execute?: boolean, now?: Date, action?: string,
+ * @param {{execute?: boolean, now?: Date, action?: string, title?: string, filePrefix?: string,
  *   problems?: import('./roster.mjs').RosterProblem[],
  *   unitProblems?: import('./unitSweep.mjs').UnitProblem[]}} [options]
  *   `unitProblems`＝全面取消時「這個單位沒掃出來」的清單
@@ -84,7 +84,7 @@ export async function writeResultReport(results, options = {}) {
   const summary = summarize(results);
   const now = options.now ?? new Date();
   const lines = [
-    `# 大量傷患系統權限${options.action === '取消' ? '取消' : '開通'}結果`,
+    `# ${options.title ?? `大量傷患系統權限${options.action === '取消' ? '取消' : '開通'}結果`}`,
     ``,
     `- 執行時間：${now.toLocaleString('zh-TW')}`,
     `- 模式：${options.execute ? '正式執行（有按確定）' : '試跑（沒有按確定，系統沒有被改動）'}`,
@@ -143,7 +143,7 @@ export async function writeResultReport(results, options = {}) {
   await fs.mkdir(PATHS.resultDir, { recursive: true });
   const filePath = path.join(
     PATHS.resultDir,
-    `${options.action === '取消' ? '取消結果' : '開通結果'}-${timestamp(now)}.md`,
+    `${options.filePrefix ?? (options.action === '取消' ? '取消結果' : '開通結果')}-${timestamp(now)}.md`,
   );
   await fs.writeFile(filePath, lines.join('\n'), 'utf8');
   return filePath;

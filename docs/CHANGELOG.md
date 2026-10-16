@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-10-17　v1.49.0 一站通新增「取消其他子系統權限」
+
+### 問題描述
+使用者要求：在一站通的「SSO 各子系統登入權限設定」裡，**所有人除了 MCI 大傷系統、
+ACS 耗材管理系統、DQC DA-CPR 系統以外，其他系統的權限都取消掉**。
+作法比照之前的大傷權限設定；使用者另外指出兩件事：
+1. 系統其實有列出所有人的方法——查詢頁的「顯示全部」，再從下方分頁一頁一頁掃
+2. 只要取消子系統前面的勾選框，旁邊的權限下拉就會連動變回「請選擇權限」
+
+### 根本原因（為什麼要改既有程式而不只是加一支）
+- 規格書 6.9.3 原本寫「系統沒有列出全機關所有人的畫面」——**是錯的**。
+  「顯示全部」在 2026-08-20 的探測紀錄裡就有（共 2,258 項、226 頁），當時沒注意到
+- 原本的翻頁判斷只看「第一列姓名有沒有變」。逐單位查時頁數少還好；
+  「顯示全部」一翻兩百多頁，相鄰兩頁第一列剛好同樣是遮蔽後的 `陳O宏` 就會誤判成翻到底，
+  後面的人整批漏掉。改成比對整頁的姓名＋帳號
+
+### 修改的檔案與內容
+
+| 檔案 | 內容 |
+| --- | --- |
+| `tools/mci-perm/config.mjs` | 新增 `CLEAR_OTHERS`（要取消的 10 個 id、保留的 MCI／ACS／DQC、顯示名稱、`SSO_KEEP_UNITS` 保留單位，預設不保留）、`SHOW_ALL_SWEEP`；`SITE.flow` 新增 `resultUnitHeaders`、`showAllTexts` |
+| `tools/mci-perm/otherSubsystems.mjs`（新） | 每一位的處理：讀 10 個子系統現況 → 有勾的取消 → 按確定 → 回讀查證。`resolveClearCodes()`（取消清單碰到保留的就停手）、`planSubsystemClear()`（讀不到的不當成沒權限）為純函式 |
+| `tools/mci-perm/unitSweep.mjs` | 新增 `readShowAllRows()`／`sweepShowAll()`（按「顯示全部」逐頁讀姓名、帳號、單位）與純函式 `buildShowAllEntries()`（單位對回下拉、保留單位、去重）；逐單位掃描的翻頁改用整頁指紋 |
+| `tools/mci-perm/grantFlow.mjs` | `readResultNames()` 可選擇一起讀單位欄；`goToNextPage()` 新增整頁指紋判斷、新增 `pageSignature()`；認列翻頁也改用指紋；匯出 `locatePerson`、`runBatch` 給新模組用 |
+| `tools/mci-perm/domFind.mjs` | `readResultColumn()` 多讀一欄「單位」（只在顯示全部時用） |
+| `tools/mci-perm/index.mjs` | 新增 `clear-others` 指令與 `clearOthersPlan()`；`SweepPlan` 新增可選的 `collect`（自己列名單）、`reportTitle`、`reportFilePrefix` |
+| `tools/mci-perm/resultReport.mjs` | 結果檔可自訂標題與檔名開頭（本支為「取消其他子系統結果-*.md」） |
+| `tools/mci-perm/.env.example` | 新增 `SSO_KEEP_UNITS` 說明 |
+| `捷徑/大量傷患權限/取消其他子系統權限-{試跑,正式執行}.bat`（新） | 兩個捷徑，純 ASCII |
+| `捷徑/大量傷患權限/說明.txt` | 補上新捷徑的說明 |
+| 測試 | 新增 `otherSubsystems.test.mjs`（8 個）、`unitSweep.test.mjs` +7、`domFind.test.mjs` +3（含「取消 10 個後 MCI／ACS／DQC 仍勾著」的瀏覽器測試）。共 154 個全過 |
+| `docs/TOOLS_SPEC.md` | 6.9.3 改寫（四支、兩種掃法、更正「沒有顯示全部」的錯誤說法），新增 6.9.3.2c，更新 6.14、6.15 |
+
+### 保護措施
+- 一律用 id 定位子系統（畫面上名稱與下拉是錯開的）；**FOS 的 id 是 `VDS`**
+- 取消清單和保留清單有交集就停手，開瀏覽器之前就檢查
+- 10 個都沒勾的人一顆按鈕都不按；有一個讀不到就整位停手；有一個取消不掉就不按確定
+- 讀不到單位欄就整支停手；單位對不上下拉的人不猜、列進結果檔
+- 預設試跑；正式執行先掃完、報出真實人數，再問一次 yes/no；可中斷續跑
+- 尚未實跑：第一次請先跑試跑捷徑，確認「顯示全部」的單位欄讀得到、人數對得上
+
+---
+
 ## 2026-10-13　v1.48.2 舊月份清理改成三處合起來算
 
 ### 問題描述
