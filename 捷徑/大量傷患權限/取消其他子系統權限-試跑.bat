@@ -38,9 +38,12 @@ echo   Kept:    MCI ACS DQC  (never touched)
 echo.
 echo   Step 1: it presses "show all" and reads every
 echo           page (about 10 minutes, read only).
-echo   Step 2: for each person it opens the settings
-echo           page and reports which subsystems are
-echo           checked now.
+echo   Step 2: for the FIRST 20 PEOPLE only, it opens
+echo           the settings page and reports which
+echo           subsystems are checked now.
+echo.
+echo   The full list is saved, so the EXECUTE shortcut
+echo   reuses it and does not scan again.
 echo.
 echo   People with none of them checked are skipped
 echo   without pressing anything.
@@ -54,7 +57,7 @@ echo   Log:    tools\mci-perm\out\last-run.log
 echo ==================================================
 echo.
 
-call npm run tool:mci -- clear-others %*
+call npm run tool:mci -- clear-others --limit=20 %*
 
 echo.
 echo Press any key to close this window.
