@@ -39,7 +39,7 @@ echo   Kept:    MCI ACS DQC  (never touched)
 echo.
 echo   Step 1: it presses "show all" and reads every
 echo           page (about 10 minutes, read only).
-echo   Step 2: it asks you yes/no with the real number.
+echo   Step 2: it starts RIGHT AWAY - no yes/no question.
 echo   Step 3: for each person it unchecks those
 echo           subsystems, presses confirm, then checks
 echo           again that they are really gone.
@@ -48,8 +48,7 @@ echo   People with none of them checked are skipped
 echo   without pressing anything.
 echo.
 echo   1. A browser opens - type the CAPTCHA, sign in.
-echo   2. Type yes when it asks for confirmation.
-echo   3. Leave it running. You can close the window
+echo   2. Leave it running. You can close the window
 echo      any time - it resumes where it stopped.
 echo.
 echo   Result: tools\mci-perm\out\result\
@@ -57,7 +56,7 @@ echo   Log:    tools\mci-perm\out\last-run.log
 echo ==================================================
 echo.
 
-call npm run tool:mci -- clear-others --execute %*
+call npm run tool:mci -- clear-others --execute --yes %*
 
 echo.
 echo Press any key to close this window.

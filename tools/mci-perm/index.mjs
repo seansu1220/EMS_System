@@ -33,6 +33,7 @@
  *   --unit=大溪分隊   只處理其中一個單位（先拿小單位試流程）
  *   --rescan         重新掃一次名單（預設沿用上次掃到的，省十分鐘）
  *   --restart        名單與進度全部捨棄，整份從頭跑
+ *   --yes            讀完名單直接開始，不問 yes/no（「取消其他子系統權限-正式執行.bat」預設帶著）
  *
  * ⚠ 這三支都會在「單位名稱對不上」時**直接停手**並印出下拉裡實際的單位：
  *   `clear-all` 是怕誤清了本來要保留的單位（預設緊急救護科，`MCI_KEEP_UNITS`），
@@ -126,6 +127,8 @@ export function parseArgs(args) {
     restart: args.includes('--restart'),
     /** 掃單位那兩支：重新掃一次名單（預設沿用上次掃到的，省十分鐘）。 */
     rescan: args.includes('--rescan'),
+    /** 掃單位那幾支：讀完名單直接開始，不再問 yes/no（使用者 2026-10-17：開了就要去睡）。 */
+    yes: args.includes('--yes'),
     files: valuesOf('file'),
     unit: valueOf('unit'),
     name: valueOf('name'),
@@ -468,10 +471,14 @@ async function runUnitSweep(options, plan) {
       const [first, ...rest] = plan.confirmLines(work.length);
       log.warn(first);
       for (const line of rest) log.info(line);
-      const answer = await prompt('  yes/no: ');
-      if (!['y', 'yes'].includes(String(answer ?? '').toLowerCase())) {
-        log.info('已取消，系統沒有被改動。');
-        return;
+      if (options.yes) {
+        log.info('依 --yes 不再詢問，直接開始。');
+      } else {
+        const answer = await prompt('  yes/no: ');
+        if (!['y', 'yes'].includes(String(answer ?? '').toLowerCase())) {
+          log.info('已取消，系統沒有被改動。');
+          return;
+        }
       }
     } else {
       log.step(plan.dryRunNote);
