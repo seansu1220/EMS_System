@@ -315,3 +315,19 @@ test('翻頁指紋：第一列同名但整頁不同時，指紋不一樣', () =>
   const after = pageSignature({ values: ['陳O宏', '張O明'], accounts: ['b1', 'b2'] });
   assert.notEqual(before, after);
 });
+
+test('顯示全部：每一列都有去處，加起來等於讀到的列數', () => {
+  const rows = [
+    { name: '測O甲', account: 'x1', unit: '測試甲分隊' },
+    { name: '測O甲', account: 'x1', unit: '測試甲分隊' },
+    { name: '', account: '', unit: '' },
+    { name: '測O乙', account: 'x2', unit: '緊急救護科' },
+    { name: '測O丙', account: 'x3', unit: '外縣市某分隊' },
+  ];
+  const built = buildShowAllEntries(rows, OPTIONS, ['緊急救護科']);
+  const kept = built.kept.reduce((sum, hit) => sum + hit.count, 0);
+  const unmatched = built.unmatched.reduce((sum, miss) => sum + miss.count, 0);
+  assert.equal(built.entries.length + kept + unmatched + built.duplicateCount + built.blankNameCount, rows.length);
+  assert.equal(built.blankNameCount, 1);
+  assert.deepEqual(built.unmatched[0].people, [{ name: '測O丙', account: 'x3' }]);
+});

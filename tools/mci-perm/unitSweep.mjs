@@ -454,7 +454,8 @@ export async function sweepAllUnits(session, targets) {
  * @param {string[]} [placeholders] 「請選擇」這類不是單位的選項
  * @returns {{entries: import('./roster.mjs').RosterEntry[],
  *   kept: {unit: string, count: number}[],
- *   unmatched: {unit: string, count: number, reason: string}[], duplicateCount: number}}
+ *   unmatched: {unit: string, count: number, reason: string, people: {name: string, account: string}[]}[],
+ *   duplicateCount: number, blankNameCount: number}}
  */
 export function buildShowAllEntries(rows, unitOptions, keepUnits = [], placeholders = SITE.flow.unitPlaceholderTexts) {
   const usable = (unitOptions ?? []).filter((option) => {
@@ -467,14 +468,19 @@ export function buildShowAllEntries(rows, unitOptions, keepUnits = [], placehold
   const entries = [];
   /** @type {Map<string, number>} */
   const kept = new Map();
-  /** @type {Map<string, {count: number, reason: string}>} */
+  /** @type {Map<string, {count: number, reason: string, people: {name: string, account: string}[]}>} */
   const unmatched = new Map();
   const seen = new Set();
   let duplicateCount = 0;
+  // 姓名格是空的列：多半不是人（分隔列），但一樣要算出來，總數才對得起來。
+  let blankNameCount = 0;
 
   for (const row of rows ?? []) {
     const name = String(row?.name ?? '').trim();
-    if (!name) continue;
+    if (!name) {
+      blankNameCount += 1;
+      continue;
+    }
     const account = String(row?.account ?? '').trim();
     const unit = String(row?.unit ?? '').trim();
 
@@ -495,7 +501,9 @@ export function buildShowAllEntries(rows, unitOptions, keepUnits = [], placehold
       const label = unit || '（單位欄是空的）';
       const reason = hits.length === 0 ? '單位下拉裡沒有一模一樣的寫法' : `單位下拉裡有 ${hits.length} 個同名的選項，分不出是哪一個`;
       const previous = unmatched.get(label);
-      unmatched.set(label, { count: (previous?.count ?? 0) + 1, reason });
+      // 連人一起記：承辦人要自己補做時，得知道是哪幾位。
+      const people = [...(previous?.people ?? []), { name, account }];
+      unmatched.set(label, { count: people.length, reason, people });
       continue;
     }
 
@@ -516,6 +524,7 @@ export function buildShowAllEntries(rows, unitOptions, keepUnits = [], placehold
     kept: [...kept.entries()].map(([unit, count]) => ({ unit, count })),
     unmatched: [...unmatched.entries()].map(([unit, value]) => ({ unit, ...value })),
     duplicateCount,
+    blankNameCount,
   };
 }
 
@@ -600,15 +609,28 @@ export async function readShowAllRows(session) {
  * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[], problems: UnitProblem[]}>}
  */
 export async function sweepShowAll(session, unitOptions, keepUnits) {
-  const { rows, problems } = await readShowAllRows(session);
+  const { rows, total, problems } = await readShowAllRows(session);
   const built = buildShowAllEntries(rows, unitOptions, keepUnits);
 
-  log.ok(`讀到 ${rows.length} 列，可以處理的 ${built.entries.length} 位`);
-  if (built.duplicateCount > 0) log.info(`  （重複出現的 ${built.duplicateCount} 列已併成一筆）`);
+  // 每一列都要有去處，加起來要等於讀到的列數——對不上就是程式有漏洞，不是人事異動。
+  const keptCount = built.kept.reduce((sum, hit) => sum + hit.count, 0);
+  const unmatchedCount = built.unmatched.reduce((sum, miss) => sum + miss.count, 0);
+  log.ok(
+    `系統顯示共 ${total ?? '（讀不到）'} 項，讀到 ${rows.length} 列：` +
+      `進名單 ${built.entries.length}、保留單位 ${keptCount}、單位對不上 ${unmatchedCount}、` +
+      `重複 ${built.duplicateCount}、姓名空白 ${built.blankNameCount}`,
+  );
   for (const hit of built.kept) log.ok(`  保留不動：${hit.unit} ${hit.count} 位`);
   for (const miss of built.unmatched) {
     log.warn(`  ${miss.unit}：${miss.count} 位沒辦法處理（${miss.reason}）`);
-    problems.push({ unit: miss.unit, reason: `${miss.count} 位沒有處理：${miss.reason}` });
+    const people = miss.people.map((person) => `${person.name}${person.account ? `（${person.account}）` : ''}`);
+    problems.push({ unit: miss.unit, reason: `${miss.count} 位沒有處理：${miss.reason}；名單：${people.join('、')}` });
+  }
+  if (built.duplicateCount > 0) {
+    problems.push({
+      unit: '（顯示全部）',
+      reason: `${built.duplicateCount} 列的姓名、帳號、單位與另一列完全一樣，已併成一筆；若其實是不同的人，請自己到系統確認`,
+    });
   }
   return { entries: built.entries, problems };
 }

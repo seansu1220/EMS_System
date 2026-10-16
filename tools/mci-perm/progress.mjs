@@ -137,12 +137,18 @@ export function sweepRosterFile(label) {
  *
  * ⚠ 含姓名，只落在 `out/progress/`（`.gitignore` 已排除 `tools/**\/out/`）。
  *
+ * 「沒掃乾淨」的問題（`problems`）**一起存**：沿用這份名單的下一次執行，
+ * 結果檔與確認畫面才看得到「有誰沒進名單、為什麼」。2026-10-17 就吃過虧——
+ * 名單比使用者知道的人數少了 47 位，但讀名單那一次的紀錄已被下一次蓋掉，
+ * 查不出是誰、為什麼。
+ *
  * @param {string} filePath
  * @param {import('./roster.mjs').RosterEntry[]} entries
+ * @param {import('./unitSweep.mjs').UnitProblem[]} [problems]
  */
-export async function saveRoster(filePath, entries) {
+export async function saveRoster(filePath, entries, problems = []) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const payload = { savedAt: new Date().toISOString(), entries };
+  const payload = { savedAt: new Date().toISOString(), entries, problems };
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
 }
 
@@ -150,16 +156,18 @@ export async function saveRoster(filePath, entries) {
  * 讀回上次掃出來的名單（沒有、或讀不懂就當成「還沒掃過」）。
  *
  * @param {string} filePath
- * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[], savedAt: string}>}
+ * @returns {Promise<{entries: import('./roster.mjs').RosterEntry[], savedAt: string,
+ *   problems: import('./unitSweep.mjs').UnitProblem[]}>}
  */
 export async function loadRoster(filePath) {
   try {
     const payload = JSON.parse(await fs.readFile(filePath, 'utf8'));
     const entries = Array.isArray(payload?.entries) ? payload.entries : [];
-    return { entries, savedAt: String(payload?.savedAt ?? '') };
+    const problems = Array.isArray(payload?.problems) ? payload.problems : [];
+    return { entries, savedAt: String(payload?.savedAt ?? ''), problems };
   } catch {
     // 沒有檔案＝第一次跑；壞掉的檔案重掃一次就好，不值得讓整個流程失敗。
-    return { entries: [], savedAt: '' };
+    return { entries: [], savedAt: '', problems: [] };
   }
 }
 

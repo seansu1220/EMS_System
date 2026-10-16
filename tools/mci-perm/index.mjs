@@ -332,7 +332,7 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
       log.info('人事有異動、或改過 .env 的單位範圍時，加上 --rescan 會依現在的設定重掃一次。');
       // ⚠ 舊名單是**整個範圍**的人，`--unit` 一定要在這裡再篩一次，
       //   否則「只想先試一個單位」的指令會變成把全部的人都跑掉。
-      if (!options.unit) return { entries: cached.entries, unitProblems: [] };
+      if (!options.unit) return { entries: cached.entries, unitProblems: cached.problems };
       const picked = filterEntriesByUnit(cached.entries, options.unit);
       if (picked.length === 0) {
         throw new Error(
@@ -340,7 +340,7 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
         );
       }
       log.info(`依 --unit=${options.unit} 從舊名單裡挑出 ${picked.length} 位`);
-      return { entries: picked, unitProblems: [] };
+      return { entries: picked, unitProblems: cached.problems };
     }
   }
 
@@ -376,7 +376,7 @@ async function resolveSweptRoster(session, options, rosterFile, plan) {
   if (options.unit) {
     log.ok(`掃描完成：${swept.entries.length} 位（只掃了 --unit 指定的單位，沒有更新名單快取）`);
   } else {
-    await saveRoster(rosterFile, swept.entries);
+    await saveRoster(rosterFile, swept.entries, swept.problems);
     log.ok(`掃描完成：共 ${swept.entries.length} 位，名單已存到 ${rosterFile}`);
   }
   return { entries: swept.entries, unitProblems: swept.problems };
@@ -397,7 +397,7 @@ async function collectWithPlan(session, options, rosterFile, plan, unitOptions) 
   const swept = await plan.collect(session, unitOptions);
 
   if (!options.unit) {
-    await saveRoster(rosterFile, swept.entries);
+    await saveRoster(rosterFile, swept.entries, swept.problems);
     log.ok(`掃描完成：共 ${swept.entries.length} 位，名單已存到 ${rosterFile}`);
     return { entries: swept.entries, unitProblems: swept.problems };
   }
@@ -439,6 +439,11 @@ async function runUnitSweep(options, plan) {
   try {
     const { entries, unitProblems } = await resolveSweptRoster(session, options, rosterFile, plan);
     if (entries.length === 0) throw new Error('一個人都沒掃到，這次不做任何事（請看上面每個單位的訊息）');
+    // 沒進名單的人要在問 yes/no **之前**講出來：按下去之後就只會處理名單上的人。
+    if (unitProblems.length > 0) {
+      log.warn(`讀名單時有 ${unitProblems.length} 筆沒掃乾淨（這些人這次不會被處理，完整清單會寫進結果檔）：`);
+      for (const problem of unitProblems) log.warn(`  ${problem.unit}：${String(problem.reason).split('：')[0]}`);
+    }
 
     const progress = await loadProgress(progressFile);
     const { todo, skipped } = splitByProgress(entries, progress);
