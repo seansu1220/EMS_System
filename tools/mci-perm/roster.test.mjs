@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   describeRosterLocation,
   detectDroppedFiles,
+  splitCsvText,
   parseRoster,
   parseRosterLine,
   parseRosterMatrix,
@@ -220,4 +221,17 @@ test('什麼都沒貼時不算拖檔案', () => {
 test('一次讀好幾個檔時，問題列指得出是哪一份的哪一列', () => {
   const problem = { sourceName: '三大.xlsx', sheetName: '工作表1', lineNumber: 7 };
   assert.equal(describeRosterLocation(problem), '三大.xlsx 工作表「工作表1」第 7 列');
+});
+
+test('多欄位的 CSV 照標題列找單位與姓名，其他欄位（身分證字號）不讀', () => {
+  const csv = '\ufeff序號,單位,姓名,身分證字號\r\n1,大溪分隊,王小明,A100000001\r\n\r\n2,平鎮分隊,林美玲,A100000002\r\n';
+  const result = parseRosterMatrix(splitCsvText(csv));
+  assert.deepEqual(
+    result.entries.map((entry) => [entry.unit, entry.name]),
+    [
+      ['大溪分隊', '王小明'],
+      ['平鎮分隊', '林美玲'],
+    ],
+  );
+  assert.equal(result.problems.length, 0);
 });

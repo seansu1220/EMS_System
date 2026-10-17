@@ -160,12 +160,13 @@ async function verifyCleared(session, entry, codes) {
  *
  * @param {import('./session.mjs').PermSession} session
  * @param {import('./roster.mjs').RosterEntry} entry
- * @param {{execute?: boolean, verify?: boolean}} [options]
+ * @param {{execute?: boolean, verify?: boolean, codes?: string[]}} [options]
+ *   `codes`＝要取消的子系統（不給就是 CLEAR_OTHERS 那 10 個；「取消名單外 DACPR」給 `['DQC']`）
  * @returns {Promise<import('./grantFlow.mjs').GrantResult>}
  */
 export async function clearOthersOne(session, entry, options = {}) {
   const base = { unit: entry.unit, name: entry.name, account: entry.rowAccount ?? '' };
-  const codes = resolveClearCodes(CLEAR_OTHERS.clearCodes, CLEAR_OTHERS.keepCodes);
+  const codes = options.codes ?? resolveClearCodes(CLEAR_OTHERS.clearCodes, CLEAR_OTHERS.keepCodes);
 
   const located = await locatePerson(session, entry);
   if (!located.ok) return { ...base, ...located.result };
@@ -244,6 +245,21 @@ export async function clearOthersOne(session, entry, options = {}) {
  */
 export async function clearOthersAll(session, entries, options = {}) {
   // 開跑前先檢查一次清單，寫錯就一個人都不碰（不要等到第一位才發現）。
-  resolveClearCodes(CLEAR_OTHERS.clearCodes, CLEAR_OTHERS.keepCodes);
-  return runBatch(session, entries, options, clearOthersOne);
+  const codes = resolveClearCodes(CLEAR_OTHERS.clearCodes, CLEAR_OTHERS.keepCodes);
+  return runBatch(session, entries, { ...options, codes }, clearOthersOne);
+}
+
+/**
+ * 依名單逐一取消**指定的**子系統（「取消名單外 DACPR」只取消 DQC）。
+ *
+ * 每一位的流程與 {@link clearOthersOne} 完全相同（讀現況 → 有勾才取消 → 回讀查證），
+ * 只是要看的子系統換成 `codes`；其他子系統一律不讀、不碰。
+ *
+ * @param {import('./session.mjs').PermSession} session
+ * @param {import('./roster.mjs').RosterEntry[]} entries
+ * @param {object} options 同 runBatch
+ * @param {string[]} codes 要取消的子系統（已經過 resolveClearCodes 檢查）
+ */
+export async function clearCodesAll(session, entries, options, codes) {
+  return runBatch(session, entries, { ...options, codes }, clearOthersOne);
 }

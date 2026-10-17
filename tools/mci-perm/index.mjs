@@ -26,6 +26,10 @@
  *   npm run tool:mci -- clear-stations --execute 真的把各分隊的 MCI 權限取消（科室、大隊不動）
  *   npm run tool:mci -- clear-others             試跑：用「顯示全部」列出全機關，看每個人勾了哪些子系統
  *   npm run tool:mci -- clear-others --execute   真的把 MCI、ACS、DQC 以外的子系統權限全部取消
+ *   npm run tool:mci -- revoke-dqc               試跑：比對兩份名單，看保留名單以外的人有沒有勾 DQC
+ *   npm run tool:mci -- revoke-dqc --execute     真的把保留名單以外的人的 DQC（DA-CPR 品管）取消
+ *     兩份名單預設從「捷徑\大量傷患權限\DACPR名單\」讀（檔名「保留名單」開頭的是保留名單），
+ *     也可以用 --keep=保留名單.txt --file=全部名單.xlsx 指定
  *   npm run tool:mci -- probe                    探測頁面結構（開發／改版卡住時用）
  *   npm run tool:mci -- probe --unit=X --name=Y  連結果畫面與權限畫面一起探測（不會按確定）
  *
@@ -52,6 +56,7 @@ import { grantAll, openAccountPermissionPage, revokeAll, waitForOptions } from '
 import { log, closePrompt, prompt, startLineBuffering, stopLineBuffering, writeLogFile } from './logger.mjs';
 import { clearOthersAll, displayNameOf, resolveClearCodes } from './otherSubsystems.mjs';
 import { runProbe } from './probe.mjs';
+import { runRevokeUnlisted } from './revokeUnlisted.mjs';
 import { describeRosterLocation, readRosterFiles, resolveRosterInput } from './roster.mjs';
 import {
   appendProgress,
@@ -78,17 +83,18 @@ import {
   withSearchNames,
 } from './unitSweep.mjs';
 
-const COMMANDS = ['grant', 'grant-units', 'clear-all', 'clear-stations', 'clear-others', 'probe'];
+const COMMANDS = ['grant', 'grant-units', 'clear-all', 'clear-stations', 'clear-others', 'revoke-dqc', 'probe'];
 
 /** 終端機最多先列幾筆問題列（其餘寫進結果檔，免得洗掉畫面）。 */
 const PROBLEM_PREVIEW = 10;
 
 /**
  * @typedef {Object} CliOptions
- * @property {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'probe'} command
+ * @property {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'revoke-dqc'|'probe'} command
  * @property {boolean} execute 真的按下確定
  * @property {boolean} freshLogin
  * @property {string[]} files 名單檔路徑（空陣列代表改用互動貼上；可以不只一份）
+ * @property {string[]} keep revoke-dqc：保留名單檔路徑（空陣列代表到 DACPR名單 資料夾找）
  * @property {string} unit grant：覆寫整份名單的單位；掃單位那兩支：只處理這一個單位
  * @property {string} name probe 用：要試查的姓名
  * @property {number} limit 只處理前幾位（0＝不限）
@@ -118,7 +124,7 @@ export function parseArgs(args) {
     throw new Error(`--limit 要給正整數，收到的是「${limitText}」`);
   }
   return {
-    command: /** @type {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'probe'} */ (command),
+    command: /** @type {'grant'|'grant-units'|'clear-all'|'clear-stations'|'clear-others'|'revoke-dqc'|'probe'} */ (command),
     execute: args.includes('--execute'),
     /** 開通後回頭再查一次，確認真的存進去了（預設開啟）。 */
     verify: !args.includes('--no-verify'),
@@ -130,6 +136,7 @@ export function parseArgs(args) {
     /** 掃單位那幾支：讀完名單直接開始，不再問 yes/no（使用者 2026-10-17：開了就要去睡）。 */
     yes: args.includes('--yes'),
     files: valuesOf('file'),
+    keep: valuesOf('keep'),
     unit: valueOf('unit'),
     name: valueOf('name'),
     limit,
@@ -707,6 +714,7 @@ async function main() {
   else if (options.command === 'clear-stations') await runUnitSweep(options, clearStationsPlan());
   else if (options.command === 'clear-others') await runUnitSweep(options, clearOthersPlan());
   else if (options.command === 'grant-units') await runUnitSweep(options, grantUnitsPlan());
+  else if (options.command === 'revoke-dqc') await runRevokeUnlisted(options);
   else await runGrant(options);
 }
 

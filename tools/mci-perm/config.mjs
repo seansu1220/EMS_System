@@ -408,6 +408,8 @@ export const CLEAR_OTHERS = {
     FIS: 'FIS 五級檢傷系統',
     PAC: 'PAC 救護服務證明線上申請系統',
     EWFA: 'EWFA 救護負荷與疲勞分析儀表板',
+    // 不在 clearCodes 裡（這支不會動它），只給「取消名單外 DACPR」的訊息翻譯用。
+    DQC: 'DQC DA-CPR 品管系統',
   },
 
   /**
@@ -427,6 +429,32 @@ export const CLEAR_OTHERS = {
       .map((unit) => unit.trim())
       .filter(Boolean);
   },
+};
+
+/**
+ * 「取消名單外的 DACPR 權限」的設定：全部名單（Excel）裡有、保留名單（圖片抄下來的）裡沒有的人，
+ * 取消 DQC DA-CPR 品管系統的勾選。
+ *
+ * 使用者 2026-10-17 的要求：「比對兩份資料，找出 A 份資料沒有的名單，
+ * 登入一站通之後把那個人的 DACPR 系統權限關掉」。A 份＝保留名單（只有單位與姓名）。
+ *
+ * ⚠ 名單含個資，固定放在 `listDir`（已在 .gitignore 排除，不會被推上 GitHub）。
+ */
+export const REVOKE_UNLISTED = {
+  /** 要取消的子系統（權限畫面上的 id）。只有這一個，其他子系統一律不碰。 */
+  code: 'DQC',
+
+  /** 一定不能被這支動到的子系統，用來檢查 `code` 沒寫錯（見 otherSubsystems.resolveClearCodes）。 */
+  protectedCodes: ['MCI', 'ACS'],
+
+  /** 兩份名單放的資料夾（捷徑旁邊，使用者看得到、拖得進去）。 */
+  listDir: path.join(TOOL_DIR, '..', '..', '捷徑', '大量傷患權限', 'DACPR名單'),
+
+  /** 檔名以這個開頭的是保留名單；資料夾裡其他名單檔都當成全部名單。 */
+  keepFilePrefix: '保留名單',
+
+  /** 進度檔與結果檔的名字。 */
+  label: '取消名單外DACPR',
 };
 
 /** 「顯示全部」掃名單的設定（見 unitSweep.sweepShowAll）。 */

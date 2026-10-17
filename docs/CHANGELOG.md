@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-10-17　v1.50.0 一站通新增「取消名單外的 DACPR 權限」
+
+### 問題描述
+使用者：「比對兩份資料，找出 A 份資料沒有的名單，登入一站通之後把那個人的 DACPR 系統權限關掉。」
+A 份（保留名單）是一張圖片，只有單位與姓名；另一份（全部名單）是 Excel，裡面有身分證字號。
+
+### 根本原因
+新需求。既有的 `clear-others` 只能取消固定那 10 個子系統，且名單來自系統的「顯示全部」，
+沒有「兩份名單比對」與「只取消 DQC」的能力。另外測試時發現多欄 CSV 名單會錯位：
+`.csv` 被當純文字只切第一刀，「序號,單位,姓名,身分證字號」會把「序號」當成單位。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `tools/mci-perm/rosterDiff.mjs`（新） | 兩份名單比對（純函式）：沒同名→取消；同名同單位→保留；同名異單位、疑似抄錯字→不動並列出 |
+| `tools/mci-perm/revokeUnlisted.mjs`（新） | `revoke-dqc` 主流程：從 `DACPR名單/` 找檔、比對印出、寫比對結果檔、一個都對不上就停手、逐位只取消 DQC |
+| `tools/mci-perm/otherSubsystems.mjs` | `clearOthersOne` 可由 `options.codes` 指定子系統；新增 `clearCodesAll()` |
+| `tools/mci-perm/config.mjs` | 新增 `REVOKE_UNLISTED`（DQC、受保護子系統、名單資料夾、檔名開頭）；`displayNames` 補 DQC |
+| `tools/mci-perm/roster.mjs` | `.csv` 改走 `parseRosterMatrix`（照標題列找欄位），新增 `splitCsvText()` |
+| `tools/mci-perm/index.mjs` | 新指令 `revoke-dqc`、新參數 `--keep=` |
+| `tools/mci-perm/resultReport.mjs` | 匯出 `timestamp()` |
+| `tools/mci-perm/*.test.mjs` | 比對規則、名單檔分類、進度檔命名、多欄 CSV 的測試 |
+| `捷徑/大量傷患權限/取消名單外DACPR權限-{試跑,正式執行}.bat`（新）、`說明.txt` | 捷徑與使用說明 |
+| `.gitignore` | 排除 `捷徑/大量傷患權限/DACPR名單/`（GitHub 儲存庫是公開的，含身分證的 Excel 不能被帶上去） |
+| `docs/TOOLS_SPEC.md` | 新增 6.9.4，更新指令、捷徑與模組職責表 |
+
+---
+
 ## 2026-10-17　v1.49.3 取消其他子系統：正式執行不問 yes/no，讀完名單直接開始
 
 ### 問題描述

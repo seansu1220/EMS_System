@@ -335,7 +335,22 @@ export async function readRosterFile(filePath, options = {}) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`讀不到名單檔 ${filePath}：${reason}`);
   }
+  // CSV 跟 Excel 一樣照標題列找欄位：當成純文字只會切第一刀，
+  // 「序號,單位,姓名,身分證字號」這種多欄的檔會整份錯位（2026-10-17 用假資料測到）。
+  if (extension === '.csv') return parseRosterMatrix(splitCsvText(text), options);
   return parseRoster(text, options);
+}
+
+/**
+ * 把 CSV 文字切成二維陣列（不處理引號內的逗號：名單裡的單位與姓名不會有逗號）。
+ *
+ * @param {string} text
+ * @returns {string[][]}
+ */
+export function splitCsvText(text) {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.split(/[,，]/));
 }
 
 /** 把 Excel 讀成「單位／姓名」兩欄。 */

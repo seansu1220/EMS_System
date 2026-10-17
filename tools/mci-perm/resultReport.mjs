@@ -59,7 +59,7 @@ export function printSummary(results) {
 }
 
 /** 檔名用的時間戳（本地時間，看得懂比較重要）。 */
-function timestamp(date = new Date()) {
+export function timestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0');
   return (
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
