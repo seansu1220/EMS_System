@@ -3,8 +3,8 @@
  * 呼叫前 canvas 上必須已經是乾淨的頁面圖（馬賽克要取用底下的像素）。
  */
 import { PDF_EDIT_CONFIG } from '../config/pdfTools';
-import { marksForPage } from './pdfEditLogic';
-import type { EditMark } from '../types/pdfTools';
+import { sortMarksForPaint } from './pdfEditLogic';
+import type { PageMark } from '../types/pdfTools';
 
 /**
  * 把矩形範圍縮小再放大（不平滑），形成馬賽克。
@@ -32,11 +32,14 @@ function pixelate(ctx: CanvasRenderingContext2D, x: number, y: number, width: nu
   ctx.imageSmoothingEnabled = previousSmoothing;
 }
 
-/** 依繪製順序（螢光筆 → 馬賽克 → 塗黑）把某一頁的標記畫上去。 */
-export function paintMarks(ctx: CanvasRenderingContext2D, marks: readonly EditMark[], pageIndex: number): void {
+/**
+ * 依繪製順序（螢光筆 → 馬賽克 → 塗黑）把標記畫上去。
+ * 標記座標要與 canvas 上頁面的方向一致（大圖與輸出用畫面方向，縮圖用原方向）。
+ */
+export function paintMarks(ctx: CanvasRenderingContext2D, marks: readonly PageMark[]): void {
   const { width: canvasWidth, height: canvasHeight } = ctx.canvas;
   const block = Math.max(2, Math.round(canvasWidth * PDF_EDIT_CONFIG.mosaicBlockRatio));
-  for (const mark of marksForPage(marks, pageIndex)) {
+  for (const mark of sortMarksForPaint(marks)) {
     const x = Math.round(mark.x * canvasWidth);
     const y = Math.round(mark.y * canvasHeight);
     const width = Math.max(1, Math.round(mark.width * canvasWidth));

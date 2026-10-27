@@ -52,16 +52,17 @@ export async function renderPageThumbnail(
   return { width: cssWidth, height: cssHeight };
 }
 
-/** 頁面在畫面上的尺寸（pt，已套用頁面旋轉）與「畫面座標 → PDF 座標」換算。 */
+/** 頁面在原方向（已套用 PDF 本身旋轉）的尺寸（pt）、PDF 本身的旋轉角度，與「畫面座標 → PDF 座標」換算。 */
 export async function getPageGeometry(
   pdf: PDFDocumentProxy,
   pageNumber: number,
-): Promise<{ width: number; height: number; toPdfPoint: (x: number, y: number) => [number, number] }> {
+): Promise<{ width: number; height: number; rotation: number; toPdfPoint: (x: number, y: number) => [number, number] }> {
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale: 1 });
   return {
     width: viewport.width,
     height: viewport.height,
+    rotation: page.rotate,
     toPdfPoint: (x, y) => {
       const [pdfX, pdfY] = viewport.convertToPdfPoint(x, y) as [number, number];
       return [pdfX, pdfY];
@@ -69,14 +70,18 @@ export async function getPageGeometry(
   };
 }
 
-/** 依倍率把整頁畫到新的 canvas（輸出成圖片用）。 */
+/**
+ * 依倍率把整頁畫到新的 canvas。rotation 為「絕對」角度（含 PDF 本身的旋轉）；
+ * 不給就照 PDF 本身的方向。
+ */
 export async function renderPageToCanvas(
   pdf: PDFDocumentProxy,
   pageNumber: number,
   scale: number,
+  rotation?: number,
 ): Promise<HTMLCanvasElement> {
   const page = await pdf.getPage(pageNumber);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport(rotation === undefined ? { scale } : { scale, rotation });
   const canvas = document.createElement('canvas');
   canvas.width = Math.floor(viewport.width);
   canvas.height = Math.floor(viewport.height);

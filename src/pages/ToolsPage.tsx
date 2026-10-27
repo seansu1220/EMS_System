@@ -1,10 +1,10 @@
 /**
  * 小工具頁（/tools）。三種角色都進得來，但看到的內容不同（使用者 2026-10-27 指定）：
- * - 所有人：PDF 工具箱（合併／拆分／頁面整理／編輯），檔案只在瀏覽器處理。
+ * - 所有人：PDF 工作區（合併、拆分、整理、塗黑／馬賽克／螢光筆都在同一個畫面），檔案只在瀏覽器處理。
  * - 只有管理員：多一個「電腦端工具說明」分區（月報表、解鎖救護紀錄表…）。
  *
  * 純顯示元件。PDF 工具含大型函式庫，以 React.lazy 延遲到真的要顯示時才載入。
- * 網址 #local 直接開電腦端工具說明（非管理員忽略）；其餘 hash 交給 PDF 工具箱切分頁。
+ * 網址 #local 直接開電腦端工具說明（非管理員忽略），其他 hash（含舊版的 #merge 等書籤）一律顯示 PDF 工具。
  */
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -30,7 +30,7 @@ export function ToolsPage() {
   const navigate = useNavigate();
   const [section, setSection] = useState<ToolsSection>(location.hash === LOCAL_HASH ? 'local' : 'pdf');
 
-  // hash 改成 PDF 分頁（例如從書籤進來）時切回 PDF 區。
+  // hash 改成別的（例如舊版 #merge 書籤）時切回 PDF 區。
   useEffect(() => {
     if (location.hash === LOCAL_HASH) setSection('local');
     else if (location.hash) setSection('pdf');

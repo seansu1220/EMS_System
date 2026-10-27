@@ -1,11 +1,11 @@
 /**
- * PDF 工具（/pdf-tools）的參數設定（配置驅動）。
- * 尺寸、上限、分頁標題集中於此，調整只改這裡。
+ * PDF 工具（小工具頁的 PDF 工作區）的參數設定（配置驅動）。
+ * 尺寸、上限、工具列定義集中於此，調整只改這裡。
  */
 
 export const PDF_TOOLS_CONFIG = {
-  /** 縮圖寬度（px，CSS 尺寸；實際繪製會再乘上裝置像素比）。 */
-  thumbWidth: 140,
+  /** 頁面清單縮圖寬度（px，CSS 尺寸；實際繪製會再乘上裝置像素比）。 */
+  thumbWidth: 104,
   /** 縮圖框的高寬比（直式 A4 約 1.414），旋轉成橫向時縮小以塞進同一個框。 */
   thumbBoxRatio: 1.414,
   /** 縮圖離畫面多遠就先畫（px），捲動時比較不會看到空白。 */
@@ -20,31 +20,33 @@ export const PDF_TOOLS_CONFIG = {
   splitPreviewNameCount: 6,
 } as const;
 
+/** 工作區的參數。 */
+export const PDF_WORKSPACE_CONFIG = {
+  /** 「復原上一步」最多記幾步。 */
+  historyLimit: 50,
+  /** 大圖最多佔視窗高度的比例。 */
+  viewerMaxHeightRatio: 0.75,
+  /** 大圖的繪製寬度（px，再乘裝置像素比，最多 2 倍）。 */
+  viewerRenderWidth: 1000,
+  /** 大圖最多快取幾張（切回剛看過的頁不用重畫）。 */
+  viewerCacheSize: 8,
+  /** 頁面清單上分辨來源檔的顏色（依加入順序輪流使用）。 */
+  sourceColors: ['#2563eb', '#16a34a', '#d97706', '#db2777', '#7c3aed', '#0891b2'],
+  /** 頁面來自多個檔案時，下載檔名的預設值（只有一個檔案時用「原檔名_已處理」）。 */
+  defaultMergedName: '合併後的檔案',
+} as const;
+
 /**
  * pdf.js 讀檔資源的位置（由 vite.config.ts 複製到 public/pdfjs/）。
  * 中文字型對照表、標準字型、掃描檔影像解碼器、色彩描述檔；只有檔案用到時才會下載。
  */
 export const PDFJS_RESOURCE_BASE = `${import.meta.env.BASE_URL}pdfjs/`;
 
-/** 選檔視窗的檔案類型篩選。 */
-export const PDF_ACCEPT = '.pdf,application/pdf';
-export const MERGE_ACCEPT = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png';
+/** 選檔視窗的檔案類型篩選（PDF 與 JPG／PNG 圖片）。 */
+export const WORKSPACE_ACCEPT = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png';
 
-/** 分頁定義（網址 #merge／#split／#organize 可直接開啟對應功能）。 */
-export const PDF_TOOL_TABS = [
-  { key: 'merge', icon: '📎', name: '合併', desc: '多個 PDF、圖片合成一份' },
-  { key: 'split', icon: '✂️', name: '拆分', desc: '拆成多份或取出指定頁' },
-  { key: 'organize', icon: '🗂️', name: '頁面整理', desc: '調整頁序、旋轉、刪除頁面' },
-  { key: 'edit', icon: '🖍️', name: '編輯', desc: '塗黑、馬賽克、螢光筆' },
-] as const;
-
-export type PdfToolTabKey = (typeof PDF_TOOL_TABS)[number]['key'];
-export const DEFAULT_PDF_TOOL_TAB: PdfToolTabKey = 'merge';
-
-/** 編輯分頁（塗黑／馬賽克／螢光筆）的參數。 */
+/** 標記（塗黑／馬賽克／螢光筆）的參數。 */
 export const PDF_EDIT_CONFIG = {
-  /** 編輯畫面上頁面的最大顯示寬度（px）。 */
-  maxDisplayWidth: 820,
   /** 輸出時轉成圖片的倍率（1 = 72 dpi；2.5 ≈ 180 dpi，文字清楚、檔案不會太大）。 */
   exportScale: 2.5,
   /** 轉成圖片時長邊最多幾個像素（海報等超大頁面避免吃光記憶體）。 */
@@ -67,12 +69,12 @@ export const PDF_EDIT_CONFIG = {
   ],
 } as const;
 
-/** 編輯工具列的按鈕（順序即顯示順序）。 */
+/** 直式工具列的標記工具（順序即顯示順序）。 */
 export const PDF_EDIT_TOOLS = [
-  { key: 'browse', icon: '🖐', name: '瀏覽', hint: '捲動頁面、不畫' },
-  { key: 'blackout', icon: '⬛', name: '塗黑', hint: '框選要塗黑的範圍' },
-  { key: 'mosaic', icon: '▦', name: '馬賽克', hint: '框選要打馬賽克的範圍' },
-  { key: 'highlight', icon: '🖍', name: '螢光筆', hint: '框選要標示的文字' },
+  { key: 'browse', icon: '🖐', name: '瀏覽', hint: '只看、不畫' },
+  { key: 'blackout', icon: '⬛', name: '塗黑', hint: '在大圖上拖曳框出要塗黑的範圍' },
+  { key: 'mosaic', icon: '▦', name: '馬賽克', hint: '在大圖上拖曳框出要打馬賽克的範圍' },
+  { key: 'highlight', icon: '🖍', name: '螢光筆', hint: '在大圖上拖曳框出要標示的文字' },
 ] as const;
 
 /** 「不用印出來再掃描」的轉 PDF 小技巧（配置驅動，新增情境即加一筆）。 */
@@ -109,7 +111,7 @@ export const PDF_CONVERT_TIPS: readonly { title: string; steps: readonly string[
     steps: [
       'iPhone：「備忘錄」新增一則 → 相機圖示 →「掃描文件」，會自動裁切、拉正並存成 PDF。',
       'Android：「Google 雲端硬碟」右下角 ＋ →「掃描」，一樣直接產生 PDF。',
-      '已經拍好的照片、截圖：用上面的「合併」分頁把圖片丟進去，就能轉成 PDF。',
+      '已經拍好的照片、截圖：直接加進上面的 PDF 工具，下載就是 PDF。',
     ],
   },
 ];

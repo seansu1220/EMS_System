@@ -1,10 +1,12 @@
 /**
- * PDF 工具三個分頁共用的顯示元件：拖放選檔區、頁面縮圖、狀態訊息。
+ * PDF 工作區共用的顯示元件：拖放選檔區、頁面縮圖（含標記）、狀態訊息。
  * 純顯示與事件捕捉，不含 PDF 處理邏輯。
  */
-import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { PDF_TOOLS_CONFIG } from '../../config/pdfTools';
+import { paintMarks } from '../../lib/pdfMarkPaint';
 import { renderPageThumbnail, type PDFDocumentProxy } from '../../lib/pdfRender';
+import type { PageMark } from '../../types/pdfTools';
 
 // ---------- 拖放選檔區 ----------
 
@@ -110,34 +112,41 @@ function fitScale(size: { width: number; height: number }, rotation: number): nu
 }
 
 /**
- * 單頁縮圖：捲到附近才繪製（大檔案不會一次畫幾百頁），只畫一次；
- * 旋轉用 CSS 呈現，不重畫。
+ * 單頁縮圖：捲到附近才繪製（大檔案不會一次畫幾百頁），底圖只畫一次；
+ * 標記一變就從底圖重畫（標記為原方向座標），使用者加的旋轉用 CSS 呈現。
  */
 export function PdfThumbnail({
   pdf,
   pageNumber,
   rotation = 0,
+  marks = NO_MARKS,
 }: {
   pdf: PDFDocumentProxy;
   pageNumber: number;
   rotation?: number;
+  marks?: readonly PageMark[];
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [base, setBase] = useState<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const box = boxRef.current;
-    const canvas = canvasRef.current;
-    if (!box || !canvas) return;
+    if (!box) return;
     let cancelled = false;
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         observer.disconnect();
-        renderPageThumbnail(pdf, pageNumber, canvas, PDF_TOOLS_CONFIG.thumbWidth)
-          .then((rendered) => { if (!cancelled) setSize(rendered); })
+        const offscreen = document.createElement('canvas');
+        renderPageThumbnail(pdf, pageNumber, offscreen, PDF_TOOLS_CONFIG.thumbWidth)
+          .then((rendered) => {
+            if (cancelled) return;
+            setSize(rendered);
+            setBase(offscreen);
+          })
           .catch((error) => {
             if (cancelled) return; // 換檔時舊文件被關閉，繪製中斷屬正常
             console.error(`縮圖繪製失敗（PdfThumbnail 第 ${pageNumber} 頁）：`, error);
@@ -153,6 +162,18 @@ export function PdfThumbnail({
     };
   }, [pdf, pageNumber]);
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx || !base || !size) return;
+    canvas.width = base.width;
+    canvas.height = base.height;
+    canvas.style.width = `${size.width}px`;
+    canvas.style.height = `${size.height}px`;
+    ctx.drawImage(base, 0, 0);
+    paintMarks(ctx, marks);
+  }, [base, size, marks]);
+
   const scale = size ? fitScale(size, rotation) : 1;
   return (
     <div
@@ -166,40 +187,11 @@ export function PdfThumbnail({
       {failed && <span className="text-xs text-slate-400">無法預覽</span>}
       <canvas
         ref={canvasRef}
-        className={`max-w-none shrink-0 bg-white shadow-sm transition-transform ${failed ? 'hidden' : ''}`}
+        className={`max-w-none shrink-0 bg-white shadow-sm transition-transform ${failed || !base ? 'hidden' : ''}`}
         style={{ transform: `rotate(${rotation}deg) scale(${scale})` }}
       />
     </div>
   );
 }
 
-// ---------- 小圖示按鈕（上移、旋轉、刪除…）----------
-
-export function RowIconButton({
-  title,
-  danger = false,
-  disabled = false,
-  onClick,
-  children,
-}: {
-  title: string;
-  danger?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      onClick={onClick}
-      className={`h-8 w-8 shrink-0 rounded-md border border-slate-200 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
-        danger ? 'text-red-600 hover:bg-red-50' : 'text-slate-600 hover:bg-slate-100'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
+const NO_MARKS: readonly PageMark[] = [];

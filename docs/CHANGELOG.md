@@ -4,6 +4,48 @@
 
 ---
 
+## 2026-10-27　網頁 v1.28.0 PDF 工具改為單一工作區（放一次檔案就能合併、拆分、整理、編輯）
+
+### 問題描述
+使用者試用後提出：
+1. 合併、拆分、頁面整理、編輯應該是同一件事：放第一份 PDF 就能做各種操作，放第二份一樣可以，不用每做一件事就重丟一次。
+2. 編輯要有一條直式的工具列，讓人直接選工具處理。
+3. 點某一頁時，旁邊要出現大圖，才知道這頁是什麼。
+（多檔呈現方式由使用者選定：全部接成一串，下載就是合併好的一份，也可各檔分開下載。）
+
+### 根本原因
+v1.26／v1.27 沿用 SelfWeb 的四個分頁，每個分頁各自選檔、各自只做一件事；
+要「刪兩頁再塗黑一個名字」就得下載一次再丟進另一個分頁。編輯分頁只有由上往下的大頁面，沒有縮圖總覽。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `src/components/pdf/PdfToolbox.tsx` | 改寫成工作區：上方檔案列、左直式工具列、中頁面清單、右大圖、下方下載區；Ctrl＋Z 復原、Delete 刪除 |
+| `src/components/pdf/WorkspaceFileBar.tsx`（新） | 加入檔案（接在最後）、已加入檔案色點與頁數、✕ 移除整個檔、加入圖片時的頁面大小、全部清空 |
+| `src/components/pdf/WorkspaceToolbar.tsx`（新） | 直式工具列：瀏覽／塗黑／馬賽克／螢光筆（四色）、左轉、右轉、刪除、復原；寫明「套用到：目前這頁／勾選的 N 頁」；手機寬度改橫排 |
+| `src/components/pdf/WorkspacePageList.tsx`（新） | 頁面清單：點縮圖看大圖、勾選多頁、拖曳排序；縮圖畫出標記與旋轉，色點標示來源檔 |
+| `src/components/pdf/WorkspaceViewer.tsx`（新） | 大圖：依旋轉畫出、直接框選標記（換回原方向座標存）、◀ ▶ 換頁、最近 8 張快取 |
+| `src/components/pdf/WorkspaceExportPanel.tsx`（新） | 下載：全部（多檔時為合併下載）、只下載勾選、各檔分開（ZIP）、拆分（範圍／每 N 頁／每頁） |
+| `src/lib/pdfWorkspace.ts`（新） | 工作區 reducer（加入、排序、轉向、刪除、移除檔案、標記、復原含勾選）與下載規劃（純函式） |
+| `src/lib/pdfWorkspaceExport.ts`（新，取代 `pdfEditExport.ts`） | 依頁面清單輸出：塗黑／馬賽克整頁轉圖片、螢光筆保留文字、其他頁原樣複製並套用旋轉；同一來源檔的頁一次複製 |
+| `src/hooks/usePdfWorkspace.ts`（新，取代 `useSinglePdf.ts`） | 來源檔管理：讀檔、圖片轉一頁 PDF、記下各頁尺寸與本身旋轉、清空時關閉 pdf.js 文件 |
+| `src/lib/pdfEditLogic.ts` | 改為不分頁的標記運算，新增旋轉換算（畫面方向 ↔ 原方向），先畫標記再轉頁，標記會跟著轉 |
+| `src/lib/pdfEngine.ts`、`pdfPageLogic.ts`、`pdfRender.ts`、`pdfMarkPaint.ts` | 拿掉各分頁專用的函式；新增 `imageToPdfBytes`、`packageFiles`（ZIP 內同名自動加序號）；繪圖可指定旋轉角度 |
+| `src/components/pdf/PdfToolParts.tsx` | 縮圖可畫出標記；移除不再使用的小按鈕元件 |
+| 刪除 | `PdfMergePanel`、`PdfSplitPanel`、`PdfOrganizePanel`、`PdfEditPanel`、`EditablePdfPage`、`useSinglePdf`、`pdfEditExport` |
+| `src/types/pdfTools.ts`、`src/config/pdfTools.ts` | 工作區型別（來源檔、頁、標記、快照）；工作區參數（復原 50 步、大圖尺寸與快取、來源色、預設檔名） |
+| `src/pages/ToolsPage.tsx` | 註解更新（舊 `#merge` 等書籤一律顯示 PDF 工具） |
+| `package.json` | 版本 1.21.0 |
+| `docs/SPEC.md` | 2.10 改寫為工作區、路由表、目錄結構（v1.28.0） |
+
+驗證（暫時的免登入測試頁＋Chrome 自動操作 21 項全過，測試頁已刪除）：先加一份、再加兩份接在後面；✕ 移除整個檔；
+合併下載的順序與內容；點頁看大圖、轉向後大圖變橫向、下一頁；勾選兩頁刪除、復原（勾選一併回來）、再刪；
+塗黑後再轉頁 → 輸出該頁抽不出文字且尺寸轉成橫向；螢光筆頁保留文字（含 PDF 本身轉過 90° 的頁，位置截圖核對正確）；
+✕ 移除標記、Ctrl＋Z 復原標記；拖曳把最後一頁拉到最前面；只下載勾選、各檔分開（3 個檔頁數正確）、拆分；
+手機寬度無橫向捲動、主控台無錯誤。另：未內嵌中文字型的 PDF 縮圖正常顯示；權限 7 項（非管理員看不到電腦端工具說明）全過。
+
+---
+
 ## 2026-10-27　網頁 v1.27.1 測試用傷票每分隊每週上限放寬為 30 張
 
 ### 問題描述

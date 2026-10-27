@@ -1,8 +1,8 @@
 /**
- * PDF 工具的頁碼與頁序運算（純函式，不碰 DOM、不依賴 PDF 函式庫，可獨立測試）。
+ * PDF 工具的頁碼運算與檔名處理（純函式，不碰 DOM、不依賴 PDF 函式庫，可獨立測試）。
  */
 import { PDF_TOOLS_CONFIG } from '../config/pdfTools';
-import type { OrganizedPage, PageGroupsResult, PdfFileKind, SplitMode } from '../types/pdfTools';
+import type { PageGroupsResult, PdfFileKind, SplitMode } from '../types/pdfTools';
 
 /**
  * 解析頁碼範圍文字，例如 "1-3, 5, 8-" → [[1,2,3],[5],[8,9,10]]。
@@ -66,16 +66,14 @@ export function groupLabel(group: readonly number[]): string {
   return group.length === 1 ? `第${group[0]}頁` : `第${group[0]}-${group[group.length - 1]}頁`;
 }
 
-/** 需要使用者輸入頁碼的拆分方式。 */
-export const RANGE_SPLIT_MODES: readonly SplitMode[] = ['ranges', 'extract'];
-
-/** 依拆分方式算出要輸出的頁碼組。 */
+/** 依拆分方式算出每個輸出檔的頁碼組（頁碼為目前清單上的第幾頁）。 */
 export function buildSplitGroups(
   mode: SplitMode,
   rangeText: string,
   everyN: string,
   pageCount: number,
 ): PageGroupsResult {
+  if (pageCount === 0) return { ok: false, error: '清單上沒有頁面' };
   if (mode === 'single') return { ok: true, groups: chunkPages(pageCount, 1) };
   if (mode === 'every') {
     const size = Number(everyN);
@@ -84,35 +82,17 @@ export function buildSplitGroups(
     }
     return { ok: true, groups: chunkPages(pageCount, size) };
   }
-  const parsed = parsePageRanges(rangeText, pageCount);
-  if (!parsed.ok || mode === 'ranges') return parsed;
-  return { ok: true, groups: [parsed.groups.flat()] }; // 擷取：全部合成一個檔（保留輸入順序）
+  if (rangeText.trim() === '') return { ok: false, error: '請輸入頁碼，例如 1-3, 5' };
+  return parsePageRanges(rangeText, pageCount);
 }
 
 /** 預告將產生的檔案。 */
-export function describeSplitGroups(mode: SplitMode, groups: readonly number[][]): string {
-  if (mode === 'extract') return `將產生 1 個檔案，共 ${groups[0].length} 頁`;
+export function describeSplitGroups(groups: readonly number[][]): string {
   const shown = groups.slice(0, PDF_TOOLS_CONFIG.splitPreviewNameCount);
   const names = shown.map((g) => groupLabel(g).replace('第', '').replace('頁', '')).join('、');
   const more = groups.length > shown.length ? ' …' : '';
   return `將產生 ${groups.length} 個檔案：${names}${more}`;
 }
-
-// ---------- 頁面整理 ----------
-
-const normalizeRotation = (angle: number) => ((angle % 360) + 360) % 360;
-
-export const initialPageOrder = (pageCount: number): OrganizedPage[] =>
-  Array.from({ length: pageCount }, (_, i) => ({ sourceIndex: i, rotation: 0 }));
-
-export const rotatePageAt = (pages: readonly OrganizedPage[], index: number, delta: number) =>
-  pages.map((p, i) => (i === index ? { ...p, rotation: normalizeRotation(p.rotation + delta) } : p));
-
-export const rotateAllPages = (pages: readonly OrganizedPage[], delta: number) =>
-  pages.map((p) => ({ ...p, rotation: normalizeRotation(p.rotation + delta) }));
-
-export const removePageAt = (pages: readonly OrganizedPage[], index: number) =>
-  pages.filter((_, i) => i !== index);
 
 // ---------- 檔名與檔案種類 ----------
 
