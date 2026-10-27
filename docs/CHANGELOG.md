@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-10-27　網頁 v1.26.0 新增「PDF 工具」頁（合併、拆分、頁面整理）
+
+### 問題描述
+使用者：「請幫忙把 selfWeb 資料夾內的 PDF 各項功能，轉到我的這個救護網頁也可以做使用。」
+SelfWeb（個人網站）的 `free-tools/pdf-tools.html` 有合併、拆分、頁面整理三個 PDF 工具，
+救護網頁沒有，要另外開個人網站才能用。
+
+### 根本原因
+新需求。SelfWeb 版是純 HTML＋全域變數的 vanilla JS（`pdf-common.js`、`pdf-merge.js`、
+`pdf-split.js`、`pdf-organize.js`，函式庫放在 `vendor/`），無法直接塞進 React＋TypeScript 的救護網頁，
+需改寫成元件，並改用 npm 套件。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `src/pages/PdfToolsPage.tsx`（新） | 三個分頁（同時掛載只切換顯示，換分頁不會清掉檔案）；`#merge`／`#split`／`#organize` 直接開分頁；攔下拖到拖放區外的檔案，避免瀏覽器直接開檔離開本頁 |
+| `src/components/pdf/PdfMergePanel.tsx`（新） | 合併：PDF＋JPG／PNG、拖曳（手機長按）或 ↑↓ 排序、圖片放進 A4 或原尺寸、讀不了的檔案逐一列出原因 |
+| `src/components/pdf/PdfSplitPanel.tsx`（新） | 拆分：範圍／擷取／每 N 頁／每頁，點縮圖選頁回填頁碼，多檔打包 ZIP |
+| `src/components/pdf/PdfOrganizePanel.tsx`（新） | 頁面整理：縮圖拖曳排序、← →、左右轉、刪除、全部轉、反轉、復原 |
+| `src/components/pdf/PdfToolParts.tsx`（新） | 共用：拖放選檔區、延遲繪製的頁面縮圖（旋轉用 CSS）、狀態訊息、小圖示按鈕 |
+| `src/lib/pdfPageLogic.ts`（新） | 純函式：頁碼解析／壓縮、分組、頁序旋轉刪除、檔名處理 |
+| `src/lib/pdfEngine.ts`（新） | pdf-lib：讀檔（有密碼、損毀給中文訊息）、合併、拆分、重排輸出；JSZip 打包；下載 |
+| `src/lib/pdfRender.ts`（新） | pdf.js（legacy 版，相容舊瀏覽器）開檔、畫縮圖、關閉釋放記憶體（v6 起改用 `loadingTask.destroy()`） |
+| `src/hooks/useSinglePdf.ts`（新） | 拆分、整理共用的開檔 hook，換檔或離開頁面時關閉舊文件 |
+| `src/types/pdfTools.ts`、`src/config/pdfTools.ts`（新） | 型別；縮圖尺寸、A4 尺寸、留白、大檔警示門檻、分頁定義 |
+| `src/App.tsx` | 新路由 `/pdf-tools`，以 `React.lazy` 延遲載入（約 1 MB 的 PDF 函式庫只在點進來時下載）；放在三種角色都能進的那一區 |
+| `src/components/Layout.tsx` | 導覽列新增「PDF 工具」，三種角色都看得到 |
+| `src/components/ProtectedRoute.tsx` | 註解補上 PDF 工具 |
+| `package.json` | 新增 `pdf-lib`、`jszip`；`pdfjs-dist` 由開發依賴移到正式依賴；版本 1.19.0 |
+| `docs/SPEC.md` | 新增 2.10、路由表、解鎖專用帳號說明、目錄結構（v1.26.0） |
+
+驗證：暫時的免登入測試頁＋Chrome 自動操作 18 項全過（合併含壞檔與圖片、拆分範圍／擷取／每頁／超出範圍、
+點縮圖回填、整理的旋轉刪除反轉與滑鼠拖曳、換分頁保留、手機寬度無橫向捲動），測試頁已刪除。
+
+---
+
 ## 2026-10-17　v1.50.0 一站通新增「取消名單外的 DACPR 權限」
 
 ### 問題描述

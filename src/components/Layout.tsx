@@ -62,6 +62,10 @@ export function Layout() {
             <NavLink to="/triage-tags" className={navItemClass}>
               測試用傷票領取
             </NavLink>
+            {/* PDF 工具：純瀏覽器端處理，三種角色都用得到。 */}
+            <NavLink to="/pdf-tools" className={navItemClass}>
+              PDF 工具
+            </NavLink>
             {/* 使用者管理僅管理員可見（權限最終防線仍在 Firestore 規則）。 */}
             {isAdmin && (
               <NavLink to="/users" className={navItemClass}>

@@ -1,6 +1,9 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.25.2　建立日期：2026-07-22　最後更新：2026-10-05
+> 版本：v1.26.0　建立日期：2026-07-22　最後更新：2026-10-27
+> v1.26.0：新增 **PDF 工具頁 `/pdf-tools`**（移植自 SelfWeb 的 PDF 工具箱）——合併（PDF＋JPG／PNG）、
+> 　　　　 拆分（範圍／擷取／每 N 頁／每頁）、頁面整理（拖曳排序、旋轉、刪除）。檔案只在瀏覽器處理、
+> 　　　　 不上傳也不寫 Firestore，**三種角色都能用**（解鎖專用帳號的第三個入口）（見 2.7、2.10）
 > v1.25.2：`/tools` 的「未結案案件統整」改用精簡用語：整件未結案的案件／有車輛未結案的案件
 > v1.25.1：`/tools` 的「未結案案件統整」補上第二個數字「不是每台車都有已結案的案件」（工具細節見 TOOLS_SPEC 9.4）
 > v1.25.0：`/tools` 說明頁新增第七項「未結案案件統整」（工具細節見 TOOLS_SPEC 第 9 章）；見第 4 章
@@ -273,14 +276,15 @@
 | `/tools` | 小工具（說明頁；工具本身在本機執行，見 TOOLS_SPEC.md） | 需登入且已核准 |
 | `/unlock` | **解鎖工單**（提出申請、查看結果） | 需登入且已核准（**三種角色都可以**） |
 | `/triage-tags` | **測試用傷票領取**（v1.21，輸入張數 → 下載 PDF） | 需登入且已核准（**三種角色都可以**） |
+| `/pdf-tools` | **PDF 工具**（v1.26，合併／拆分／頁面整理；`#merge`、`#split`、`#organize` 直接開分頁） | 需登入且已核准（**三種角色都可以**） |
 | `/users` | 使用者管理 | 僅管理員 |
 
 未核准的登入者不論進入哪個受保護路徑，一律顯示「等待管理員核准」畫面。
 
-**「解鎖專用」帳號**（v1.17 起）除了 `/unlock` 與 `/triage-tags`（v1.21）以外，
-進任何路徑都會被導回 `/unlock`。導覽列只看得到「解鎖工單」與「測試用傷票領取」兩個標題。
+**「解鎖專用」帳號**（v1.17 起）除了 `/unlock`、`/triage-tags`（v1.21）與 `/pdf-tools`（v1.26）以外，
+進任何路徑都會被導回 `/unlock`。導覽列只看得到「解鎖工單」「測試用傷票領取」「PDF 工具」三個標題。
 守衛做法：`ProtectedRoute` 多一個 `requireTaskSystem` 參數（預設 true），
-`/unlock`、`/triage-tags` 兩條路由設為 false，其餘全部沿用預設。
+`/unlock`、`/triage-tags`、`/pdf-tools` 三條路由設為 false，其餘全部沿用預設。
 前端擋下只是為了不讓人看到一頁載不出資料的畫面，真正的防線仍是 Firestore 規則。
 
 ### 2.8 解鎖工單頁 `/unlock`（v1.17）
@@ -409,6 +413,33 @@ QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
 （`triageTagService.allocateTriageTags`），兩人同時按也不會拿到同一批號碼、也不會一起衝破單位上限；
 安全規則再用 `getAfter` 互相核對三份文件（見第 3 章安全規則）。
 
+### 2.10 PDF 工具頁 `/pdf-tools`（v1.26）
+
+把 SelfWeb（個人網站）`free-tools/` 的 PDF 工具箱搬進本系統（使用者 2026-10-27 指定），功能不變，
+改寫成 React 元件。**檔案全程只在瀏覽器記憶體處理，不上傳、不寫 Firestore、沒有安全規則異動**，
+因此三種角色都能用，可放心處理含個資的救護紀錄與公文。
+
+**三個分頁**（同時掛載、只切換顯示，切換時各自選好的檔案與設定不會消失）：
+
+| 分頁 | 功能 |
+| --- | --- |
+| 合併 | 多個 PDF 與 JPG／PNG 依清單順序合成一份。清單可拖曳（手機長按）或 ↑↓ 調整、✕ 移除；有圖片時可選「放進 A4（置中縮放、不放大、四周留白 24pt）」或「依圖片原尺寸」。讀不了的檔案（格式不支援、有密碼、損毀）不加入，並逐一列出原因。 |
+| 拆分 | 一次一份 PDF。四種方式：依頁碼範圍（每個範圍一檔）、擷取頁面（合成一檔，保留輸入順序）、每 N 頁一檔、每頁一檔。頁碼寫法 `1-3, 5, 8-`（`8-`＝到最後、`-3`＝從第 1 頁），全形逗號、頓號、空白也可分隔；超出頁數或寫法錯誤即時提示並停用下載鈕。點縮圖可選頁、自動回填頁碼。多個檔案打包成 ZIP。 |
+| 頁面整理 | 一次一份 PDF。縮圖拖曳排序（手機長按）、← → 移動、左右轉 90°、刪除（至少留 1 頁）；另有全部向右轉、反轉順序、全部復原。旋轉角度疊加在原頁既有的旋轉上。只輸出新檔，原檔不變。 |
+
+**檔名規則。** 合併預設「合併後的檔案.pdf」、整理預設「原檔名_整理後.pdf」（兩者可改）；
+拆分為「原檔名_第1-3頁.pdf」或「原檔名_擷取.pdf」，多檔時 ZIP 名為「原檔名_拆分.zip」。
+檔名中的 `\ / : * ? " < > |` 一律換成 `_`。
+
+**實作。** pdf-lib 負責合併／拆分／重排與圖片嵌入，pdf.js（legacy 版，相容較舊的瀏覽器）畫縮圖，
+JSZip 打包。縮圖捲到附近才畫（`IntersectionObserver`），大檔案不會一次畫幾百頁；
+旋轉只用 CSS 呈現、不重畫。換檔或離開頁面時關閉舊的 pdf.js 文件釋放記憶體。
+整頁以 `React.lazy` 延遲載入，**只有點進這頁才下載這些函式庫**，不拖慢其他頁面。
+檔案拖到拖放區外時攔下瀏覽器預設行為，避免直接開啟該檔而離開本頁。
+模組分工：頁碼與頁序運算為純函式（`lib/pdfPageLogic.ts`），檔案處理（`lib/pdfEngine.ts`）、
+縮圖繪製（`lib/pdfRender.ts`）、開檔 hook（`hooks/useSinglePdf.ts`）、各分頁元件（`components/pdf/`）；
+縮圖尺寸、A4 尺寸、留白、大檔警示門檻等參數集中在 `config/pdfTools.ts`。
+
 ---
 
 ## 3. 資料模型（Firestore）
@@ -515,23 +546,25 @@ QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
 EMS_System/
 ├─ src/
 │  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts、holiday.ts、
-│  │                unlockRequest.ts、triageTag.ts
+│  │                unlockRequest.ts、triageTag.ts、pdfTools.ts
 │  ├─ config/       constants.ts（提醒工作日 7/30/3、工作日星期、預設屬性、集合名稱、ADMIN_EMAILS）、
 │  │                holidays.ts（內建 2026/2027 國定假日清單）、
-│  │                triageTag.ts（測試用傷票的號碼格式、單次上限、分隊名單與每週上限、版面尺寸、色碼）
+│  │                triageTag.ts（測試用傷票的號碼格式、單次上限、分隊名單與每週上限、版面尺寸、色碼）、
+│  │                pdfTools.ts（PDF 工具的縮圖尺寸、A4 尺寸、留白、分頁定義）
 │  ├─ lib/          firebase.ts、taskLogic.ts、workday.ts（工作日計算）、holidayCsv.ts（日曆表解析）、
 │  │                recurrence.ts、checklistLogic.ts、permissions.ts、
-│  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）
+│  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）、
+│  │                pdfPageLogic.ts（頁碼與頁序純函式）、pdfEngine.ts（合併／拆分／重排）、pdfRender.ts（縮圖）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
 │  │                userService、holidayService、unlockRequestService、triageTagService
-│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays
+│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、useSinglePdf
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
-│  │                CompletionSection、ui
+│  │                CompletionSection、ui；pdf/（PDF 工具的合併、拆分、整理分頁與共用元件）
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
 │                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、
-│                   UnlockPage、TriageTagPage
+│                   UnlockPage、TriageTagPage、PdfToolsPage
 ├─ tools/           本機小工具（規格見 TOOLS_SPEC.md），不參與建置與部署
 │  └─ ems-report/   救護紀錄表查詢；out/ 為產出目錄，含個案明細，已 gitignore
 ├─ 捷徑/            雙擊執行的批次檔（啟動系統、救護預警統計、設定登入帳密…）
