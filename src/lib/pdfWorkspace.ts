@@ -6,6 +6,7 @@ import { PDF_WORKSPACE_CONFIG } from '../config/pdfTools';
 import { normalizeRotation, pageNeedsFlatten } from './pdfEditLogic';
 import { baseName, groupLabel, moveItem, safeFilename } from './pdfPageLogic';
 import type { PageMark, WorkPage, WorkspaceState } from '../types/pdfTools';
+import type { PdfUsageAction, PdfUsageEntry } from '../types/pdfToolUsage';
 
 export type WorkspaceAction =
   | { type: 'addPages'; pages: WorkPage[] }
@@ -188,4 +189,42 @@ export function planSplit(pages: readonly WorkPage[], pageGroups: readonly numbe
     pages: group.map((pageNumber) => pages[pageNumber - 1]),
   }));
   return { groups, zipName: `${name}_拆分` };
+}
+
+/** 一次下載要記進使用紀錄的內容（只有數字，不含檔名）。 */
+export function usageEntryFromPlan(action: PdfUsageAction, plan: ExportPlan): PdfUsageEntry {
+  const pages = plan.groups.flatMap((group) => group.pages);
+  return {
+    action,
+    pageCount: pages.length,
+    fileCount: plan.groups.length,
+    sourceCount: new Set(pages.map((page) => page.sourceId)).size,
+    markedPages: pages.filter((page) => page.marks.length > 0).length,
+  };
+}
+
+// ---------- 大圖縮放 ----------
+
+/** 縮放方式：整頁（整頁塞進大圖區塊）、符合寬度，或相對於符合寬度的倍率。 */
+export type ViewerZoom = 'page' | 'width' | number;
+
+/** 依縮放方式算出大圖的顯示寬度（px）。aspect＝頁寬÷頁高。 */
+export function viewerDisplayWidth(zoom: ViewerZoom, availableWidth: number, availableHeight: number, aspect: number): number {
+  const fitWidth = Math.max(0, availableWidth);
+  if (zoom === 'width') return fitWidth;
+  if (zoom === 'page') return Math.min(fitWidth, Math.max(0, availableHeight) * aspect);
+  return fitWidth * zoom;
+}
+
+/** 目前相對於「符合寬度」的倍率（給 ＋／－ 與百分比顯示用）。 */
+export function zoomFactor(zoom: ViewerZoom, availableWidth: number, availableHeight: number, aspect: number): number {
+  if (typeof zoom === 'number') return zoom;
+  return availableWidth > 0 ? viewerDisplayWidth(zoom, availableWidth, availableHeight, aspect) / availableWidth : 1;
+}
+
+/** ＋／－ 一格：跳到下一個比目前大（或小）的級距；已到盡頭就停在最大（最小）。 */
+export function stepZoom(currentFactor: number, direction: 1 | -1, steps: readonly number[]): number {
+  const epsilon = 0.001;
+  if (direction > 0) return steps.find((step) => step > currentFactor + epsilon) ?? steps[steps.length - 1];
+  return [...steps].reverse().find((step) => step < currentFactor - epsilon) ?? steps[0];
 }

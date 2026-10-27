@@ -24,16 +24,35 @@ export const PDF_TOOLS_CONFIG = {
 export const PDF_WORKSPACE_CONFIG = {
   /** 「復原上一步」最多記幾步。 */
   historyLimit: 50,
-  /** 大圖最多佔視窗高度的比例。 */
-  viewerMaxHeightRatio: 0.75,
-  /** 大圖的繪製寬度（px，再乘裝置像素比，最多 2 倍）。 */
-  viewerRenderWidth: 1000,
+  /** 大圖區塊高度＝視窗高度減這麼多（px，留給上方導覽列與工具列），頁面比它高時在大圖區塊內捲動。 */
+  viewerHeightOffset: 140,
+  /** 大圖縮放級距（相對於「符合寬度」）。 */
+  zoomSteps: [0.5, 0.75, 1, 1.25, 1.5, 2, 3],
+  /** 大圖繪製解析度：依顯示寬度×裝置像素比，以這個級距往上取整（避免每縮放一點就重畫）。 */
+  viewerRenderBucket: 512,
+  /** 大圖繪製的長邊上限（px），放很大時避免吃光記憶體。 */
+  viewerMaxRenderSide: 4096,
   /** 大圖最多快取幾張（切回剛看過的頁不用重畫）。 */
   viewerCacheSize: 8,
   /** 頁面清單上分辨來源檔的顏色（依加入順序輪流使用）。 */
   sourceColors: ['#2563eb', '#16a34a', '#d97706', '#db2777', '#7c3aed', '#0891b2'],
   /** 頁面來自多個檔案時，下載檔名的預設值（只有一個檔案時用「原檔名_已處理」）。 */
   defaultMergedName: '合併後的檔案',
+} as const;
+
+/** PDF 工具使用紀錄的參數（管理員在小工具頁的「使用紀錄」查看）。 */
+export const PDF_USAGE_CONFIG = {
+  /** 保留幾天：只顯示這段期間的紀錄，管理員打開時順手刪掉更舊的。 */
+  retentionDays: 30,
+  /** 一次最多刪幾筆過期紀錄（Firestore 批次寫入上限 500）。 */
+  cleanupBatchSize: 400,
+  /** 下載方式的顯示名稱。 */
+  actionLabels: {
+    downloadAll: '下載全部',
+    downloadSelected: '只下載勾選的頁',
+    perSource: '各檔分開下載',
+    split: '拆分下載',
+  },
 } as const;
 
 /**

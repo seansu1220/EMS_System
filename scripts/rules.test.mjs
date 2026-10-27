@@ -34,6 +34,7 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc,
   where,
@@ -594,6 +595,29 @@ await check(
 );
 await check('一般使用者不可刪除領取紀錄', assertFails(deleteDoc(doc(member, 'triageTagIssues/10'))));
 await check('管理員可刪除領取紀錄', assertSucceeds(deleteDoc(doc(admin, 'triageTagIssues/10'))));
+
+// ── 6.5 PDF 工具使用紀錄（v1.29）──
+const usage = (uid, email, extra = {}) => ({
+  uid, userName: '測試者', email, action: 'downloadAll', pageCount: 3, fileCount: 1, sourceCount: 1, markedPages: 0,
+  usedAt: serverTimestamp(), ...extra,
+});
+await check('成員可記自己的 PDF 使用紀錄', assertSucceeds(addDoc(collection(member, 'pdfToolUsage'), usage('member-uid', 'member@example.com'))));
+await check('解鎖專用帳號也可記自己的 PDF 使用紀錄', assertSucceeds(addDoc(collection(unlocker, 'pdfToolUsage'), usage('unlocker-uid', 'squad@example.com'))));
+await check('不可冒名記別人的使用紀錄', assertFails(addDoc(collection(member, 'pdfToolUsage'), usage('admin-uid', 'member@example.com'))));
+await check('使用紀錄的 email 必須是自己的', assertFails(addDoc(collection(member, 'pdfToolUsage'), usage('member-uid', ADMIN_EMAIL))));
+await check('使用紀錄不收檔名等多餘欄位', assertFails(addDoc(collection(member, 'pdfToolUsage'), usage('member-uid', 'member@example.com', { fileName: '王小明.pdf' }))));
+await check('使用紀錄時間必須是伺服器時間', assertFails(addDoc(collection(member, 'pdfToolUsage'), usage('member-uid', 'member@example.com', { usedAt: new Date('2020-01-01') }))));
+await check('使用紀錄的下載方式必須是四種之一', assertFails(addDoc(collection(member, 'pdfToolUsage'), usage('member-uid', 'member@example.com', { action: 'hack' }))));
+await check('待審核者不可記使用紀錄', assertFails(addDoc(collection(pending, 'pdfToolUsage'), usage('pending-uid', 'pending@example.com'))));
+await seed(async (db) => {
+  await setDoc(doc(db, 'pdfToolUsage/u-1'), { ...usage('member-uid', 'member@example.com'), usedAt: new Date() });
+});
+await check('成員讀不到使用紀錄', assertFails(getDocs(collection(member, 'pdfToolUsage'))));
+await check('解鎖專用帳號讀不到使用紀錄', assertFails(getDoc(doc(unlocker, 'pdfToolUsage/u-1'))));
+await check('管理員可讀使用紀錄', assertSucceeds(getDocs(collection(admin, 'pdfToolUsage'))));
+await check('使用紀錄不可修改（管理員也不行）', assertFails(updateDoc(doc(admin, 'pdfToolUsage/u-1'), { pageCount: 99 })));
+await check('成員不可刪除使用紀錄', assertFails(deleteDoc(doc(member, 'pdfToolUsage/u-1'))));
+await check('管理員可刪除使用紀錄（過期清理）', assertSucceeds(deleteDoc(doc(admin, 'pdfToolUsage/u-1'))));
 
 // ── 7. 未登入者 ──
 const anon = testEnv.unauthenticatedContext().firestore();

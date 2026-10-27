@@ -52,7 +52,7 @@ export function WorkspacePageList({
         <div
           data-ws="page-list"
           aria-label="頁面清單（依輸出順序）"
-          className="flex shrink-0 gap-2 overflow-x-auto pb-2 md:grid md:max-h-[75vh] md:w-[140px] md:grid-cols-1 md:content-start md:overflow-x-hidden md:overflow-y-auto md:pb-0 lg:w-[256px] lg:grid-cols-2"
+          className="flex shrink-0 gap-2 overflow-x-auto pb-2 md:grid md:max-h-[calc(100vh-140px)] md:w-[140px] md:grid-cols-1 md:content-start md:overflow-x-hidden md:overflow-y-auto md:pb-0 lg:w-[256px] lg:grid-cols-2"
         >
           {pages.map((page, index) => {
             const source = sources.get(page.sourceId);

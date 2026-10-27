@@ -38,6 +38,8 @@ export const COLLECTIONS = {
   triageTagIssues: 'triageTagIssues',
   /** 測試用傷票的每週單位領取量（文件 ID＝`{週序}_{單位}`，每週上限見 config/triageTag）。 */
   triageTagUnitWeeks: 'triageTagUnitWeeks',
+  /** PDF 工具使用紀錄（每次下載一筆，只有管理員讀得到，保留 30 天，見 config/pdfTools）。 */
+  pdfToolUsage: 'pdfToolUsage',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */

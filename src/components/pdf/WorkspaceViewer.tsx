@@ -1,5 +1,6 @@
 /**
  * PDF 工作區右側的大圖：顯示目前選的那一頁（含旋轉與標記），選了標記工具就能直接在上面拖曳框選。
+ * 預設「符合寬度」：頁面撐滿右側寬度，比畫面高時在大圖區塊內捲動；另可切整頁、＋／－ 縮放。
  * 標記存成「原方向」座標；這裡負責畫面方向 ↔ 原方向的換算，使用者轉頁面時標記會跟著轉。
  */
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
@@ -7,64 +8,89 @@ import { PDF_EDIT_CONFIG, PDF_WORKSPACE_CONFIG } from '../../config/pdfTools';
 import { isMarkTooSmall, markToDisplay, normalizeRotation, rectFromPoints, rectToBase, rotatedSize } from '../../lib/pdfEditLogic';
 import { paintMarks } from '../../lib/pdfMarkPaint';
 import { renderPageToCanvas } from '../../lib/pdfRender';
+import { stepZoom, viewerDisplayWidth, zoomFactor, type ViewerZoom } from '../../lib/pdfWorkspace';
 import type { EditTool, NormRect, WorkPage, WorkSource } from '../../types/pdfTools';
 
 type Point = { x: number; y: number };
 
 const MARK_OUTLINES = { blackout: 'border-slate-400', mosaic: 'border-sky-500', highlight: 'border-amber-500' } as const;
 
-/** 大圖底圖（依絕對旋轉角度畫好），最近看過的幾張留著，切回來不用重畫。 */
-function useViewerBase(source: WorkSource, page: WorkPage) {
+/**
+ * 大圖底圖：依絕對旋轉角度、以「顯示寬度×裝置像素比」往上取整的解析度畫好；
+ * 已畫過的若解析度夠就直接用（放大才重畫），最近幾張留著。
+ */
+function useViewerBase(source: WorkSource, page: WorkPage, displayWidth: number) {
   const cache = useRef(new Map<string, HTMLCanvasElement>());
   const [base, setBase] = useState<{ key: string; canvas: HTMLCanvasElement } | null>(null);
   const absoluteRotation = normalizeRotation(source.baseRotations[page.sourcePageIndex] + page.rotation);
-  const key = `${source.id}:${page.sourcePageIndex}:${absoluteRotation}`;
+  const pageKey = `${source.id}:${page.sourcePageIndex}:${absoluteRotation}`;
+  const size = rotatedSize(source.pageSizes[page.sourcePageIndex], page.rotation);
+  const { viewerRenderBucket: bucket, viewerMaxRenderSide: maxSide } = PDF_WORKSPACE_CONFIG;
+  const wantedWidth = Math.ceil((Math.max(displayWidth, 1) * Math.min(window.devicePixelRatio || 1, 2)) / bucket) * bucket;
+  const scale = Math.min(wantedWidth / size.width, maxSide / Math.max(size.width, size.height));
+  const renderKey = `${pageKey}@${Math.round(scale * size.width)}`;
 
   useEffect(() => {
-    const cached = cache.current.get(key);
-    if (cached) {
-      setBase({ key, canvas: cached });
+    const cached = cache.current.get(pageKey);
+    if (cached && cached.width >= Math.floor(scale * size.width) - 1) {
+      setBase({ key: pageKey, canvas: cached });
       return;
     }
+    if (cached) setBase({ key: pageKey, canvas: cached }); // 先顯示較模糊的，畫好再換
     let cancelled = false;
-    const size = rotatedSize(source.pageSizes[page.sourcePageIndex], page.rotation);
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-    const scale = (PDF_WORKSPACE_CONFIG.viewerRenderWidth * pixelRatio) / Math.max(size.width, size.height);
     renderPageToCanvas(source.preview, page.sourcePageIndex + 1, scale, absoluteRotation)
       .then((canvas) => {
         if (cancelled) return;
-        cache.current.set(key, canvas);
+        cache.current.delete(pageKey);
+        cache.current.set(pageKey, canvas);
         if (cache.current.size > PDF_WORKSPACE_CONFIG.viewerCacheSize) {
           cache.current.delete(cache.current.keys().next().value as string);
         }
-        setBase({ key, canvas });
+        setBase({ key: pageKey, canvas });
       })
       .catch((error) => { if (!cancelled) console.error('大圖繪製失敗（WorkspaceViewer）：', error); });
     return () => { cancelled = true; };
-  }, [key, source, page.sourcePageIndex, page.rotation, absoluteRotation]);
+    // renderKey 已涵蓋頁、角度與解析度的變化，其餘值都由它推得。
+  }, [renderKey]);
 
-  return base?.key === key ? base.canvas : null;
+  return base?.key === pageKey ? base.canvas : null;
 }
 
-/** 依容器寬度與視窗高度算出大圖的顯示尺寸（px）。 */
-function useViewerSize(aspect: number) {
-  const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const [available, setAvailable] = useState({ width: 0, height: 0 });
+/** 大圖區塊可用的寬高（px）：寬＝區塊內寬，高＝視窗高度扣掉上方區域。 */
+function useAvailableArea() {
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const [area, setArea] = useState({ width: 0, height: 0 });
   useEffect(() => {
-    if (!container) return;
+    if (!frame) return;
     const update = () =>
-      setAvailable({ width: container.clientWidth, height: window.innerHeight * PDF_WORKSPACE_CONFIG.viewerMaxHeightRatio });
+      setArea({ width: frame.clientWidth, height: Math.max(240, window.innerHeight - PDF_WORKSPACE_CONFIG.viewerHeightOffset) });
     update();
     const observer = new ResizeObserver(update);
-    observer.observe(container);
+    observer.observe(frame);
     window.addEventListener('resize', update);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', update);
     };
-  }, [container]);
-  const width = Math.max(0, Math.min(available.width, available.height * aspect));
-  return { setContainer, width, height: width / aspect };
+  }, [frame]);
+  return { setFrame, ...area };
+}
+
+function ZoomControls({ zoom, factor, onChange }: { zoom: ViewerZoom; factor: number; onChange: (zoom: ViewerZoom) => void }) {
+  const steps = PDF_WORKSPACE_CONFIG.zoomSteps;
+  const button = (active: boolean) =>
+    `rounded-md border px-2 py-1 text-xs transition-colors disabled:opacity-30 ${
+      active ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+    }`;
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1" role="group" aria-label="大圖縮放">
+      <button type="button" className={button(zoom === 'page')} onClick={() => onChange('page')}>整頁</button>
+      <button type="button" className={button(zoom === 'width')} onClick={() => onChange('width')}>符合寬度</button>
+      <button type="button" className={button(false)} aria-label="縮小" disabled={factor <= steps[0] + 0.001} onClick={() => onChange(stepZoom(factor, -1, steps))}>－</button>
+      <span className="w-12 text-center text-xs tabular-nums text-slate-600" data-ws="zoom-level">{Math.round(factor * 100)}%</span>
+      <button type="button" className={button(false)} aria-label="放大" disabled={factor >= steps[steps.length - 1] - 0.001} onClick={() => onChange(stepZoom(factor, 1, steps))}>＋</button>
+    </div>
+  );
 }
 
 export function WorkspaceViewer({
@@ -90,11 +116,15 @@ export function WorkspaceViewer({
   onRemoveMark: (markId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [zoom, setZoom] = useState<ViewerZoom>('width');
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragEnd, setDragEnd] = useState<Point | null>(null);
-  const base = useViewerBase(source, page);
   const size = rotatedSize(source.pageSizes[page.sourcePageIndex], page.rotation);
-  const { setContainer, width, height } = useViewerSize(size.width / size.height);
+  const aspect = size.width / size.height;
+  const { setFrame, width: areaWidth, height: areaHeight } = useAvailableArea();
+  const width = viewerDisplayWidth(zoom, areaWidth, areaHeight, aspect);
+  const height = width / aspect;
+  const base = useViewerBase(source, page, width);
   const displayMarks = page.marks.map((mark) => markToDisplay(mark, page.rotation));
 
   useEffect(() => {
@@ -135,23 +165,33 @@ export function WorkspaceViewer({
   const box = (rect: NormRect) => ({ left: percent(rect.x), top: percent(rect.y), width: percent(rect.width), height: percent(rect.height) });
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-2" data-ws="viewer">
-      <div className="flex items-center justify-between gap-2 text-sm text-slate-600">
-        <button type="button" className="rounded-md px-2 py-1 hover:bg-slate-100 disabled:opacity-30" disabled={pageNumber <= 1} onClick={() => onStep(-1)} aria-label="上一頁">
-          ◀
-        </button>
-        <span className="min-w-0 truncate text-center">
-          第 {pageNumber} / {pageTotal} 頁
-          <span className="ml-2 text-xs text-slate-400">
-            <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: PDF_WORKSPACE_CONFIG.sourceColors[source.colorIndex] }} />
-            {source.name} 第 {page.sourcePageIndex + 1} 頁
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+        <div className="flex min-w-0 items-center gap-1">
+          <button type="button" className="rounded-md px-2 py-1 hover:bg-slate-100 disabled:opacity-30" disabled={pageNumber <= 1} onClick={() => onStep(-1)} aria-label="上一頁">
+            ◀
+          </button>
+          <span className="min-w-0 truncate">
+            第 {pageNumber} / {pageTotal} 頁
+            <span className="ml-2 text-xs text-slate-400">
+              <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: PDF_WORKSPACE_CONFIG.sourceColors[source.colorIndex] }} />
+              {source.name} 第 {page.sourcePageIndex + 1} 頁
+            </span>
           </span>
-        </span>
-        <button type="button" className="rounded-md px-2 py-1 hover:bg-slate-100 disabled:opacity-30" disabled={pageNumber >= pageTotal} onClick={() => onStep(1)} aria-label="下一頁">
-          ▶
-        </button>
+          <button type="button" className="rounded-md px-2 py-1 hover:bg-slate-100 disabled:opacity-30" disabled={pageNumber >= pageTotal} onClick={() => onStep(1)} aria-label="下一頁">
+            ▶
+          </button>
+        </div>
+        <ZoomControls zoom={zoom} factor={zoomFactor(zoom, areaWidth, areaHeight, aspect)} onChange={setZoom} />
       </div>
-      <div ref={setContainer} className="flex w-full justify-center">
-        <div className="relative bg-white shadow" style={{ width, height }}>
+      <div
+        ref={setFrame}
+        data-ws="viewer-frame"
+        className="w-full overflow-auto rounded-lg bg-slate-100"
+        // 固定保留捲軸位置：否則捲軸一出現寬度就變窄、「符合寬度」又重算，可能來回跳動。
+        style={{ maxHeight: areaHeight || undefined, scrollbarGutter: 'stable' }}
+      >
+        {/* 頁面比區塊窄時置中；放大後比區塊寬時從左邊開始，才捲得到左緣。 */}
+        <div className="relative mx-auto bg-white shadow" style={{ width, height }}>
           <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
           {!base && <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">載入中…</div>}
           <div

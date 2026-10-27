@@ -15,6 +15,7 @@ import {
   type ExportPlan,
 } from '../../lib/pdfWorkspace';
 import type { SplitMode, WorkPage, WorkSource } from '../../types/pdfTools';
+import type { PdfUsageAction } from '../../types/pdfToolUsage';
 import { Button, FieldLabel, INPUT_CLASS } from '../ui';
 import { StatusLine, type StatusMessage } from './PdfToolParts';
 
@@ -24,6 +25,7 @@ export function WorkspaceExportPanel({
   sources,
   defaultName,
   sourceCount,
+  onExported,
 }: {
   pages: readonly WorkPage[];
   selectedIds: readonly string[];
@@ -31,6 +33,8 @@ export function WorkspaceExportPanel({
   defaultName: string;
   /** 清單上的頁來自幾個檔案。 */
   sourceCount: number;
+  /** 下載成功後通知（記使用紀錄用）。 */
+  onExported: (action: PdfUsageAction, plan: ExportPlan) => void;
 }) {
   const [outputName, setOutputName] = useState('');
   const [splitMode, setSplitMode] = useState<SplitMode>('ranges');
@@ -43,7 +47,7 @@ export function WorkspaceExportPanel({
   const summary = summarizePages(pages);
   const split = useMemo(() => buildSplitGroups(splitMode, rangeText, everyN, pages.length), [splitMode, rangeText, everyN, pages.length]);
 
-  async function runExport(plan: ExportPlan) {
+  async function runExport(action: PdfUsageAction, plan: ExportPlan) {
     setBusy(true);
     setStatus({ text: '處理中，請稍候…', tone: 'info' });
     try {
@@ -53,6 +57,7 @@ export function WorkspaceExportPanel({
       const { blob, filename } = await packageFiles(files, plan.zipName);
       downloadBlob(blob, filename);
       setStatus({ text: `✔ 已下載「${filename}」（${formatBytes(blob.size)}）`, tone: 'ok' });
+      onExported(action, plan);
     } catch (error) {
       console.error('下載失敗（WorkspaceExportPanel runExport）：', error);
       setStatus({ text: `✘ 下載失敗：${(error as Error).message}`, tone: 'error' });
@@ -79,14 +84,14 @@ export function WorkspaceExportPanel({
             <span className="text-sm text-slate-500">.pdf</span>
           </div>
         </div>
-        <Button disabled={busy || pages.length === 0} onClick={() => runExport(planAllPages(pages, name))}>
+        <Button disabled={busy || pages.length === 0} onClick={() => runExport('downloadAll', planAllPages(pages, name))}>
           {sourceCount > 1 ? `合併下載 PDF（${pages.length} 頁）` : `下載 PDF（${pages.length} 頁）`}
         </Button>
-        <Button variant="secondary" disabled={busy || selectedCount === 0} onClick={() => runExport(planSelectedPages(pages, selectedIds, name))}>
+        <Button variant="secondary" disabled={busy || selectedCount === 0} onClick={() => runExport('downloadSelected', planSelectedPages(pages, selectedIds, name))}>
           只下載勾選的頁{selectedCount > 0 ? `（${selectedCount} 頁）` : ''}
         </Button>
         {sourceCount > 1 && (
-          <Button variant="secondary" disabled={busy} onClick={() => runExport(planPerSource(pages, sourceNames, name))}>
+          <Button variant="secondary" disabled={busy} onClick={() => runExport('perSource', planPerSource(pages, sourceNames, name))}>
             各檔分開下載
           </Button>
         )}
@@ -133,7 +138,7 @@ export function WorkspaceExportPanel({
           <p className={`text-xs ${split.ok ? 'text-slate-500' : 'text-red-600'}`}>
             {split.ok ? `${describeSplitGroups(split.groups)}（頁碼是上面清單的順序，多個檔案會打包成 ZIP）` : split.error}
           </p>
-          <Button variant="secondary" disabled={busy || !split.ok} onClick={() => split.ok && runExport(planSplit(pages, split.groups, name))}>
+          <Button variant="secondary" disabled={busy || !split.ok} onClick={() => split.ok && runExport('split', planSplit(pages, split.groups, name))}>
             拆分下載
           </Button>
         </fieldset>

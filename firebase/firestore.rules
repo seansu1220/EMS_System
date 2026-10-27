@@ -265,5 +265,35 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    // ── PDF 工具使用紀錄（v1.29）：每次下載一筆，給管理員看 30 天內有誰用過 ──
+    // 三種角色都能用 PDF 工具，所以已核准的帳號都能新增，但只能記自己、欄位固定、時間必須是伺服器時間；
+    // **刻意不收檔名**（檔名常含姓名、TEMSIS）。紀錄不可修改；只有管理員讀得到、刪得掉（過期清理）。
+    match /pdfToolUsage/{usageId} {
+      allow read: if isAdmin();
+
+      allow create: if isApproved()
+        && request.resource.data.keys().hasOnly(
+          ['uid', 'userName', 'email', 'action', 'pageCount', 'fileCount', 'sourceCount', 'markedPages', 'usedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.userName is string
+        && request.resource.data.userName.size() <= 100
+        && request.resource.data.action in ['downloadAll', 'downloadSelected', 'perSource', 'split']
+        && request.resource.data.pageCount is int
+        && request.resource.data.pageCount >= 1
+        && request.resource.data.pageCount <= 100000
+        && request.resource.data.fileCount is int
+        && request.resource.data.fileCount >= 1
+        && request.resource.data.fileCount <= 100000
+        && request.resource.data.sourceCount is int
+        && request.resource.data.sourceCount >= 1
+        && request.resource.data.markedPages is int
+        && request.resource.data.markedPages >= 0
+        && request.resource.data.usedAt == request.time;
+
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
   }
 }

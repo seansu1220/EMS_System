@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-10-27　網頁 v1.29.0 PDF 大圖放大到看得清楚；新增 PDF 工具使用紀錄（30 天內誰用過）
+
+### 問題描述
+1. 使用者：「大圖也太小了吧，左右明明還有很多空間，我目前變成還是只能放大網頁看。」
+2. 使用者：「我希望記錄有誰使用過（30 日內使用紀錄）。」
+
+### 根本原因
+1. 兩個限制疊在一起：整個網站的內容最寬只有 1024px（`Layout` 的 `max-w-5xl`），三欄並排後大圖只剩約 600px；
+   大圖高度又限制在視窗的 75%，直式頁面依高度縮小，寬度只剩 500px 上下，兩側大片空白。
+2. 新需求，原本沒有任何使用紀錄。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `src/components/Layout.tsx` | 小工具頁內容寬度放寬到 1800px，其他頁維持 1024px |
+| `src/components/pdf/WorkspaceViewer.tsx` | 預設「符合寬度」（撐滿右側，比畫面高時在大圖區塊內捲動）；新增 整頁／符合寬度／－／＋；解析度跟著顯示寬度，放大才重畫；固定保留捲軸位置避免寬度來回跳 |
+| `src/lib/pdfWorkspace.ts` | 縮放純函式（`viewerDisplayWidth`、`zoomFactor`、`stepZoom`）；`usageEntryFromPlan`（下載內容 → 使用紀錄的數字） |
+| `src/config/pdfTools.ts` | 大圖參數改為區塊高度、縮放級距、解析度級距與上限；新增 `PDF_USAGE_CONFIG`（保留 30 天、清理批次、下載方式名稱） |
+| `src/components/pdf/WorkspacePageList.tsx` | 頁面清單高度與大圖區塊一致 |
+| `src/types/pdfToolUsage.ts`、`src/services/pdfToolUsageService.ts`（新） | 使用紀錄型別；寫入（失敗不擋下載）、訂閱 30 天內、刪除過期 |
+| `src/lib/pdfUsageLogic.ts`、`src/hooks/usePdfToolUsage.ts`、`src/components/PdfUsageLog.tsx`（新） | 依人彙總、下載方式名稱、台灣時間格式；管理員「使用紀錄」畫面（依人統計＋逐筆） |
+| `src/components/pdf/WorkspaceExportPanel.tsx`、`PdfToolbox.tsx` | 下載成功後寫一筆使用紀錄 |
+| `src/pages/ToolsPage.tsx` | 管理員多一個「📊 使用紀錄」分區（`#usage`）；分區改為設定驅動 |
+| `src/config/constants.ts` | 新增集合 `pdfToolUsage` |
+| `firebase/firestore.rules` | `pdfToolUsage`：已核准帳號可新增自己的紀錄（欄位固定、不收檔名、email 須為自己、時間須為伺服器時間）；只有管理員可讀、可刪；不可修改 |
+| `scripts/rules.test.mjs` | 新增 15 項使用紀錄的規則測試（98/98 通過） |
+| `package.json` | 版本 1.22.0 |
+| `docs/SPEC.md` | 路由表、2.10（大圖縮放、寬版面、使用紀錄）、資料模型、安全規則、目錄結構（v1.29.0） |
+
+驗證：規則測試 98/98；1920×1080 下大圖由約 600px 變成 1367px 寬，整頁模式整頁塞得進、放大後重畫成更高解析度（7 項）；
+接本機 Firestore 模擬器跑使用紀錄 10 項：下載兩次寫兩筆且內容正確、紀錄不含檔名、一般帳號看不到使用紀錄、
+管理員看到依人統計與逐筆、40 天前的紀錄不顯示且打開後被刪掉；工作區原本的 21 項全數通過。
+
+---
+
 ## 2026-10-27　網頁 v1.28.0 PDF 工具改為單一工作區（放一次檔案就能合併、拆分、整理、編輯）
 
 ### 問題描述

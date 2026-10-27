@@ -1,6 +1,10 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.28.0　建立日期：2026-07-22　最後更新：2026-10-27
+> 版本：v1.29.0　建立日期：2026-07-22　最後更新：2026-10-27
+> v1.29.0：PDF 大圖改為**預設符合寬度**（撐滿右側，比畫面高時在大圖區塊內捲動），新增「整頁／符合寬度／－／＋」縮放，
+> 　　　　 解析度跟著顯示寬度；小工具頁改用寬版面（最寬 1800px）。新增 **PDF 工具使用紀錄**：每次下載記一筆
+> 　　　　 （人、時間、下載方式、頁數，**不記檔名**），管理員在小工具頁「使用紀錄」看 30 天內誰用過；
+> 　　　　 新增 `pdfToolUsage` 集合與安全規則（見 2.7、2.10、3）
 > v1.28.0：PDF 工具**改為單一工作區**——檔案丟一次，所有頁面排成一個清單（第二份接在後面＝合併），
 > 　　　　 左直式工具列（塗黑／馬賽克／螢光筆、轉向、刪除、復原）、中頁面清單（勾選、拖曳排序）、
 > 　　　　 右大圖（點頁就顯示、直接在大圖上框選），下方選下載方式（全部、勾選、拆分、各檔分開）（見 2.10）
@@ -283,7 +287,7 @@
 | `/holidays` | （v1.12.2 起併入屬性管理）自動導向 `/categories` | 同上 |
 | `/unlock` | **解鎖工單**（提出申請、查看結果） | 需登入且已核准（**三種角色都可以**） |
 | `/triage-tags` | **測試用傷票領取**（v1.21，輸入張數 → 下載 PDF） | 需登入且已核准（**三種角色都可以**） |
-| `/tools` | **小工具**：PDF 工作區（所有人）＋電腦端工具說明（**僅管理員**，`#local` 直接開） | 需登入且已核准（**三種角色都可以進**，v1.27 起） |
+| `/tools` | **小工具**：PDF 工作區（所有人）＋電腦端工具說明、使用紀錄（**僅管理員**，`#local`、`#usage` 直接開）；此頁用寬版面（最寬 1800px，其他頁維持 1024px） | 需登入且已核准（**三種角色都可以進**，v1.27 起） |
 | `/pdf-tools` | （v1.26 的獨立 PDF 工具頁，v1.27 起併入小工具）自動導向 `/tools` | 同上 |
 | `/users` | 使用者管理 | 僅管理員 |
 
@@ -431,10 +435,18 @@ QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
 **檔案全程只在瀏覽器記憶體處理，不上傳、不寫 Firestore、沒有安全規則異動**，
 因此三種角色都能用，可放心處理含個資的救護紀錄與公文。
 
-**小工具頁的兩個分區。** 所有人都看到「PDF 工具」；管理員右上角多一個切換，
-可切到「電腦端工具說明」（即第 4 章的本機工具清單，`#local` 直接開）。
-非管理員的畫面上完全不渲染那一區，也沒有切換按鈕。兩區同時掛載只切換顯示，
-切去看說明再回來，PDF 工作區裡的檔案不會消失。舊版的 `#merge` 等書籤一律顯示 PDF 工具。
+**小工具頁的分區。** 所有人都看到「PDF 工具」；管理員右上角多一個切換，
+可切到「電腦端工具說明」（即第 4 章的本機工具清單，`#local` 直接開）與「使用紀錄」（v1.29，`#usage` 直接開）。
+非管理員的畫面上完全不渲染那兩區，也沒有切換按鈕。各區同時掛載只切換顯示，
+切去看說明或紀錄再回來，PDF 工作區裡的檔案不會消失。舊版的 `#merge` 等書籤一律顯示 PDF 工具。
+小工具頁用寬版面（`Layout` 依路徑把內容寬度由 1024px 放寬到 1800px），大圖才有空間。
+
+**使用紀錄（v1.29，使用者 2026-10-27 指定「記錄有誰使用過，30 日內」）。** 每按一次下載（四種方式皆是）
+寫一筆 `pdfToolUsage`：人（uid、顯示名稱、email）、伺服器時間、下載方式、頁數、檔案數、來源檔數、有標記的頁數。
+**刻意不記檔名**——救護紀錄的檔名常含姓名、TEMSIS，記下來就成了個資外流的管道。寫入失敗只記在主控台，不擋下載。
+管理員的「使用紀錄」分區：上半依人統計（下載次數、總頁數、最近使用），下半逐筆列出；多個來源檔的「下載全部」顯示為「合併下載」。
+只查 30 天內（`PDF_USAGE_CONFIG.retentionDays`），管理員打開時順手刪掉 30 天前的（一次最多 400 筆）。
+第一次切到這一區才開始讀資料庫。
 
 **工作區的版面**（電腦寬度；手機寬度時改為上下排列，工具列變橫排、頁面清單變橫向捲動）：
 
@@ -443,7 +455,7 @@ QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
 | 上方檔案列 | 拖放／選檔加入 PDF、JPG、PNG（可一次多個、之後隨時再加，**新的頁接在清單最後**＝合併）；已加入的檔案以色點＋檔名＋剩餘頁數顯示，✕ 把該檔的頁全部移出清單；「加入圖片時」選放進 A4（置中縮放、不放大、四周留白 24pt）或依圖片原尺寸，圖片加入當下就轉成一頁 PDF；「全部清空」。讀不了的檔案（格式不支援、有密碼、損毀）不加入並列出原因。 |
 | 左：直式工具列 | 標記工具：瀏覽、塗黑、馬賽克、螢光筆（選螢光筆時出現黃／綠／粉紅／藍）；頁面動作：向左轉 90°、向右轉 90°、刪除頁面、復原上一步。頁面動作**有勾選就套用到勾選的頁，沒勾選就套用到大圖上那一頁**，工具列下方寫明「套用到：目前這頁／勾選的 N 頁」。滑鼠裝置預設塗黑，觸控裝置預設瀏覽（避免一滑就畫框）。 |
 | 中：頁面清單 | 全部頁面依輸出順序排列（電腦兩欄直捲）。點縮圖＝右邊顯示大圖；左上角勾選框可多選（上方有全選／取消勾選）；按住拖曳（手機長按）調整順序。縮圖下方色點標示來自哪個檔，有標記的頁另有 🖍；縮圖會畫出標記與旋轉。 |
-| 右：大圖 | 目前那一頁（含旋轉與標記），◀ ▶ 換頁，標題列寫「第 n / 總 頁・來源檔名 第幾頁」。選了標記工具就直接在大圖上按住拖曳框出範圍，框右上角 ✕ 移除。高度最多視窗的 75%。 |
+| 右：大圖 | 目前那一頁（含旋轉與標記），◀ ▶ 換頁，標題列寫「第 n / 總 頁・來源檔名 第幾頁」。選了標記工具就直接在大圖上按住拖曳框出範圍，框右上角 ✕ 移除。**預設「符合寬度」**（v1.29）：頁面撐滿右側寬度，大圖區塊高度＝視窗高度減 140px，頁面比它高時在區塊內捲動；另有「整頁」（整頁塞進區塊）與 －／＋（相對於符合寬度 50%～300%）。解析度依「顯示寬度×裝置像素比」以 512px 為級距往上取整（長邊上限 4096px），放大才重畫。 |
 | 下方下載區 | 下載檔名（預設：只有一個檔＝「原檔名_已處理」，多個檔＝「合併後的檔案」）；**下載 PDF**（全部頁，多檔時按鈕叫「合併下載 PDF」）、**只下載勾選的頁**、**各檔分開下載**（多檔時才出現，每個來源檔一份「原檔名_已處理.pdf」，打包 ZIP）、可展開的**拆分成多個檔案**（依頁碼範圍／每 N 頁／每頁，頁碼為清單上的順序，寫法 `1-3, 5, 8-`，全形逗號、頓號、空白也可；多檔打包 ZIP）。有塗黑／馬賽克時提示幾頁會轉成圖片。 |
 
 **復原。** 加入檔案、移除檔案、排序、轉向、刪除、加／刪標記都可以「復原上一步」（最多 50 步，
@@ -511,6 +523,8 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
 - `triageTagIssues/{起始流水號}`（v1.21 新增）：{ startSerial, count, **unit**, **weekIndex**, requestedBy, requestedByName, requestedAt }
   ——一次領取一筆，文件 ID 就是起始流水號（不補零，例 `10` ＝ `H00T010` 起），天生不重複。
   （粗體為 v1.22 新增）
+- `pdfToolUsage/{自動 ID}`（v1.29 新增）：{ uid, userName, email, action（`downloadAll`／`downloadSelected`／`perSource`／`split`）,
+  pageCount, fileCount, sourceCount, markedPages, usedAt（伺服器時間） }——PDF 工具每次下載一筆，**不含檔名**，保留 30 天（見 2.10）。
 - `triageTagUnitWeeks/{週序}_{單位}`（v1.22 新增）：{ unit, weekIndex, used（本週已領張數）, lastStartSerial }
   ——某單位某一週的領取量，例 `2960_大湳分隊`。週序＝台灣時間的本地日序加 3 除以 7 取整
   （1970-01-01 是星期四，這樣剛好每個週一跳號；前端 `triageTagWeekIndex()` 與規則 `triageWeekIndex()` 同算法）。
@@ -547,10 +561,13 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
   - ⚠ 規則每筆批次寫入最多讀 20 份文件，三份文件互相核對時要刻意省讀取（計數器與用量的舊值直接用 `resource`）；
     另外規則的 `math.floor` 回傳小數，組文件 ID 前必須 `int()`，否則會組出 `2960.0_大湳分隊`。
   - 領取紀錄不可修改，刪除僅管理員（號碼不回收）；計數器**任何人都不可刪除**（刪了號碼會從頭重發）。
+- `pdfToolUsage`（v1.29 起）：建立＝任何已核准帳號（三種角色都用得到 PDF 工具），但欄位只准上述九個（`keys().hasOnly`，
+  **多一個檔名欄位就擋**）、`uid` 必須是自己、`email` 必須等於登入 token 的 email、下載方式限四種、
+  頁數／檔案數為 1 以上整數、`usedAt == request.time`（不能偽造時間）。讀取與刪除僅管理員；任何人不可修改。
 - `users`：本人可讀自己的文件、可改自己的一般欄位，但 **role 與 status 不可自行變更**（不可自我核准/提權）；
   列出全部帳號與變更他人狀態僅限管理員；建立時強制
   `role/status == (管理員 email ? admin/approved : member/pending)`。
-- 規則測試腳本置於 `scripts/rules.test.mjs`，執行 `npm run test:rules`（v1.24 起 **84/84 通過**，含測試用傷票 31 項）。
+- 規則測試腳本置於 `scripts/rules.test.mjs`，執行 `npm run test:rules`（v1.29 起 **98/98 通過**，含測試用傷票 31 項、PDF 使用紀錄 15 項）。
   啟動器 `scripts/run-rules-test.mjs` 會自動找出 JDK 21 以上的安裝並只在該次執行插入 PATH——
   因為 firebase-tools 是直接呼叫 PATH 上的 `java`（不看 JAVA_HOME），而本機另有舊版 Java 8 排在前面。
   測試套件 `@firebase/rules-unit-testing` 刻意不列入 devDependencies（避免 peer 版本衝突），
@@ -594,7 +611,7 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
 EMS_System/
 ├─ src/
 │  ├─ types/        task.ts、category.ts、checklistTemplate.ts、user.ts、holiday.ts、
-│  │                unlockRequest.ts、triageTag.ts、pdfTools.ts
+│  │                unlockRequest.ts、triageTag.ts、pdfTools.ts、pdfToolUsage.ts
 │  ├─ config/       constants.ts（提醒工作日 7/30/3、工作日星期、預設屬性、集合名稱、ADMIN_EMAILS）、
 │  │                holidays.ts（內建 2026/2027 國定假日清單）、
 │  │                triageTag.ts（測試用傷票的號碼格式、單次上限、分隊名單與每週上限、版面尺寸、色碼）、
@@ -605,14 +622,14 @@ EMS_System/
 │  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）、
 │  │                pdfWorkspace.ts（工作區 reducer 與下載規劃，純函式）、pdfEditLogic.ts（標記與旋轉換算）、
 │  │                pdfPageLogic.ts（頁碼與檔名）、pdfEngine.ts（讀檔、圖片轉 PDF、打包）、pdfRender.ts（繪圖）、
-│  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）
+│  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）、pdfUsageLogic.ts（使用紀錄彙總）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
-│  │                userService、holidayService、unlockRequestService、triageTagService
-│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、usePdfWorkspace
+│  │                userService、holidayService、unlockRequestService、triageTagService、pdfToolUsageService
+│  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、usePdfWorkspace、usePdfToolUsage
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
-│  │                CompletionSection、LocalToolsGuide、ui；
+│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、ui；
 │  │                pdf/（PdfToolbox 工作區與檔案列、工具列、頁面清單、大圖、下載區、共用元件）
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
 │                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、

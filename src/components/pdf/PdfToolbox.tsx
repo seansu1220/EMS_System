@@ -8,9 +8,11 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { PDF_CONVERT_TIPS, PDF_EDIT_CONFIG, PDF_WORKSPACE_CONFIG } from '../../config/pdfTools';
+import { useAuth } from '../../hooks/useAuth';
 import { usePdfWorkspace } from '../../hooks/usePdfWorkspace';
 import { baseName } from '../../lib/pdfPageLogic';
-import { actionTargetIds, countPagesBySource } from '../../lib/pdfWorkspace';
+import { actionTargetIds, countPagesBySource, usageEntryFromPlan } from '../../lib/pdfWorkspace';
+import { recordPdfToolUsage } from '../../services/pdfToolUsageService';
 import type { EditTool, ImagePageMode, NormRect } from '../../types/pdfTools';
 import { Card } from '../ui';
 import { StatusLine, type StatusMessage } from './PdfToolParts';
@@ -61,6 +63,7 @@ function useWorkspaceShortcuts(root: HTMLElement | null, onUndo: () => void, onR
 
 export function PdfToolbox() {
   const { state, dispatch, sources, addFiles, reset } = usePdfWorkspace();
+  const { user } = useAuth();
   const [tool, setTool] = useState<EditTool>(defaultTool);
   const [highlightColor, setHighlightColor] = useState<string>(PDF_EDIT_CONFIG.highlightColors[0].value);
   const [imageMode, setImageMode] = useState<ImagePageMode>('a4');
@@ -179,6 +182,9 @@ export function PdfToolbox() {
               sources={sources}
               defaultName={defaultName}
               sourceCount={activeSources.length}
+              onExported={(action, plan) => {
+                if (user) void recordPdfToolUsage(user, usageEntryFromPlan(action, plan));
+              }}
             />
           </Card>
         </>
