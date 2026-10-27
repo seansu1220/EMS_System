@@ -8,7 +8,7 @@
  * 檔案全程只在瀏覽器處理，不會上傳；Firestore 只記「誰、何時、開啟／下載幾頁」的使用紀錄，不含檔名。
  */
 import { useEffect, useRef, useState } from 'react';
-import { PDF_CONVERT_TIPS, PDF_EDIT_CONFIG, PDF_PREVIEW_PANEL_CONFIG, PDF_WORKSPACE_CONFIG } from '../../config/pdfTools';
+import { PDF_CONVERT_TIPS, PDF_EDIT_CONFIG, PDF_WORKSPACE_CONFIG } from '../../config/pdfTools';
 import { useAuth } from '../../hooks/useAuth';
 import { usePdfWorkspace } from '../../hooks/usePdfWorkspace';
 import { baseName } from '../../lib/pdfPageLogic';
@@ -27,10 +27,6 @@ import { WorkspaceViewer } from './WorkspaceViewer';
 /** 滑鼠操作的裝置預設直接塗黑；觸控裝置預設「瀏覽」，才不會一滑就畫出框。 */
 const defaultTool = (): EditTool =>
   typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches ? 'blackout' : 'browse';
-
-/** 視窗夠寬、預覽會並排顯示時，加入檔案後直接打開預覽（手機上會蓋滿畫面，就不自動打開）。 */
-const previewOpensSideBySide = (): boolean =>
-  window.matchMedia?.(`(min-width: ${PDF_PREVIEW_PANEL_CONFIG.sideBySideMinWidth}px)`).matches ?? false;
 
 /** 檔案若拖到拖放區外，瀏覽器預設會直接開啟該檔並離開本頁，在此攔下。 */
 function usePreventFileDropNavigation() {
@@ -109,8 +105,8 @@ export function PdfToolbox({ active = true }: { active?: boolean }) {
     if (skipped.length > 0) setStatus({ text: `⚠ 以下檔案未加入：${skipped.join('；')}`, tone: 'error' });
     else setStatus({ text: `已加入 ${addedPages} 頁`, tone: 'ok' });
     if (!firstPageId) return;
+    // 加入檔案不自動打開預覽（v1.30.1，使用者指定）：要點了頁面，預覽才從右側滑進來。
     if (user) void recordPdfToolUsage(user, openUsageEntry(addedFiles, addedPages));
-    if (previewOpensSideBySide()) showPage(firstPageId);
   }
 
   function showPage(pageId: string) {

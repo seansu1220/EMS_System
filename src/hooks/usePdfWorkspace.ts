@@ -31,7 +31,7 @@ async function loadSource(file: File, id: string, colorIndex: number, imageMode:
 export interface AddFilesResult {
   addedFiles: number;
   addedPages: number;
-  /** 這次新加入的第一頁（電腦上加入後直接打開它的預覽）。 */
+  /** 這次新加入的第一頁（null＝一頁都沒加進來）。 */
   firstPageId: string | null;
   skipped: string[];
 }
