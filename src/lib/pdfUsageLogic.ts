@@ -1,5 +1,5 @@
 /**
- * PDF 工具使用紀錄的整理（純函式）：依人彙總、下載方式的顯示名稱、時間格式。
+ * PDF 工具使用紀錄的整理（純函式）：依人彙總、動作的顯示名稱、時間格式。
  */
 import { PDF_USAGE_CONFIG } from '../config/pdfTools';
 import type { PdfToolUsage } from '../types/pdfToolUsage';
@@ -8,10 +8,12 @@ export interface PdfUsageSummary {
   uid: string;
   userName: string;
   email: string;
+  /** 開啟檔案次數。 */
+  opens: number;
   /** 下載次數。 */
-  times: number;
-  /** 總頁數。 */
-  pages: number;
+  downloads: number;
+  /** 下載的總頁數。 */
+  downloadedPages: number;
   /** 最近一次（ISO）。 */
   lastUsedAt: string;
 }
@@ -20,25 +22,22 @@ export interface PdfUsageSummary {
 export function summarizeUsageByUser(records: readonly PdfToolUsage[]): PdfUsageSummary[] {
   const byUser = new Map<string, PdfUsageSummary>();
   for (const record of records) {
-    const current = byUser.get(record.uid);
-    if (current) {
-      current.times += 1;
-      current.pages += record.pageCount;
+    let summary = byUser.get(record.uid);
+    if (!summary) {
+      summary = { uid: record.uid, userName: record.userName, email: record.email, opens: 0, downloads: 0, downloadedPages: 0, lastUsedAt: record.usedAt };
+      byUser.set(record.uid, summary);
+    }
+    if (record.action === 'open') {
+      summary.opens += 1;
     } else {
-      byUser.set(record.uid, {
-        uid: record.uid,
-        userName: record.userName,
-        email: record.email,
-        times: 1,
-        pages: record.pageCount,
-        lastUsedAt: record.usedAt,
-      });
+      summary.downloads += 1;
+      summary.downloadedPages += record.pageCount;
     }
   }
   return [...byUser.values()];
 }
 
-/** 下載方式的顯示名稱；多個檔一起下載全部時叫「合併下載」。 */
+/** 動作的顯示名稱；多個檔一起下載全部時叫「合併下載」。 */
 export function usageActionLabel(record: Pick<PdfToolUsage, 'action' | 'sourceCount'>): string {
   if (record.action === 'downloadAll' && record.sourceCount > 1) return '合併下載';
   return PDF_USAGE_CONFIG.actionLabels[record.action] ?? record.action;

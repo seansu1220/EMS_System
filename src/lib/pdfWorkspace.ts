@@ -192,6 +192,11 @@ export function planSplit(pages: readonly WorkPage[], pageGroups: readonly numbe
 }
 
 /** 一次下載要記進使用紀錄的內容（只有數字，不含檔名）。 */
+/** 加入檔案時的使用紀錄內容（只有數量，不含檔名）。 */
+export function openUsageEntry(addedFiles: number, addedPages: number): PdfUsageEntry {
+  return { action: 'open', pageCount: addedPages, fileCount: addedFiles, sourceCount: addedFiles, markedPages: 0 };
+}
+
 export function usageEntryFromPlan(action: PdfUsageAction, plan: ExportPlan): PdfUsageEntry {
   const pages = plan.groups.flatMap((group) => group.pages);
   return {
@@ -227,4 +232,16 @@ export function stepZoom(currentFactor: number, direction: 1 | -1, steps: readon
   const epsilon = 0.001;
   if (direction > 0) return steps.find((step) => step > currentFactor + epsilon) ?? steps[steps.length - 1];
   return [...steps].reverse().find((step) => step < currentFactor - epsilon) ?? steps[0];
+}
+
+// ---------- 側邊預覽面板 ----------
+
+/** 預覽面板寬度限制在「最小寬」與「視窗寬－清單最少保留寬」之間；視窗太窄時以最小寬為準。 */
+export function clampPanelWidth(
+  width: number,
+  viewportWidth: number,
+  limits: { minWidth: number; minRemainingWidth: number },
+): number {
+  const maxWidth = Math.max(limits.minWidth, viewportWidth - limits.minRemainingWidth);
+  return Math.round(Math.min(Math.max(width, limits.minWidth), maxWidth));
 }

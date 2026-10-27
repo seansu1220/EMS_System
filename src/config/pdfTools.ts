@@ -24,8 +24,6 @@ export const PDF_TOOLS_CONFIG = {
 export const PDF_WORKSPACE_CONFIG = {
   /** 「復原上一步」最多記幾步。 */
   historyLimit: 50,
-  /** 大圖區塊高度＝視窗高度減這麼多（px，留給上方導覽列與工具列），頁面比它高時在大圖區塊內捲動。 */
-  viewerHeightOffset: 140,
   /** 大圖縮放級距（相對於「符合寬度」）。 */
   zoomSteps: [0.5, 0.75, 1, 1.25, 1.5, 2, 3],
   /** 大圖繪製解析度：依顯示寬度×裝置像素比，以這個級距往上取整（避免每縮放一點就重畫）。 */
@@ -40,14 +38,31 @@ export const PDF_WORKSPACE_CONFIG = {
   defaultMergedName: '合併後的檔案',
 } as const;
 
+/** 側邊預覽面板（點頁面時大圖從視窗右側滑出，仿 Claude 開檔的預覽）。 */
+export const PDF_PREVIEW_PANEL_CONFIG = {
+  /** 第一次打開時佔視窗寬度的比例（之後記住使用者拖曳後的比例）。 */
+  defaultRatio: 0.5,
+  /** 面板最窄（px）。 */
+  minWidth: 380,
+  /** 左邊頁面清單最少保留的寬度（px）。 */
+  minRemainingWidth: 420,
+  /** 視窗至少這麼寬（px）才並排；更窄（手機）時預覽蓋滿整個畫面。 */
+  sideBySideMinWidth: 768,
+  /** 滑出動畫時間（ms）。 */
+  slideMs: 200,
+  /** 記住拖曳後寬度比例的瀏覽器儲存鍵（只存在這台瀏覽器）。 */
+  storageKey: 'ems.pdfPreviewPanelRatio',
+} as const;
+
 /** PDF 工具使用紀錄的參數（管理員在小工具頁的「使用紀錄」查看）。 */
 export const PDF_USAGE_CONFIG = {
   /** 保留幾天：只顯示這段期間的紀錄，管理員打開時順手刪掉更舊的。 */
   retentionDays: 30,
   /** 一次最多刪幾筆過期紀錄（Firestore 批次寫入上限 500）。 */
   cleanupBatchSize: 400,
-  /** 下載方式的顯示名稱。 */
+  /** 動作的顯示名稱。 */
   actionLabels: {
+    open: '開啟檔案',
     downloadAll: '下載全部',
     downloadSelected: '只下載勾選的頁',
     perSource: '各檔分開下載',

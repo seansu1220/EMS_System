@@ -266,7 +266,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // ── PDF 工具使用紀錄（v1.29）：每次下載一筆，給管理員看 30 天內有誰用過 ──
+    // ── PDF 工具使用紀錄（v1.29；v1.30 起開啟檔案也記）：每次開啟、每次下載各一筆，給管理員看 30 天內有誰用過 ──
     // 三種角色都能用 PDF 工具，所以已核准的帳號都能新增，但只能記自己、欄位固定、時間必須是伺服器時間；
     // **刻意不收檔名**（檔名常含姓名、TEMSIS）。紀錄不可修改；只有管理員讀得到、刪得掉（過期清理）。
     match /pdfToolUsage/{usageId} {
@@ -279,7 +279,7 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.userName is string
         && request.resource.data.userName.size() <= 100
-        && request.resource.data.action in ['downloadAll', 'downloadSelected', 'perSource', 'split']
+        && request.resource.data.action in ['open', 'downloadAll', 'downloadSelected', 'perSource', 'split']
         && request.resource.data.pageCount is int
         && request.resource.data.pageCount >= 1
         && request.resource.data.pageCount <= 100000

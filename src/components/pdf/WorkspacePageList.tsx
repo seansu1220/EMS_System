@@ -1,6 +1,6 @@
 /**
- * PDF 工作區中間的頁面清單：點一頁＝右邊顯示大圖；左上角勾選框可多選；拖曳（手機長按）調整順序。
- * 每頁下方的色點標示是哪個檔案的頁。電腦寬度時直式捲動，手機寬度時橫向捲動。
+ * PDF 工作區的頁面清單：點一頁＝右側滑出大圖預覽；左上角勾選框可多選；拖曳（手機長按）調整順序。
+ * 每頁下方的色點標示是哪個檔案的頁。電腦寬度時排成多欄、直式捲動（預覽打開時欄數自動變少），手機寬度時橫向捲動。
  */
 import {
   DndContext,
@@ -52,7 +52,7 @@ export function WorkspacePageList({
         <div
           data-ws="page-list"
           aria-label="頁面清單（依輸出順序）"
-          className="flex shrink-0 gap-2 overflow-x-auto pb-2 md:grid md:max-h-[calc(100vh-140px)] md:w-[140px] md:grid-cols-1 md:content-start md:overflow-x-hidden md:overflow-y-auto md:pb-0 lg:w-[256px] lg:grid-cols-2"
+          className="flex shrink-0 gap-2 overflow-x-auto pb-2 md:grid md:max-h-[calc(100vh-140px)] md:min-w-0 md:flex-1 md:shrink md:grid-cols-[repeat(auto-fill,124px)] md:content-start md:overflow-x-hidden md:overflow-y-auto md:pb-0"
         >
           {pages.map((page, index) => {
             const source = sources.get(page.sourceId);
@@ -121,7 +121,7 @@ function SortablePageCard({
       <button
         type="button"
         className="block cursor-pointer touch-manipulation"
-        title="點一下看大圖，按住拖曳可調整順序"
+        title="點一下在右側打開大圖，按住拖曳可調整順序"
         aria-label={`第 ${pageNumber} 頁，看大圖`}
         aria-current={current ? 'page' : undefined}
         onClick={onShow}

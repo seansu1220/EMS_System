@@ -79,7 +79,7 @@ export function ToolsPage() {
       {/* 各區都保持掛載、只切換顯示，切去看說明或紀錄再回來，PDF 工具裡的檔案不會消失。 */}
       <div hidden={shown !== 'pdf'}>
         <Suspense fallback={<CenteredSpinner label="載入 PDF 工具中…" />}>
-          <PdfToolbox />
+          <PdfToolbox active={shown === 'pdf'} />
         </Suspense>
       </div>
       {isAdmin && (

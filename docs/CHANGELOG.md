@@ -4,6 +4,66 @@
 
 ---
 
+## 2026-10-27　網頁 v1.30.0 PDF 大圖改成側邊滑出的預覽面板；開啟檔案也記入使用紀錄
+
+### 問題描述
+1. 使用者：「其實我原本有點想要做成是 Claude Chat 如果開啟檔案的時候，他從旁邊冒出來一個預覽頁面的樣子。」
+2. 使用者：「我覺得有開啟的也可以記錄。」（v1.29 只記下載）
+3. 以上做完後 SelfWeb 也一併部署。
+
+### 根本原因
+1. v1.28～v1.29 的大圖是工作區裡固定的第三欄，和頁面清單搶寬度；不看大圖時也佔著位置，清單只能擠成兩欄。
+2. 使用紀錄的動作只定義了四種下載方式，安全規則也只放行這四種。
+
+### 修改的檔案與內容
+- 新增 `src/components/pdf/WorkspacePreviewPanel.tsx`：側邊預覽面板（portal 掛到 body）。
+  - 電腦寬度：貼齊視窗右側、從上到下滑出，並設定 `body` 的 padding-right，讓整個網站往左讓位。
+    - 左緣可拖曳調寬，雙擊恢復一半寬度；寬度比例存在 localStorage，讀寫失敗時用預設值。
+  - 手機寬度：蓋滿整個畫面，上方附工具列。
+  - 關閉時保持掛載，用 `inert` 讓它點不到。
+- `src/components/pdf/PdfToolbox.tsx`：
+  - 大圖改放進預覽面板；新增 `previewOpen` 狀態。
+  - 以下情況會打開預覽：
+    - 點頁面。
+    - 選了塗黑、馬賽克或螢光筆。
+    - 按「🔍 打開大圖」。
+    - 電腦寬度時加入檔案：自動打開，並跳到這次新加入的第一頁。
+  - 新增 Esc 關閉；「全部清空」時收起預覽。
+  - 新增 `active` 屬性：小工具頁切到其他分區時拿掉面板。
+  - 加入檔案時寫一筆 `open` 使用紀錄。
+  - 工具列的套用對象改寫成「第 n 頁」。
+- `src/components/pdf/WorkspaceViewer.tsx`：
+  - 新增 ✕ 關閉鈕（`onClose`）。
+  - 大圖區塊改用 flex 撐滿面板高度，直接量測區塊寬高，不再用「視窗高度減 140px」。
+- `src/components/pdf/WorkspacePageList.tsx`：頁面清單由固定 1～2 欄改為佔滿剩餘寬度的多欄（每欄 124px）。
+- `src/config/pdfTools.ts`：
+  - 新增 `PDF_PREVIEW_PANEL_CONFIG`（預設一半寬、最窄 380px、清單至少 420px、並排門檻 768px、動畫 0.2 秒、儲存鍵）。
+  - 移除 `viewerHeightOffset`。
+  - `actionLabels` 新增 `open: '開啟檔案'`。
+- `src/lib/pdfWorkspace.ts`：新增純函式 `clampPanelWidth`（面板寬度上下限）與 `openUsageEntry`（開啟紀錄內容）。
+- `src/hooks/usePdfWorkspace.ts`：`addFiles` 回傳 `AddFilesResult`，多了加入檔數與新加入的第一頁 id。
+- 使用紀錄的型別、彙整與畫面：
+  - `src/types/pdfToolUsage.ts`：`PdfUsageAction` 新增 `'open'`。
+  - `src/lib/pdfUsageLogic.ts`：依人彙總改為開啟次數、下載次數與下載頁數。
+  - `src/components/PdfUsageLog.tsx`：統計表新增「開啟次數」欄，明細欄名改為「動作」，說明文字同步更新。
+- `src/pages/ToolsPage.tsx`：傳入 `active={shown === 'pdf'}`。
+- `firebase/firestore.rules`：`pdfToolUsage` 的 action 允許 `open`。
+- `scripts/rules.test.mjs`：新增「開啟檔案也可記使用紀錄」測試，共 99/99 通過。
+- `docs/SPEC.md`：更新至 v1.30.0，改寫 2.10 的版面表與使用紀錄段落、2.7 的資料模型與第 3 章規則。
+- 驗證：
+  - 新增側邊預覽端到端測試，40/40 通過，涵蓋：
+    - 滑出與讓位、清單不被蓋住、符合寬度與整頁。
+    - ✕ 與 Esc 關閉、選工具自動打開、在面板裡塗黑。
+    - 拖曳調寬、記住寬度、雙擊還原。
+    - 開啟紀錄（2 個檔、8 頁，不含檔名）。
+    - 切分區時收起面板。
+    - 管理員統計：開啟 2 次、下載 1 次。
+    - 手機蓋滿畫面且附工具列。
+  - 原工作區測試 21/21 通過。
+- SelfWeb（`free-tools/`）同步加入側邊預覽面板，不含使用紀錄，因為該站不需登入。
+
+---
+
 ## 2026-10-27　網頁 v1.29.0 PDF 大圖放大到看得清楚；新增 PDF 工具使用紀錄（30 天內誰用過）
 
 ### 問題描述

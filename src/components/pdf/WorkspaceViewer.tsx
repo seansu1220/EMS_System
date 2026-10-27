@@ -1,6 +1,6 @@
 /**
- * PDF 工作區右側的大圖：顯示目前選的那一頁（含旋轉與標記），選了標記工具就能直接在上面拖曳框選。
- * 預設「符合寬度」：頁面撐滿右側寬度，比畫面高時在大圖區塊內捲動；另可切整頁、＋／－ 縮放。
+ * PDF 工作區的大圖（放在右側滑出的預覽面板裡）：顯示目前選的那一頁（含旋轉與標記），選了標記工具就能直接在上面拖曳框選。
+ * 預設「符合寬度」：頁面撐滿面板寬度，比面板高時在大圖區塊內捲動；另可切整頁、＋／－ 縮放。
  * 標記存成「原方向」座標；這裡負責畫面方向 ↔ 原方向的換算，使用者轉頁面時標記會跟著轉。
  */
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
@@ -56,22 +56,17 @@ function useViewerBase(source: WorkSource, page: WorkPage, displayWidth: number)
   return base?.key === pageKey ? base.canvas : null;
 }
 
-/** 大圖區塊可用的寬高（px）：寬＝區塊內寬，高＝視窗高度扣掉上方區域。 */
+/** 大圖區塊可用的寬高（px）：區塊在面板裡撐滿剩餘空間，直接量它的內寬與內高。 */
 function useAvailableArea() {
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   useEffect(() => {
     if (!frame) return;
-    const update = () =>
-      setArea({ width: frame.clientWidth, height: Math.max(240, window.innerHeight - PDF_WORKSPACE_CONFIG.viewerHeightOffset) });
+    const update = () => setArea({ width: frame.clientWidth, height: frame.clientHeight });
     update();
     const observer = new ResizeObserver(update);
     observer.observe(frame);
-    window.addEventListener('resize', update);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', update);
-    };
+    return () => observer.disconnect();
   }, [frame]);
   return { setFrame, ...area };
 }
@@ -101,6 +96,7 @@ export function WorkspaceViewer({
   tool,
   highlightColor,
   onStep,
+  onClose,
   onAddMark,
   onRemoveMark,
 }: {
@@ -111,6 +107,7 @@ export function WorkspaceViewer({
   tool: EditTool;
   highlightColor: string;
   onStep: (delta: number) => void;
+  onClose: () => void;
   /** 參數為原方向座標的矩形。 */
   onAddMark: (rect: NormRect, kind: Exclude<EditTool, 'browse'>, color?: string) => void;
   onRemoveMark: (markId: string) => void;
@@ -164,7 +161,7 @@ export function WorkspaceViewer({
   const percent = (value: number) => `${value * 100}%`;
   const box = (rect: NormRect) => ({ left: percent(rect.x), top: percent(rect.y), width: percent(rect.width), height: percent(rect.height) });
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-2" data-ws="viewer">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2" data-ws="viewer">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
         <div className="flex min-w-0 items-center gap-1">
           <button type="button" className="rounded-md px-2 py-1 hover:bg-slate-100 disabled:opacity-30" disabled={pageNumber <= 1} onClick={() => onStep(-1)} aria-label="上一頁">
@@ -181,14 +178,25 @@ export function WorkspaceViewer({
             ▶
           </button>
         </div>
-        <ZoomControls zoom={zoom} factor={zoomFactor(zoom, areaWidth, areaHeight, aspect)} onChange={setZoom} />
+        <div className="flex items-center gap-2">
+          <ZoomControls zoom={zoom} factor={zoomFactor(zoom, areaWidth, areaHeight, aspect)} onChange={setZoom} />
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+            title="關閉預覽（Esc）"
+            aria-label="關閉預覽"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
       </div>
       <div
         ref={setFrame}
         data-ws="viewer-frame"
-        className="w-full overflow-auto rounded-lg bg-slate-100"
+        className="min-h-0 w-full flex-1 overflow-auto overscroll-contain rounded-lg bg-slate-100"
         // 固定保留捲軸位置：否則捲軸一出現寬度就變窄、「符合寬度」又重算，可能來回跳動。
-        style={{ maxHeight: areaHeight || undefined, scrollbarGutter: 'stable' }}
+        style={{ scrollbarGutter: 'stable' }}
       >
         {/* 頁面比區塊窄時置中；放大後比區塊寬時從左邊開始，才捲得到左緣。 */}
         <div className="relative mx-auto bg-white shadow" style={{ width, height }}>

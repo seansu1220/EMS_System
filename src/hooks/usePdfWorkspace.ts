@@ -28,6 +28,14 @@ async function loadSource(file: File, id: string, colorIndex: number, imageMode:
   return { id, name: file.name, kind, bytes, pageCount, pageSizes, baseRotations, preview, colorIndex };
 }
 
+export interface AddFilesResult {
+  addedFiles: number;
+  addedPages: number;
+  /** 這次新加入的第一頁（電腦上加入後直接打開它的預覽）。 */
+  firstPageId: string | null;
+  skipped: string[];
+}
+
 export function usePdfWorkspace() {
   const [state, dispatch] = useReducer(workspaceReducer, EMPTY_WORKSPACE);
   const [sources, setSources] = useState<ReadonlyMap<string, WorkSource>>(new Map());
@@ -37,8 +45,8 @@ export function usePdfWorkspace() {
 
   useEffect(() => () => sourcesRef.current.forEach((source) => closePdfPreview(source.preview)), []);
 
-  /** 依序加入檔案（頁面接在清單最後）；回傳讀不了的檔案與原因。 */
-  const addFiles = useCallback(async (files: File[], imageMode: ImagePageMode): Promise<{ addedPages: number; skipped: string[] }> => {
+  /** 依序加入檔案（頁面接在清單最後）；回傳加入了幾個檔、幾頁、新加入的第一頁，以及讀不了的檔案與原因。 */
+  const addFiles = useCallback(async (files: File[], imageMode: ImagePageMode): Promise<AddFilesResult> => {
     const skipped: string[] = [];
     const loaded: WorkSource[] = [];
     for (const file of files) {
@@ -50,7 +58,7 @@ export function usePdfWorkspace() {
         skipped.push((error as Error).message);
       }
     }
-    if (loaded.length === 0) return { addedPages: 0, skipped };
+    if (loaded.length === 0) return { addedFiles: 0, addedPages: 0, firstPageId: null, skipped };
     setSources((current) => new Map([...current, ...loaded.map((source) => [source.id, source] as const)]));
     const pages: WorkPage[] = loaded.flatMap((source) =>
       Array.from({ length: source.pageCount }, (_, index) => ({
@@ -62,7 +70,7 @@ export function usePdfWorkspace() {
       })),
     );
     dispatch({ type: 'addPages', pages });
-    return { addedPages: pages.length, skipped };
+    return { addedFiles: loaded.length, addedPages: pages.length, firstPageId: pages[0]?.id ?? null, skipped };
   }, []);
 
   /** 清空工作區：關閉所有預覽文件。 */
