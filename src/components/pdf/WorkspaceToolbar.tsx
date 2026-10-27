@@ -1,6 +1,6 @@
 /**
  * PDF 工作區左側的直式工具列（手機寬度時改成橫排）：
- * 標記工具（瀏覽／塗黑／馬賽克／螢光筆＋顏色）、頁面動作（左轉、右轉、刪除）、復原上一步。
+ * 標記工具（瀏覽／塗黑／馬賽克／螢光筆＋顏色）、頁面動作（左轉、右轉、往前移、往後移、刪除）、復原上一步。
  * 頁面動作套用到「勾選的頁」，沒勾選時套用到大圖上的那一頁。
  */
 import type { ReactNode } from 'react';
@@ -51,10 +51,13 @@ export function WorkspaceToolbar({
   highlightColor,
   targetLabel,
   canAct,
+  canShiftBack,
+  canShiftForward,
   canUndo,
   onToolChange,
   onColorChange,
   onRotate,
+  onShift,
   onRemove,
   onUndo,
 }: {
@@ -63,10 +66,14 @@ export function WorkspaceToolbar({
   /** 頁面動作會套用到哪些頁的說明，例如「目前這頁」「勾選的 3 頁」。 */
   targetLabel: string;
   canAct: boolean;
+  /** 要套用的頁還能不能往前／往後移（已頂到頭就不行）。 */
+  canShiftBack: boolean;
+  canShiftForward: boolean;
   canUndo: boolean;
   onToolChange: (tool: EditTool) => void;
   onColorChange: (color: string) => void;
   onRotate: (delta: number) => void;
+  onShift: (delta: -1 | 1) => void;
   onRemove: () => void;
   onUndo: () => void;
 }) {
@@ -104,6 +111,8 @@ export function WorkspaceToolbar({
       <div className="flex flex-wrap gap-1.5 md:flex-col">
         <ToolButton label="向左轉 90°" icon="⟲" disabled={!canAct} onClick={() => onRotate(-90)} />
         <ToolButton label="向右轉 90°" icon="⟳" disabled={!canAct} onClick={() => onRotate(90)} />
+        <ToolButton label="往前移" icon="◀" disabled={!canShiftBack} onClick={() => onShift(-1)} />
+        <ToolButton label="往後移" icon="▶" disabled={!canShiftForward} onClick={() => onShift(1)} />
         <ToolButton label="刪除頁面" icon="🗑" danger disabled={!canAct} onClick={onRemove} />
         <ToolButton label="復原上一步" icon="↶" disabled={!canUndo} onClick={onUndo} />
       </div>

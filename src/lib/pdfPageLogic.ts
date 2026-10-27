@@ -52,15 +52,6 @@ function pageSequence(start: number, length: number): number[] {
   return Array.from({ length }, (_, i) => start + i);
 }
 
-/** 把一個元素移到新位置並回傳新陣列；越界或位置相同時原樣回傳。 */
-export function moveItem<T>(items: readonly T[], from: number, to: number): T[] {
-  if (to < 0 || to >= items.length || from === to) return [...items];
-  const copy = [...items];
-  const [moved] = copy.splice(from, 1);
-  copy.splice(to, 0, moved);
-  return copy;
-}
-
 /** 頁碼組 → 檔名用標籤，例如 [3,4,5] → "第3-5頁"。 */
 export function groupLabel(group: readonly number[]): string {
   return group.length === 1 ? `第${group[0]}頁` : `第${group[0]}-${group[group.length - 1]}頁`;

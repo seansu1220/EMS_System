@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-10-27　網頁 v1.31.0 PDF 頁面清單可一次選多頁、一起移動
+
+### 問題描述
+使用者：「移動頁數的部分，希望可以用拉或多選的方式，一次選取多頁進行頁數的變更。」
+
+### 根本原因
+拖曳排序一次只能搬一頁（reducer 只有 `move: from → to`）；救護網頁沒有「往前移／往後移」，SelfWeb 的版本也只移目前那一頁；
+多選只能逐一點勾選框。
+
+### 修改的檔案與內容
+- `src/lib/pdfWorkspace.ts`：
+  - 新增純函式：
+    - `pageIdsBetween`：連選。
+    - `moveBlock`：把一批頁搬到某頁前後，保持彼此先後。
+    - `shiftBlock`：整批往前或往後一格；頂到頭不動，沒變時回傳原陣列。
+    - `sameOrder`、`boxesOverlap`（框選判斷）、`LayoutBox`。
+  - reducer 移除 `move`，新增 `setSelection`、`selectRange`、`moveBlock`、`shift`。
+- 新增 `src/components/pdf/useMarqueeSelection.ts`：清單空白處的框選。
+  - 只處理滑鼠；座標以清單內容為準，拉到上下緣會自動捲動。
+  - 按著 Ctrl／Shift 開始拉是加選；只點一下空白處會取消全部勾選。
+- `src/components/pdf/WorkspacePageList.tsx`：
+  - Ctrl＋點選加選，Shift＋點選連選；勾選中的卡片底色變淡藍。
+  - 多頁拖曳：拖勾選的其中一頁時整批搬移，被拖的卡片顯示「N 頁」，一起走的卡片淡化。
+  - 清單改為 `relative`、`select-none`，底部留 32px 空白，並畫出框選的框。
+- `src/components/pdf/WorkspaceToolbar.tsx`：新增「往前移」「往後移」按鈕。
+- `src/components/pdf/PdfToolbox.tsx`：
+  - 接上新動作；「往前移／往後移」能否按，由 `shiftBlock` 判斷。
+  - 操作提示改為說明多選方式。
+- `src/config/pdfTools.ts`：新增 `marqueeMinDrag`、`marqueeAutoScrollEdge`、`marqueeAutoScrollStep`。
+- `src/lib/pdfPageLogic.ts`：移除不再使用的 `moveItem`。
+- `docs/SPEC.md`：更新至 v1.31.0，修改 2.10 工具列與頁面清單列。
+- 驗證：
+  - 新增多選端到端測試 22/22 通過，涵蓋：
+    - Ctrl 加選與取消、Shift 連選。
+    - 框選（依實際版面計算應框到的頁）、點空白取消。
+    - 多頁拖曳顯示「2 頁」，搬到第 6 頁後的順序正確，搬完仍勾選，Ctrl＋Z 一次復原。
+    - 整批往前／往後移、頂到頭時停用、沒勾選時移目前那頁。
+    - 手機勾選後往後移。
+  - 工作區測試 21/21、預覽測試 42/42 通過。
+- SelfWeb 同步修改；`pdf-common.js` 一併移除 `moveItem`。
+
+---
+
 ## 2026-10-27　網頁 v1.30.2 小工具頁改回原本左右留白的寬度
 
 ### 問題描述

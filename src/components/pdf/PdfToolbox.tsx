@@ -12,7 +12,7 @@ import { PDF_CONVERT_TIPS, PDF_EDIT_CONFIG, PDF_WORKSPACE_CONFIG } from '../../c
 import { useAuth } from '../../hooks/useAuth';
 import { usePdfWorkspace } from '../../hooks/usePdfWorkspace';
 import { baseName } from '../../lib/pdfPageLogic';
-import { actionTargetIds, countPagesBySource, openUsageEntry, usageEntryFromPlan } from '../../lib/pdfWorkspace';
+import { actionTargetIds, countPagesBySource, openUsageEntry, shiftBlock, usageEntryFromPlan } from '../../lib/pdfWorkspace';
 import { recordPdfToolUsage } from '../../services/pdfToolUsageService';
 import type { EditTool, ImagePageMode, NormRect } from '../../types/pdfTools';
 import { Card } from '../ui';
@@ -132,10 +132,13 @@ export function PdfToolbox({ active = true }: { active?: boolean }) {
       highlightColor={highlightColor}
       targetLabel={selectedIds.length > 0 ? `勾選的 ${targets.length} 頁` : `第 ${currentIndex + 1} 頁`}
       canAct={targets.length > 0}
+      canShiftBack={targets.length > 0 && shiftBlock(pages, targets, -1) !== pages}
+      canShiftForward={targets.length > 0 && shiftBlock(pages, targets, 1) !== pages}
       canUndo={state.history.length > 0}
       onToolChange={changeTool}
       onColorChange={setHighlightColor}
       onRotate={(delta) => dispatch({ type: 'rotate', delta })}
+      onShift={(delta) => dispatch({ type: 'shift', delta })}
       onRemove={() => dispatch({ type: 'remove' })}
       onUndo={() => dispatch({ type: 'undo' })}
     />
@@ -179,7 +182,7 @@ export function PdfToolbox({ active = true }: { active?: boolean }) {
                   🔍 打開大圖
                 </button>
               )}
-              <span className="ml-auto hidden text-xs text-slate-400 md:inline">點頁面看大圖・拖曳排序・Ctrl＋Z 復原・Delete 刪除・Esc 關閉大圖</span>
+              <span className="ml-auto hidden text-xs text-slate-400 md:inline">點頁面看大圖・空白處拉框或 Ctrl／Shift＋點選可多選・拖曳勾選的頁一起移動・Ctrl＋Z 復原・Delete 刪除</span>
             </div>
             <div className="flex flex-col gap-3 md:flex-row">
               {toolbar}
@@ -190,7 +193,9 @@ export function PdfToolbox({ active = true }: { active?: boolean }) {
                 selectedIds={selectedIds}
                 onShowPage={showPage}
                 onToggleSelect={(pageId) => dispatch({ type: 'toggleSelect', pageId })}
-                onMove={(from, to) => dispatch({ type: 'move', from, to })}
+                onSelectRange={(fromId, toId, additive) => dispatch({ type: 'selectRange', fromId, toId, additive })}
+                onSetSelection={(pageIds) => dispatch({ type: 'setSelection', pageIds })}
+                onMoveBlock={(pageIds, anchorId, placeAfter) => dispatch({ type: 'moveBlock', pageIds, anchorId, placeAfter })}
               />
             </div>
             <p className="text-xs text-slate-500">

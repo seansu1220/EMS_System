@@ -24,6 +24,11 @@ export const PDF_TOOLS_CONFIG = {
 export const PDF_WORKSPACE_CONFIG = {
   /** 「復原上一步」最多記幾步。 */
   historyLimit: 50,
+  /** 框選：滑鼠移動超過這麼多（px）才算開始拉框，否則當成點空白處（取消勾選）。 */
+  marqueeMinDrag: 4,
+  /** 框選拉到清單上下緣這麼近（px）時自動捲動，每次捲這麼多（px）。 */
+  marqueeAutoScrollEdge: 32,
+  marqueeAutoScrollStep: 16,
   /** 大圖縮放級距（相對於「符合寬度」）。 */
   zoomSteps: [0.5, 0.75, 1, 1.25, 1.5, 2, 3],
   /** 大圖繪製解析度：依顯示寬度×裝置像素比，以這個級距往上取整（避免每縮放一點就重畫）。 */
