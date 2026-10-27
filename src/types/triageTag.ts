@@ -5,7 +5,7 @@
  * - `triageTagCounter/main`：全系統共用的「下一個流水號」，所有人的號碼從這裡接續往下發。
  * - `triageTagIssues/{起始流水號}`：每一次領取一筆紀錄（誰、幾張、從哪一號開始），
  *   文件 ID 就是起始流水號（不補零，例 `10`），天生不會重複。
- * - `triageTagUnitWeeks/{週序}_{單位}`：某單位某一週已經領了幾張（每週上限 20 張）。
+ * - `triageTagUnitWeeks/{週序}_{單位}`：某單位某一週已經領了幾張（每週上限 30 張）。
  */
 
 /** 發號計數器（`triageTagCounter/main`）。 */

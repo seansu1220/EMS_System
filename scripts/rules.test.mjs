@@ -17,7 +17,7 @@
  * 5. **解鎖專用帳號**（role == 'unlocker'）讀不到任何業務資料，
  *    解鎖工單只讀得到自己送的、不可回寫結果、不可冒用他人名義申請。
  * 6. **測試用傷票**：號碼只能接續往下領（計數器、領取紀錄、單位週用量必須一起寫、互相對得上），
- *    不能挑號碼、跳號或冒名；單位須為月報表上的分隊且同單位每週最多 20 張；
+ *    不能挑號碼、跳號或冒名；單位須為月報表上的分隊且同單位每週最多 30 張；
  *    解鎖專用帳號只讀得到自己的領取紀錄。
  */
 import { readFileSync } from 'node:fs';
@@ -489,8 +489,8 @@ await check(
   assertSucceeds(allocateTags(member, { before: 10, count: 2, unitUsedBefore: 10, requestedBy: 'member-uid' })),
 );
 await check(
-  '同單位一週超過 20 張會被擋（已 12 張再領 9 張）',
-  assertFails(allocateTags(member, { before: 12, count: 9, unitUsedBefore: 12, requestedBy: 'member-uid' })),
+  '同單位一週超過 30 張會被擋（已 12 張再領 19 張）',
+  assertFails(allocateTags(member, { before: 12, count: 19, unitUsedBefore: 12, requestedBy: 'member-uid' })),
 );
 await check(
   '不可少記單位用量（用量沒加上這次的張數）',
@@ -513,54 +513,54 @@ await check(
   assertFails(allocateTags(member, { before: 12, count: 1, unit: '台北分隊', requestedBy: 'member-uid' })),
 );
 await check(
-  '同單位剛好領滿 20 張可以（已 12 張再領 8 張）',
-  assertSucceeds(allocateTags(member, { before: 12, count: 8, unitUsedBefore: 12, requestedBy: 'member-uid' })),
+  '同單位剛好領滿 30 張可以（已 12 張再領 18 張）',
+  assertSucceeds(allocateTags(member, { before: 12, count: 18, unitUsedBefore: 12, requestedBy: 'member-uid' })),
 );
 await check(
   '別的單位不受影響（龜山分隊領 5 張）',
-  assertSucceeds(allocateTags(member, { before: 20, count: 5, unit: '龜山分隊', requestedBy: 'member-uid' })),
+  assertSucceeds(allocateTags(member, { before: 30, count: 5, unit: '龜山分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '一般使用者不可選救護科',
-  assertFails(allocateTags(member, { before: 25, count: 1, unit: '救護科', requestedBy: 'member-uid' })),
+  assertFails(allocateTags(member, { before: 35, count: 1, unit: '救護科', requestedBy: 'member-uid' })),
 );
 await check(
-  '管理員可選救護科，且不受每週 20 張上限（一次 30 張）',
-  assertSucceeds(allocateTags(admin, { before: 25, count: 30, unit: '救護科', requestedBy: 'admin-uid' })),
+  '管理員可選救護科，且不受每週 30 張上限（一次 40 張）',
+  assertSucceeds(allocateTags(admin, { before: 35, count: 40, unit: '救護科', requestedBy: 'admin-uid' })),
 );
 await check(
-  '管理員的救護科可以累計超過 20 張（已 30 張再領 50 張）',
-  assertSucceeds(allocateTags(admin, { before: 55, count: 50, unit: '救護科', unitUsedBefore: 30, requestedBy: 'admin-uid' })),
+  '管理員的救護科可以累計超過 30 張（已 40 張再領 50 張）',
+  assertSucceeds(allocateTags(admin, { before: 75, count: 50, unit: '救護科', unitUsedBefore: 40, requestedBy: 'admin-uid' })),
 );
 await check(
-  '管理員選一般分隊仍受每週 20 張上限',
-  assertFails(allocateTags(admin, { before: 105, count: 21, unit: '八德分隊', requestedBy: 'admin-uid' })),
+  '管理員選一般分隊仍受每週 30 張上限',
+  assertFails(allocateTags(admin, { before: 125, count: 31, unit: '八德分隊', requestedBy: 'admin-uid' })),
 );
 await check(
   '救護科單次仍不可超過 100 張',
-  assertFails(allocateTags(admin, { before: 105, count: 101, unit: '救護科', unitUsedBefore: 80, requestedBy: 'admin-uid' })),
+  assertFails(allocateTags(admin, { before: 125, count: 101, unit: '救護科', unitUsedBefore: 90, requestedBy: 'admin-uid' })),
 );
 await check(
   '不可自己挑號碼（起始號不等於計數器的下一號）',
   assertFails(
-    allocateTags(member, { before: 105, startSerial: 150, count: 2, advanceTo: 152, unit: '八德分隊', requestedBy: 'member-uid' }),
+    allocateTags(member, { before: 125, startSerial: 170, count: 2, advanceTo: 172, unit: '八德分隊', requestedBy: 'member-uid' }),
   ),
 );
 await check(
   '不可偷跳號（計數器推進的張數與紀錄不符）',
-  assertFails(allocateTags(member, { before: 105, count: 2, advanceTo: 120, unit: '八德分隊', requestedBy: 'member-uid' })),
+  assertFails(allocateTags(member, { before: 125, count: 2, advanceTo: 140, unit: '八德分隊', requestedBy: 'member-uid' })),
 );
 await check(
   '不可只推計數器不留領取紀錄',
-  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 120 })),
+  assertFails(setDoc(doc(member, 'triageTagCounter/main'), { nextSerial: 140 })),
 );
 await check(
   '不可冒用他人名義領取',
-  assertFails(allocateTags(member, { before: 105, count: 1, unit: '八德分隊', requestedBy: 'unlocker-uid' })),
+  assertFails(allocateTags(member, { before: 125, count: 1, unit: '八德分隊', requestedBy: 'unlocker-uid' })),
 );
 await check(
   '待審核帳號不可領傷票',
-  assertFails(allocateTags(pending, { before: 105, count: 1, unit: '八德分隊', requestedBy: 'pending-uid' })),
+  assertFails(allocateTags(pending, { before: 125, count: 1, unit: '八德分隊', requestedBy: 'pending-uid' })),
 );
 await check(
   '任何已核准帳號讀得到單位本週用量',

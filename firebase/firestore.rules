@@ -148,11 +148,11 @@ service cloud.firestore {
     // 三份文件必須在**同一個 transaction** 裡一起寫，規則用 getAfter 互相核對：
     //   - 領取紀錄的起始號＝計數器原本的下一號（不能自己挑號碼、不能重複領）
     //   - 計數器往後推的張數＝領取紀錄的張數（不能偷跳號，也不能只推計數器不留紀錄）
-    //   - 單位本週用量加上的張數＝領取紀錄的張數，且不超過每週上限 20 張
+    //   - 單位本週用量加上的張數＝領取紀錄的張數，且不超過每週上限 30 張
     //   - 單位必須是月報表上的分隊，週序必須是伺服器時間的這一週
     // 三種角色（含解鎖專用）只要已核准都能領。
     // ⚠️ 單次上限 100 須與 src/config/triageTag.ts 的 TRIAGE_TAG_MAX_PER_REQUEST 一致；
-    //    每週 20 張須與 TRIAGE_TAG_UNIT_WEEKLY_LIMIT 一致；單位名單須與 TRIAGE_TAG_BRIGADES 一致。
+    //    每週 30 張須與 TRIAGE_TAG_UNIT_WEEKLY_LIMIT 一致；單位名單須與 TRIAGE_TAG_BRIGADES 一致。
     function triageCounterPath() {
       return /databases/$(database)/documents/triageTagCounter/main;
     }
@@ -242,7 +242,7 @@ service cloud.firestore {
     }
 
     // 單位週用量：只能隨著一張新的領取紀錄一起往上加，而且加的量＝那張紀錄的張數，
-    // 加完不超過每週 20 張。文件 ID 必須是「這一週的週序_單位」，不能改寫別週或別單位。
+    // 加完不超過每週 30 張。文件 ID 必須是「這一週的週序_單位」，不能改寫別週或別單位。
     // lastStartSerial＝這次一起建立的領取紀錄起始號：領取紀錄那一條靠它確認用量真的有被加上去
     // （只寫紀錄不動用量＝繞過上限）。刻意不在這裡重讀計數器——
     // 規則每筆寫入能讀的文件數有上限（批次寫入 20 次），三份文件互相核對很容易超過。
@@ -254,7 +254,7 @@ service cloud.firestore {
         && request.resource.data.weekIndex == triageWeekIndex()
         && usageId == string(triageWeekIndex()) + '_' + request.resource.data.unit
         && request.resource.data.used is int
-        && (request.resource.data.used <= 20 || request.resource.data.unit == '救護科')
+        && (request.resource.data.used <= 30 || request.resource.data.unit == '救護科')
         && request.resource.data.lastStartSerial is int
         && triageIssueCreatedWith(request.resource.data.lastStartSerial)
         && getAfter(triageIssuePath(request.resource.data.lastStartSerial)).data.unit

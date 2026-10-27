@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-10-27　網頁 v1.27.1 測試用傷票每分隊每週上限放寬為 30 張
+
+### 問題描述
+使用者希望測試用傷票每個分隊每週可以申請 30 張（原本 20 張），並確認不會影響目前已領取的進度。
+
+### 根本原因
+每週上限寫在兩個地方：前端設定 `TRIAGE_TAG_UNIT_WEEKLY_LIMIT` 與安全規則 `triageTagUnitWeeks` 的 `used <= 20`，兩邊要一起改。
+
+**對既有進度的影響（已確認無影響）：**
+- 號碼計數器 `triageTagCounter/main` 與領取紀錄 `triageTagIssues` 完全沒動，下一張號碼照原本接續發。
+- 本週已領的張數（`triageTagUnitWeeks` 的 `used`）照算、不歸零：本週已領 20 張的分隊，改版後馬上還能再領 10 張。
+- 不需要搬資料或補欄位；救護科（管理員專用，不限張數）與單次 100 張上限不變。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `src/config/triageTag.ts` | `TRIAGE_TAG_UNIT_WEEKLY_LIMIT` 20 → 30（畫面上的「已領 N / 上限」與說明文字都讀這個常數，自動跟著變） |
+| `firebase/firestore.rules` | `triageTagUnitWeeks` 規則 `used <= 20` → `used <= 30`，註解同步 |
+| `scripts/rules.test.mjs` | 上限案例改成 30 張（已 12 再領 19 被擋、已 12 再領 18 剛好滿可以、管理員選一般分隊領 31 被擋），後續流水號順延；84/84 通過 |
+| `src/services/triageTagService.ts`、`src/pages/TriageTagPage.tsx`、`src/types/triageTag.ts` | 註解中的 20 張改為 30 張 |
+| `docs/SPEC.md` | 2.9 每週上限改為 30 張，版本 v1.27.1 |
+
+---
+
 ## 2026-10-27　網頁 v1.27.0 PDF 工具併入小工具、新增編輯（塗黑／馬賽克／螢光筆）、第一次定期安全更新
 
 ### 問題描述

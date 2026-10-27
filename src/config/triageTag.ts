@@ -32,11 +32,11 @@ export const TRIAGE_TAG_TOTAL = 10 ** (TRIAGE_TAG_NUMBER.headDigits + TRIAGE_TAG
 export const TRIAGE_TAG_MAX_PER_REQUEST = 100;
 
 /**
- * 同一個單位每週最多領幾張（使用者 2026-09-21 指定）。
+ * 同一個單位每週最多領幾張（使用者 2026-09-21 指定 20 張，2026-10-27 放寬為 30 張）。
  * 「一週」是台灣時間**週一 00:00 ～ 週日 23:59**，每週一重新計算。
  * ⚠ 須與 `firebase/firestore.rules` 的 triageTagUnitWeeks 規則上限一致。
  */
-export const TRIAGE_TAG_UNIT_WEEKLY_LIMIT = 20;
+export const TRIAGE_TAG_UNIT_WEEKLY_LIMIT = 30;
 
 /**
  * 可以領傷票的單位：**只限月報表上的 41 個分隊**（使用者 2026-09-21 指定），畫面上用下拉選單選。
