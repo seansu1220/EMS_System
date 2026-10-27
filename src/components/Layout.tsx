@@ -49,9 +49,6 @@ export function Layout() {
                 <NavLink to="/templates" className={navItemClass}>
                   待辦公版
                 </NavLink>
-                <NavLink to="/tools" className={navItemClass}>
-                  小工具
-                </NavLink>
               </>
             )}
             {/* 解鎖工單：三種角色都用得到，因此永遠顯示。 */}
@@ -62,9 +59,9 @@ export function Layout() {
             <NavLink to="/triage-tags" className={navItemClass}>
               測試用傷票領取
             </NavLink>
-            {/* PDF 工具：純瀏覽器端處理，三種角色都用得到。 */}
-            <NavLink to="/pdf-tools" className={navItemClass}>
-              PDF 工具
+            {/* 小工具：三種角色都看得到（非管理員只有 PDF 工具，頁面內判斷）。 */}
+            <NavLink to="/tools" className={navItemClass}>
+              小工具
             </NavLink>
             {/* 使用者管理僅管理員可見（權限最終防線仍在 Firestore 規則）。 */}
             {isAdmin && (

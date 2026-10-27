@@ -37,3 +37,34 @@ export interface OutputPdfFile {
   name: string;
   bytes: Uint8Array;
 }
+
+// ---------- 編輯（塗黑／馬賽克／螢光筆）----------
+
+/** 標記種類：塗黑、馬賽克會讓該頁轉成圖片（底下文字真的消失）；螢光筆保留文字。 */
+export type MarkKind = 'blackout' | 'mosaic' | 'highlight';
+
+/** 目前選用的工具：瀏覽（可捲動、不畫）或三種標記之一。 */
+export type EditTool = 'browse' | MarkKind;
+
+/**
+ * 頁面上的一個標記框。座標以「畫面上看到的頁面」（已套用頁面本身的旋轉）為準，
+ * 正規化成 0～1，與顯示尺寸、輸出解析度無關。
+ */
+export interface EditMark {
+  id: string;
+  /** 第幾頁（0 起算）。 */
+  pageIndex: number;
+  kind: MarkKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 螢光筆顏色（CSS 色碼）；其他種類不使用。 */
+  color?: string;
+}
+
+/** 頁面在畫面上的尺寸（pt，已套用旋轉）。 */
+export interface PageSize {
+  width: number;
+  height: number;
+}

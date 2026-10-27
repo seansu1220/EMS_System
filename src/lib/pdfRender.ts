@@ -4,6 +4,7 @@
  */
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
+import { PDFJS_RESOURCE_BASE } from '../config/pdfTools';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -12,7 +13,15 @@ export type { PDFDocumentProxy };
 /** 開啟 PDF 供繪製縮圖（pdf.js 會把傳入的資料轉交給 worker，所以傳入複本）。 */
 export async function openPdfForPreview(bytes: Uint8Array, fileName: string): Promise<PDFDocumentProxy> {
   try {
-    return await getDocument({ data: bytes.slice() }).promise;
+    return await getDocument({
+      data: bytes.slice(),
+      // 少了這些，未內嵌中文字型的公文會顯示空白、掃描檔的影像可能解不開。
+      cMapUrl: `${PDFJS_RESOURCE_BASE}cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${PDFJS_RESOURCE_BASE}standard_fonts/`,
+      wasmUrl: `${PDFJS_RESOURCE_BASE}wasm/`,
+      iccUrl: `${PDFJS_RESOURCE_BASE}iccs/`,
+    }).promise;
   } catch (error) {
     throw new Error(`「${fileName}」無法預覽：${(error as Error).message}`);
   }
@@ -41,4 +50,36 @@ export async function renderPageThumbnail(
   canvas.style.height = `${cssHeight}px`;
   await page.render({ canvas, viewport }).promise;
   return { width: cssWidth, height: cssHeight };
+}
+
+/** 頁面在畫面上的尺寸（pt，已套用頁面旋轉）與「畫面座標 → PDF 座標」換算。 */
+export async function getPageGeometry(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+): Promise<{ width: number; height: number; toPdfPoint: (x: number, y: number) => [number, number] }> {
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: 1 });
+  return {
+    width: viewport.width,
+    height: viewport.height,
+    toPdfPoint: (x, y) => {
+      const [pdfX, pdfY] = viewport.convertToPdfPoint(x, y) as [number, number];
+      return [pdfX, pdfY];
+    },
+  };
+}
+
+/** 依倍率把整頁畫到新的 canvas（輸出成圖片用）。 */
+export async function renderPageToCanvas(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+  scale: number,
+): Promise<HTMLCanvasElement> {
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(viewport.width);
+  canvas.height = Math.floor(viewport.height);
+  await page.render({ canvas, viewport }).promise;
+  return canvas;
 }

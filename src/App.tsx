@@ -1,5 +1,4 @@
 /** 應用程式路由設定。 */
-import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -14,10 +13,6 @@ import { ToolsPage } from './pages/ToolsPage';
 import { UnlockPage } from './pages/UnlockPage';
 import { TriageTagPage } from './pages/TriageTagPage';
 import { UsersPage } from './pages/UsersPage';
-import { CenteredSpinner } from './components/ui';
-
-// PDF 工具含 pdf.js、pdf-lib 等大型函式庫，等使用者點進來才載入，不拖慢其他頁面。
-const PdfToolsPage = lazy(() => import('./pages/PdfToolsPage').then((module) => ({ default: module.PdfToolsPage })));
 
 export default function App() {
   return (
@@ -26,7 +21,7 @@ export default function App() {
       <Route path="/register" element={<RegisterPage />} />
 
       {/*
-        解鎖工單頁、測試用傷票領取頁、PDF 工具自成一區：**「解鎖專用」帳號唯一進得去的地方**。
+        解鎖工單頁、測試用傷票領取頁、小工具自成一區：**「解鎖專用」帳號唯一進得去的地方**。
         其餘所有頁面都屬於業務管理系統，那種帳號一律被導回這裡。
       */}
       <Route
@@ -39,15 +34,13 @@ export default function App() {
         <Route path="unlock" element={<UnlockPage />} />
         {/* 測試用傷票領取：同樣三種角色都能用（解鎖專用帳號的第二個入口）。 */}
         <Route path="triage-tags" element={<TriageTagPage />} />
-        {/* PDF 工具：檔案只在瀏覽器處理、不碰資料庫，三種角色都能用。 */}
-        <Route
-          path="pdf-tools"
-          element={
-            <Suspense fallback={<CenteredSpinner label="載入 PDF 工具中…" />}>
-              <PdfToolsPage />
-            </Suspense>
-          }
-        />
+        {/*
+          小工具：三種角色都能進，但只看得到 PDF 工具；電腦端工具說明只給管理員（頁面內判斷）。
+          PDF 工具檔案只在瀏覽器處理、不碰資料庫。
+        */}
+        <Route path="tools" element={<ToolsPage />} />
+        {/* v1.26 曾有獨立的 /pdf-tools 頁，v1.27 併入小工具；舊網址導向新位置。 */}
+        <Route path="pdf-tools" element={<Navigate to="/tools" replace />} />
       </Route>
 
       <Route
@@ -64,7 +57,6 @@ export default function App() {
         <Route path="templates" element={<ChecklistTemplatesPage />} />
         {/* 假日設定已併入屬性管理（v1.12.2）；舊網址/書籤導向新位置。 */}
         <Route path="holidays" element={<Navigate to="/categories" replace />} />
-        <Route path="tools" element={<ToolsPage />} />
         {/* 使用者管理：頁面內再檢查管理員身分，非管理員導回首頁。 */}
         <Route path="users" element={<UsersPage />} />
       </Route>

@@ -4,6 +4,8 @@ node_modules/
 # 建置輸出
 dist/
 dist-ssr/
+# pdf.js 資源由 vite.config.ts 每次從 node_modules 複製過來，不進版控
+public/pdfjs/
 *.local
 
 # 環境變數與密鑰（CLAUDE.md 規範）

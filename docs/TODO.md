@@ -101,3 +101,40 @@ iPhone 裝 Chrome Remote Desktop 或 RustDesk 連回電腦，直接點捷徑跑�
     **畫面出現結果之後**再按 Enter——探測檔會記下表格的欄位標題（不含資料列）
   - 或直接看畫面，把查詢結果表頭的欄名告訴 Claude
 - [ ] 那一欄的值是車輛（`坪頂91`）還是分隊（`坪頂分隊`）
+
+---
+
+## 3. 定期安全更新（每季一次，或聽說 PDF／瀏覽器相關漏洞時馬上做）（2026-10-27 使用者同意）
+
+### 3.1 為什麼要做
+PDF 工具會打開「別人給的檔案」。網頁是在**已登入**的狀態下開 PDF 的，萬一 PDF 閱讀元件有漏洞、
+被特製的 PDF 利用，理論上能冒用登入者的身分讀寫業務資料（pdf.js 在 2024 年就出過一次：CVE-2024-4367）。
+套件本身不會自動更新，所以要定期檢查。這不是一次性的待辦，**做完不要從本檔移除**，把下面的紀錄表補一列就好。
+
+### 3.2 救護網頁（EMS_System）怎麼做
+1. `npm run deps:check`：列出正式依賴的已知漏洞，以及可更新的套件（★ 是會讀外來檔案或負責登入的，優先）。
+2. 有漏洞且「可修」→ `npm audit fix`（**不要加 `--force`**，那會換大版本，可能弄壞功能）。
+3. ★ 套件有新版 → `npm install <套件>@<版本>`；大版本（例如 firebase 11→13）要先看官方的升級說明，另外排時間做。
+4. `npm run build`，再實際開線上的小工具頁，把合併／拆分／整理／編輯各點一次，確認縮圖與下載正常。
+5. commit、部署，CHANGELOG 補一筆，並在下面紀錄表加一列。
+
+已評估、確定不影響網頁的項目寫在 `scripts/check-deps.mjs` 的 `ACCEPTED`（目前是 Firestore 在 Node.js
+才用到的 `@grpc/grpc-js`，不會打包進網頁；要等 firebase 升大版本才會消失）。
+
+### 3.3 SelfWeb（個人網站）怎麼做
+`free-tools/vendor/` 裡的函式庫是**手動複製的檔案**，`npm audit` 查不到，要自己對版本：
+
+| 檔案 | 目前版本 | 去哪裡看有沒有新版／漏洞 |
+| --- | --- | --- |
+| `pdf.min.js`、`pdf.worker.min.js` | pdfjs-dist 3.11.174（UMD 版的最後一版） | GitHub mozilla/pdf.js 的 Security advisories |
+| `pdf-lib.min.js` | pdf-lib 1.17.1（2022 年後無人維護） | npm 上的 pdf-lib |
+| `jszip.min.js` | jszip 3.10.1 | npm 上的 jszip |
+
+pdf.js 3.x 是有 CVE-2024-4367 的版本，**目前靠 `isEvalSupported: false` 擋住**（官方建議的處置，
+2026-10-27 加上，見 `pdf-common.js` 的 `loadPdfJs`）。pdf.js 4 起不再提供這種直接 `<script>` 載入的版本，
+要升級就得改用 ES module 載入（`<script type="module">`），屬於另外排時間的工作。
+
+### 3.4 檢查紀錄
+| 日期 | 做了什麼 |
+| --- | --- |
+| 2026-10-27 | 第一次。`npm audit fix`：dompurify 3.4.15→3.4.17（critical，傷票 PDF 間接用到）、react-router 7.18.1→7.18.4（high）；pdfjs-dist 6.2.108→6.4.299、jszip 3.10.1→3.10.2。SelfWeb 的 pdf.js 加上 `isEvalSupported: false`。剩 `@grpc/grpc-js`（已評估不影響網頁）。 |

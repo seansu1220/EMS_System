@@ -20,6 +20,12 @@ export const PDF_TOOLS_CONFIG = {
   splitPreviewNameCount: 6,
 } as const;
 
+/**
+ * pdf.js 讀檔資源的位置（由 vite.config.ts 複製到 public/pdfjs/）。
+ * 中文字型對照表、標準字型、掃描檔影像解碼器、色彩描述檔；只有檔案用到時才會下載。
+ */
+export const PDFJS_RESOURCE_BASE = `${import.meta.env.BASE_URL}pdfjs/`;
+
 /** 選檔視窗的檔案類型篩選。 */
 export const PDF_ACCEPT = '.pdf,application/pdf';
 export const MERGE_ACCEPT = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png';
@@ -29,7 +35,81 @@ export const PDF_TOOL_TABS = [
   { key: 'merge', icon: '📎', name: '合併', desc: '多個 PDF、圖片合成一份' },
   { key: 'split', icon: '✂️', name: '拆分', desc: '拆成多份或取出指定頁' },
   { key: 'organize', icon: '🗂️', name: '頁面整理', desc: '調整頁序、旋轉、刪除頁面' },
+  { key: 'edit', icon: '🖍️', name: '編輯', desc: '塗黑、馬賽克、螢光筆' },
 ] as const;
 
 export type PdfToolTabKey = (typeof PDF_TOOL_TABS)[number]['key'];
 export const DEFAULT_PDF_TOOL_TAB: PdfToolTabKey = 'merge';
+
+/** 編輯分頁（塗黑／馬賽克／螢光筆）的參數。 */
+export const PDF_EDIT_CONFIG = {
+  /** 編輯畫面上頁面的最大顯示寬度（px）。 */
+  maxDisplayWidth: 820,
+  /** 輸出時轉成圖片的倍率（1 = 72 dpi；2.5 ≈ 180 dpi，文字清楚、檔案不會太大）。 */
+  exportScale: 2.5,
+  /** 轉成圖片時長邊最多幾個像素（海報等超大頁面避免吃光記憶體）。 */
+  maxExportSide: 5000,
+  /** 轉成圖片的 JPEG 品質（0～1）。 */
+  jpegQuality: 0.92,
+  /**
+   * 馬賽克格子大小＝頁面寬度 × 這個比例。
+   * 刻意比一般內文字高還大，避免馬賽克後還能被軟體還原出文字。
+   */
+  mosaicBlockRatio: 1 / 45,
+  /** 框選小於這個像素數視為誤點，不建立標記。 */
+  minMarkPixels: 4,
+  /** 螢光筆顏色（以「色彩增值」疊上，底下的字仍看得清楚）。 */
+  highlightColors: [
+    { name: '黃', value: '#fde047' },
+    { name: '綠', value: '#86efac' },
+    { name: '粉紅', value: '#f9a8d4' },
+    { name: '藍', value: '#93c5fd' },
+  ],
+} as const;
+
+/** 編輯工具列的按鈕（順序即顯示順序）。 */
+export const PDF_EDIT_TOOLS = [
+  { key: 'browse', icon: '🖐', name: '瀏覽', hint: '捲動頁面、不畫' },
+  { key: 'blackout', icon: '⬛', name: '塗黑', hint: '框選要塗黑的範圍' },
+  { key: 'mosaic', icon: '▦', name: '馬賽克', hint: '框選要打馬賽克的範圍' },
+  { key: 'highlight', icon: '🖍', name: '螢光筆', hint: '框選要標示的文字' },
+] as const;
+
+/** 「不用印出來再掃描」的轉 PDF 小技巧（配置驅動，新增情境即加一筆）。 */
+export const PDF_CONVERT_TIPS: readonly { title: string; steps: readonly string[] }[] = [
+  {
+    title: '電腦上的網頁、文件（Chrome、Edge）',
+    steps: [
+      '在要轉的畫面按 Ctrl＋P（或網頁上的「列印」按鈕）。',
+      '「目的地」或「印表機」改選「另存為 PDF」（Edge 叫「儲存為 PDF」）。',
+      '按「儲存」，選好位置就完成，不用真的印出來。',
+    ],
+  },
+  {
+    title: '電腦上的其他程式（Word、Excel、看圖軟體…）',
+    steps: [
+      '一樣按列印，印表機選「Microsoft Print to PDF」。',
+      '按列印後會問你要存在哪裡、檔名叫什麼，存好就是 PDF。',
+    ],
+  },
+  {
+    title: 'iPhone（Safari）',
+    steps: [
+      '按下方的「分享」→「列印」。',
+      '在列印選項畫面按右上角的「分享」圖示（較舊的 iOS 沒有這個圖示：改用兩指在預覽頁往外撥放大，再按分享）。',
+      '選「儲存到檔案」就存成 PDF 了。',
+    ],
+  },
+  {
+    title: 'Android（Chrome）',
+    steps: ['右上角 ⋮ →「分享」→「列印」。', '上方的印表機改選「儲存為 PDF」，再按 PDF 圖示存檔。'],
+  },
+  {
+    title: '紙本文件（真的只有紙的時候）',
+    steps: [
+      'iPhone：「備忘錄」新增一則 → 相機圖示 →「掃描文件」，會自動裁切、拉正並存成 PDF。',
+      'Android：「Google 雲端硬碟」右下角 ＋ →「掃描」，一樣直接產生 PDF。',
+      '已經拍好的照片、截圖：用上面的「合併」分頁把圖片丟進去，就能轉成 PDF。',
+    ],
+  },
+];

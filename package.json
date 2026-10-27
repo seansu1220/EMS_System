@@ -1,7 +1,7 @@
 {
   "name": "ems-system",
   "private": true,
-  "version": "1.19.0",
+  "version": "1.20.0",
   "type": "module",
   "description": "救護科業務管理系統 - 業務 CRUD、期限提醒、進度管理、屬性分類、跨裝置雲端同步",
   "scripts": {
@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test:rules": "node scripts/run-rules-test.mjs",
+    "deps:check": "node scripts/check-deps.mjs",
     "tool:lint": "eslint --config tools/eslint.config.mjs tools",
     "tool:ems": "node tools/ems-report/index.mjs",
     "tool:ems:test": "npm run tool:lint && node --test --test-concurrency=2 tools/ems-report/*.test.mjs",
@@ -26,9 +27,9 @@
     "firebase": "^11.3.1",
     "jsbarcode": "^3.12.3",
     "jspdf": "^4.2.1",
-    "jszip": "^3.10.1",
+    "jszip": "^3.10.2",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^6.2.108",
+    "pdfjs-dist": "^6.4.299",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-10-27　網頁 v1.27.0 PDF 工具併入小工具、新增編輯（塗黑／馬賽克／螢光筆）、第一次定期安全更新
+
+### 問題描述
+使用者提出五件事：
+1. 同意「定期安全更新」。
+2. 問：PDF 工具只是把頁面重新排列組合，原本塗黑的應該還是黑的，不會露出來吧？
+3. 希望多一個 PDF 編輯工具，可以馬賽克、塗黑、螢光筆。
+4. 網頁上的東西要變 PDF，都是先印出來再掃描，很浪費時間。
+5. 以上都要同步做到 SelfWeb（另見 SelfWeb 的 CHANGELOG）。
+6. 想把 PDF 工具放進「小工具」，但其他人只能看到 PDF 工具，不能看到其他內容（使用者選定：電腦端工具說明只給管理員）。
+
+### 根本原因
+- 第 2 點：排列組合確實不會改變頁面，但「看起來是黑的」不等於「底下的字不見了」。
+  很多檔案的塗黑只是在文字上面蓋一個黑框，字還在，複製貼上就出來。要真的遮蔽，必須把那一頁轉成圖片。
+  這也決定了第 3 點編輯功能的做法。
+- 測試時發現 v1.26 的 pdf.js 沒有設定中文字型對照表（cMap）等資源的位置：
+  **未內嵌中文字型的 PDF（很多公文是這樣產生的）縮圖會整頁空白**，若做成編輯輸出，轉圖片時字也會消失。
+- `npm audit` 查出 dompurify（critical，jsPDF 間接用到）、react-router（high）有已知漏洞。
+
+### 修改的檔案與內容
+| 檔案 | 內容 |
+| --- | --- |
+| `src/components/pdf/PdfEditPanel.tsx`、`EditablePdfPage.tsx`（新） | 編輯分頁：瀏覽／塗黑／馬賽克／螢光筆（四色），拖曳拉框、✕ 移除、復原上一步、清除全部；滑鼠裝置預設塗黑、觸控裝置預設瀏覽；底圖捲到附近才畫，標記一變就從乾淨底圖重畫 |
+| `src/lib/pdfEditLogic.ts`（新） | 純函式：拉框換算與裁切、誤點判斷、依繪製順序（螢光筆→馬賽克→塗黑）排序、哪些頁要轉圖片、色碼轉換 |
+| `src/lib/pdfMarkPaint.ts`（新） | 畫面預覽與輸出共用的繪圖：塗黑、馬賽克（逐次減半取平均色，避免文字邊緣變成怪異色塊）、螢光筆（色彩增值） |
+| `src/lib/pdfEditExport.ts`（新） | 輸出：有塗黑／馬賽克的頁整頁轉成約 180 dpi 圖片（文字真的消失）；只有螢光筆的頁保留文字，原內容包進 q…Q 後另開串流畫色塊，座標用 pdf.js 換算（旋轉頁也準） |
+| `src/lib/pdfRender.ts` | 開檔時帶入 cMap、標準字型、wasm 解碼器、色彩描述檔的位置；新增 `getPageGeometry`、`renderPageToCanvas` |
+| `vite.config.ts`、`.gitignore` | 啟動／建置時把 pdf.js 的 `cmaps`、`standard_fonts`、`wasm`、`iccs` 複製到 `public/pdfjs/`（不進版控） |
+| `src/components/pdf/PdfToolbox.tsx`（由 `pages/PdfToolsPage.tsx` 改名） | 四個分頁（加上編輯）；下方新增可展開的「網頁、文件要變成 PDF？不用印出來再掃描」 |
+| `src/pages/ToolsPage.tsx` | 改寫：所有人看到 PDF 工具；管理員多一個切換可看電腦端工具說明（`#local`）；非管理員完全不渲染那一區 |
+| `src/config/localTools.ts`、`src/components/LocalToolsGuide.tsx`（新） | 原本 ToolsPage 的工具清單與說明畫面搬出來 |
+| `src/config/pdfTools.ts`、`src/types/pdfTools.ts` | 編輯分頁、編輯參數（解析度、馬賽克大小、螢光筆顏色）、工具列、轉 PDF 小技巧、pdf.js 資源位置；標記型別 |
+| `src/App.tsx`、`Layout.tsx`、`ProtectedRoute.tsx`、`context/authContext.ts` | `/tools` 移到三種角色都能進的那一區；導覽列「小工具」所有人可見、拿掉獨立的「PDF 工具」；`/pdf-tools` 導向 `/tools` |
+| `scripts/check-deps.mjs`（新）、`package.json` | `npm run deps:check`：列出已知漏洞與可更新套件；`npm audit fix`（dompurify 3.4.17、react-router 7.18.4）；pdfjs-dist 6.4.299、jszip 3.10.2；版本 1.20.0 |
+| `docs/TODO.md` | 新增第 3 項「定期安全更新」：步驟、SelfWeb 手動版本對照、檢查紀錄表 |
+| `docs/SPEC.md`、`docs/TOOLS_SPEC.md` | 路由表、解鎖專用帳號說明、2.10 改寫（小工具分區、編輯輸出規則、轉 PDF 小技巧、pdf.js 資源）、第 4 章、目錄結構（v1.27.0） |
+
+驗證（暫時的免登入測試頁＋Chrome 自動操作，測試頁已刪除）：
+- 編輯 12 項：塗黑＋馬賽克的頁輸出後**抽不出任何文字**、螢光筆的頁文字保留、旋轉頁的螢光筆位置正確（截圖核對）、
+  誤點不建框、復原、✕ 移除、頁面尺寸與旋轉不變。
+- 手刻一份「未內嵌中文字型」的 PDF：縮圖正確畫出「測試中文」、字型對照表讀取成功、沒有 pdf.js 資源警告。
+- 權限 7 項：一般帳號沒有切換、頁面上沒有任何電腦端工具內容、`#local` 也打不開；管理員可切換、`#local` 直接開。
+- 原本的合併／拆分／整理 19 項全數通過；手機寬度沒有橫向捲動。
+
+---
+
 ## 2026-10-27　網頁 v1.26.0 新增「PDF 工具」頁（合併、拆分、頁面整理）
 
 ### 問題描述
