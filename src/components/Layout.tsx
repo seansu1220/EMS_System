@@ -2,7 +2,7 @@
  * 登入後的主版面：頂部導覽列 + 內容區。
  * 響應式設計，桌機/平板/手機皆可用。
  */
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { logout } from '../services/authService';
 import { APP_BUILD_TIME, APP_NAME, APP_VERSION } from '../config/constants';
@@ -11,8 +11,6 @@ import { Button } from './ui';
 export function Layout() {
   const { user, isAdmin, canUseTasks } = useAuth();
   const navigate = useNavigate();
-  // 小工具頁（PDF 工作區要並排工具列、頁面清單與大圖）用寬版面，其他頁維持原寬度。
-  const containerWidth = useLocation().pathname.startsWith('/tools') ? 'max-w-[1800px]' : 'max-w-5xl';
 
   async function handleLogout() {
     try {
@@ -33,7 +31,7 @@ export function Layout() {
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className={`mx-auto flex ${containerWidth} flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3`}>
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
           <span className="text-lg font-bold text-slate-800">{APP_NAME}</span>
           <nav className="flex flex-1 flex-wrap items-center gap-1">
             {/*
@@ -89,7 +87,7 @@ export function Layout() {
           </div>
         </div>
       </header>
-      <main className={`mx-auto ${containerWidth} px-4 py-6`}>
+      <main className="mx-auto max-w-5xl px-4 py-6">
         <Outlet />
       </main>
     </div>
