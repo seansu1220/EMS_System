@@ -13,6 +13,7 @@
  * 程式不會因此壞掉，只是要多打幾次驗證碼——所以這個設計不賭那個前提。
  */
 import { UNLOCK } from './config.mjs';
+import { resetStuckDevicesSafely } from './deviceReset.mjs';
 import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
@@ -150,15 +151,19 @@ export async function processBatch(session, queue, requests) {
  *   `dryRun`＝true 時只監看與心跳、不解鎖也不回寫
  *   （這正好可以拿來實測「登入到底能撐多久」）
  * @param {{fetchPending?: Function, processBatch?: Function, heartbeat?: Function,
- *   ensureSignedIn?: Function}} [deps]
- *   碰外部世界的四件事都可以換成替身，測試才跑得起來
+ *   ensureSignedIn?: Function, resetDevices?: Function}} [deps]
+ *   碰外部世界的五件事都可以換成替身，測試才跑得起來
  *   （比照 `locateUnlockTarget` 的既有作法）。
+ *
+ * **每次剛登入後**（監看開啟時、掉線重新登入後）會先重置裝置管理裡
+ * 卡在「持續取得資料」的裝置（見 `deviceReset.mjs`，使用者 2026-10-29 指定）。
  */
 export async function runUnlockWatch(session, queue, options, deps = {}) {
   const fetchPending = deps.fetchPending ?? fetchPendingRequests;
   const runBatch = deps.processBatch ?? processBatch;
   const beat = deps.heartbeat ?? heartbeat;
   const ensureLogin = deps.ensureSignedIn ?? ensureSignedIn;
+  const resetDevices = deps.resetDevices ?? resetStuckDevicesSafely;
   const { pollMs, heartbeatMs, statusEveryMs, reloginWaitMs, reloginRemindEveryMs } = UNLOCK.watch;
   const startedAt = Date.now();
   /** 最近一次登入成功的時間；掉線期間為 null。這才是「連續登入多久」的基準。 */
@@ -176,6 +181,9 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
     log.info('有人在網頁上送出申請後，最慢一輪就會被處理，不需要你再做任何事。');
   }
   log.info('要結束請直接關掉這個視窗，或按 Ctrl+C。');
+
+  // 剛登入完成：先把卡住的裝置重置一輪（試跑時只回報）。
+  await resetDevices(session, { dryRun: options.dryRun });
 
   /** 目前是不是處在「掉線、等使用者回來登入」的狀態。 */
   let waitingForLogin = false;
@@ -198,6 +206,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
       signedInSince = Date.now();
       lastHeartbeat = Date.now();
       log.ok(`[${clock()}] 已重新登入，繼續監看`);
+      await resetDevices(session, { dryRun: options.dryRun });
     }
 
     const requests = await fetchPending(queue).catch((error) => {
@@ -218,11 +227,16 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
         log.warn('　試跑模式：不處理這幾筆，它們會留在「待處理」。');
       } else {
         // 動手之前先確認還登入著，免得整批被寫成失敗。
-        if (await ensureLogin(session, { timeoutMs: reloginWaitMs }) === '等不到') {
+        const loginState = await ensureLogin(session, { timeoutMs: reloginWaitMs });
+        if (loginState === '等不到') {
           waitingForLogin = true;
           lastReminder = Date.now();
           signedInSince = null;
           continue;
+        }
+        if (loginState === '重新登入') {
+          signedInSince = Date.now();
+          await resetDevices(session, { dryRun: false });
         }
         const result = await runBatch(session, queue, requests);
         handled += result.done;

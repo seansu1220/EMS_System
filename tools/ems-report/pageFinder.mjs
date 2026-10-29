@@ -673,6 +673,125 @@ function queryPage(params) {
     return { clicked: true, matches: describeMatches, scanned };
   }
 
+  if (params.mode === 'statusRows' || params.mode === 'clickStatusRow') {
+    // 裝置管理：依「狀態」欄找出卡住的裝置，並按下**同一列裡的**鎖定／啟用鈕。
+    //
+    // 這一頁沒有一個確定唯一的編號欄可用（尚未探測），因此「是哪一列」改用
+    // **整列除了狀態欄、時間類欄位與按鈕格之外的文字**來認：按了鎖定之後整頁重送，
+    // 狀態會變、時間可能會變，其餘欄位不變，才找得回同一列去按啟用。
+    // 那段文字可能含帳號，所以只在頁面裡算成雜湊值帶出去，原文不離開瀏覽器。
+    const textOf = (cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim();
+    const statusWanted = params.statusColumns.map(normalize);
+    const volatileWanted = params.volatileHeaderKeywords.map(normalize);
+    const labelWanted = params.labelColumns.map(normalize);
+    const buttonWanted = Object.fromEntries(
+      Object.entries(params.buttonTexts).map(([key, texts]) => [key, texts.map(normalize)]),
+    );
+    /** cyrb53：不是加密，只是讓列的辨識文字以短碼帶出、原文不外流。 */
+    const hashText = (text) => {
+      let h1 = 0xdeadbeef;
+      let h2 = 0x41c6ce57;
+      for (let index = 0; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        h1 = Math.imul(h1 ^ code, 2654435761);
+        h2 = Math.imul(h2 ^ code, 1597334677);
+      }
+      h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+      h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+      return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+    };
+    const findButton = (scope, key) =>
+      [...scope.querySelectorAll('input, button, a, img, [onclick]')].find((element) => {
+        const type = (element.getAttribute('type') || '').toLowerCase();
+        if (element.tagName === 'INPUT' && !['submit', 'button', 'image', 'reset'].includes(type)) {
+          return false;
+        }
+        return buttonWanted[key].includes(normalize(labelOf(element)));
+      });
+    const isButtonCell = (cell) => Object.keys(buttonWanted).some((key) => findButton(cell, key));
+
+    /** 找出有狀態欄的那張表（欄名**完全相等**比對）。 */
+    let target = null;
+    for (const table of document.querySelectorAll('table')) {
+      const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
+      if (!headerRow) continue;
+      const headers = [...headerRow.cells].map(textOf);
+      const statusIndex = headers.findIndex((header) => statusWanted.includes(normalize(header)));
+      if (statusIndex < 0) continue;
+      target = { table, headerRow, headers, statusIndex };
+      break;
+    }
+    if (!target) {
+      const allHeaders = [...document.querySelectorAll('table')]
+        .map((table) => [...table.querySelectorAll('th')].map(textOf).filter(Boolean))
+        .filter((headers) => headers.length > 0)
+        .map((headers) => headers.join('｜'));
+      return params.mode === 'clickStatusRow'
+        ? { clicked: false, reason: 'noTable' }
+        : { found: false, headers: [], tableHeaders: allHeaders, rows: [], scanned: 0 };
+    }
+
+    const { table, headerRow, headers, statusIndex } = target;
+    const labelIndex = labelWanted
+      .map((wanted) => headers.findIndex((header) => normalize(header).includes(wanted)))
+      .find((index) => index >= 0) ?? -1;
+    const rows = [];
+    for (const row of table.rows) {
+      if (row === headerRow) continue;
+      if (rows.length >= params.maxRows) break;
+      const cells = [...row.cells];
+      // 跨欄的「查無資料」、分頁列等欄數不足的列直接略過。
+      if (!cells[statusIndex]) continue;
+      const identity = cells
+        .filter((cell, index) => {
+          if (index === statusIndex || isButtonCell(cell)) return false;
+          const header = normalize(headers[index] ?? '');
+          return !volatileWanted.some((keyword) => header.includes(keyword));
+        })
+        .map((cell) => normalize(textOf(cell)))
+        .join('|');
+      rows.push({
+        element: row,
+        rowIndex: [...table.rows].indexOf(row),
+        // 辨識文字全是空的列無從分辨，給 null，呼叫端一律不動它。
+        fingerprint: identity.replace(/\|/g, '') ? hashText(identity) : null,
+        status: textOf(cells[statusIndex]).slice(0, 20),
+        label: labelIndex >= 0 && cells[labelIndex] ? textOf(cells[labelIndex]).slice(0, 20) : null,
+        buttons: {
+          lock: Boolean(findButton(row, 'lock')),
+          enable: Boolean(findButton(row, 'enable')),
+        },
+      });
+    }
+    const countByFingerprint = new Map();
+    for (const item of rows) {
+      countByFingerprint.set(item.fingerprint, (countByFingerprint.get(item.fingerprint) ?? 0) + 1);
+    }
+    const describe = ({ element, ...item }) => ({
+      ...item,
+      unique: item.fingerprint !== null && countByFingerprint.get(item.fingerprint) === 1,
+    });
+
+    if (params.mode === 'statusRows') {
+      return { found: true, headers, rows: rows.map(describe), scanned: rows.length };
+    }
+
+    // mode === 'clickStatusRow'：找列、驗狀態、按下在同一次頁面執行內完成，不留畫面重排的空隙。
+    const sameRows = rows.filter((item) => item.fingerprint === params.fingerprint);
+    if (sameRows.length === 0) return { clicked: false, reason: 'notFound' };
+    if (sameRows.length > 1) return { clicked: false, reason: 'notUnique' };
+    const [only] = sameRows;
+    const expected = params.expectedStatus.map(normalize);
+    if (!expected.some((wanted) => normalize(only.status).includes(wanted))) {
+      return { clicked: false, reason: 'statusChanged', row: describe(only) };
+    }
+    const button = findButton(only.element, params.buttonKey);
+    if (!button) return { clicked: false, reason: 'noButton', row: describe(only) };
+    button.scrollIntoView({ block: 'center' });
+    button.click();
+    return { clicked: true, row: describe(only) };
+  }
+
   if (params.mode === 'pairs') {
     // 把「紀錄連結」與「解鎖按鈕」以所在的表格列配對。
     // 純粹靠序號配對很危險（順序未必一致），同一列才能確定是同一張紀錄表。
@@ -1164,6 +1283,65 @@ export async function clickRowButtonByColumnValue(frame, options) {
     columnCandidates: options.columnCandidates,
     buttonTexts: options.buttonTexts,
     wantedHeaders: options.wantedHeaders ?? [],
+    maxRows: options.maxRows ?? 500,
+  });
+}
+
+/**
+ * @typedef {Object} StatusRow 裝置管理清單的一列
+ * @property {number} rowIndex 這一列在表格中的位置（僅供人核對，不拿來當定位依據）
+ * @property {string|null} fingerprint 辨識這一列的短碼（整列不會變的欄位算出的雜湊；認不出時為 null）
+ * @property {boolean} unique 這個短碼在整張表裡是否只出現一次（不唯一的列一律不動）
+ * @property {string} status 狀態欄的文字
+ * @property {string|null} label 說明「是哪一台」的欄位（車輛／單位），找不到時為 null
+ * @property {{lock: boolean, enable: boolean}} buttons 同一列裡有沒有鎖定／啟用鈕
+ */
+
+/**
+ * @typedef {Object} StatusRowQuery
+ * @property {string[]} statusColumns 狀態欄名候選（**完全相等**比對）
+ * @property {string[]} labelColumns 說明用欄位候選（「包含」比對）
+ * @property {string[]} volatileHeaderKeywords 欄名含這些字的欄不拿來辨識列
+ * @property {{lock: string[], enable: string[]}} buttonTexts 同列按鈕文字（**完全相等**比對）
+ * @property {number} [maxRows]
+ */
+
+/**
+ * 讀出裝置管理清單每一列的狀態與按鈕（唯讀）。
+ *
+ * ⚠ 個資：只帶回狀態、說明用欄位（車輛／單位）與辨識短碼；帳號等欄位原文不離開頁面。
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {StatusRowQuery} options
+ * @returns {Promise<{found: boolean, headers: string[], tableHeaders?: string[],
+ *   rows: StatusRow[], scanned: number}>}
+ *   `found` 為 false 代表**連狀態欄都找不到**（還沒載完或版面改了），與「沒有卡住的裝置」是兩件事。
+ */
+export async function findStatusRows(frame, options) {
+  return frame.evaluate(queryPage, {
+    mode: 'statusRows',
+    ...options,
+    maxRows: options.maxRows ?? 500,
+  });
+}
+
+/**
+ * 按下「辨識短碼相符、且狀態符合預期」那一列裡的鎖定或啟用鈕。
+ *
+ * 三個條件全成立才動手，且判斷與按下在同一次頁面執行內完成：
+ *   1. 短碼相符的列**剛好一列**
+ *   2. 那一列的狀態**此刻**仍是預期的狀態（例如鎖定前必須還是「持續取得資料」）
+ *   3. 那一列裡面**有**指定的按鈕
+ *
+ * @param {import('playwright-core').Frame} frame
+ * @param {StatusRowQuery & {fingerprint: string, expectedStatus: string[], buttonKey: 'lock'|'enable'}} options
+ * @returns {Promise<{clicked: boolean,
+ *   reason?: 'noTable'|'notFound'|'notUnique'|'statusChanged'|'noButton', row?: StatusRow}>}
+ */
+export async function clickStatusRowButton(frame, options) {
+  return frame.evaluate(queryPage, {
+    mode: 'clickStatusRow',
+    ...options,
     maxRows: options.maxRows ?? 500,
   });
 }

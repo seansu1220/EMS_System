@@ -47,6 +47,10 @@ echo   3. Each result is written back to the web
 echo      page as soon as that case is done, so
 echo      the people who asked can see it.
 echo.
+echo   After every sign-in it also resets devices
+echo   stuck in "continuous data" (lock, then
+echo   enable) under System Settings - Devices.
+echo.
 echo   Anything the tool cannot pin down to exactly
 echo   one record sheet is SKIPPED, never guessed.
 echo   Log: tools\ems-report\out\last-run.log

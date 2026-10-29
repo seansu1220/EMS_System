@@ -46,6 +46,10 @@ echo   3. If the server does drop the session, it
 echo      stops and asks you to sign in again.
 echo      The CAPTCHA is never solved for you.
 echo.
+echo   After every sign-in it also resets devices
+echo   stuck in "continuous data" (lock, then
+echo   enable) under System Settings - Devices.
+echo.
 echo   Anything the tool cannot pin down to exactly
 echo   one record sheet is SKIPPED, never guessed.
 echo   Log: tools\ems-report\out\last-run.log

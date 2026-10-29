@@ -35,6 +35,7 @@ import {
 import { startSession as startEmsSession, ensureSignedIn as ensureEmsSignedIn } from '../ems-report/session.mjs';
 import { closeQueue, connectQueue, fetchPendingRequests } from '../ems-report/unlockQueue.mjs';
 import { heartbeat as emsHeartbeat, processBatch } from '../ems-report/unlockWatch.mjs';
+import { resetStuckDevicesSafely } from '../ems-report/deviceReset.mjs';
 
 import { enableLiveLog as enableMciLiveLog } from '../mci-perm/logger.mjs';
 import {
@@ -112,6 +113,8 @@ async function openUnlockSide(options) {
   const session = await startEmsSession({ freshLogin: options.freshLogin });
   // 解鎖流程要用的查詢期間；監看跑很久，掛在 session 上一起帶著走。
   session.range = getRecentRange(UNLOCK.lookbackMonths);
+  // 剛登入：先把裝置管理裡卡在「持續取得資料」的裝置重置一輪（試跑時只回報）。
+  await resetStuckDevicesSafely(session, { dryRun: !options.execute });
   const queue = await connectQueue();
   return { session, queue };
 }
@@ -123,13 +126,21 @@ async function openMciSide(options) {
   return { session };
 }
 
-/** 組出救護系統這一邊的照顧方式。 */
-function buildUnlockSide(unlock) {
+/**
+ * 組出救護系統這一邊的照顧方式。
+ *
+ * 掉線後**重新登入成功的那一刻**也重置一輪卡住的裝置（每次剛登入後都做）。
+ */
+function buildUnlockSide(unlock, { dryRun }) {
   return {
     key: 'unlock',
     name: '救護系統',
     heartbeat: () => emsHeartbeat(unlock.session),
-    ensureSignedIn: (opts) => ensureEmsSignedIn(unlock.session, opts),
+    ensureSignedIn: async (opts) => {
+      const result = await ensureEmsSignedIn(unlock.session, opts);
+      if (result === '重新登入') await resetStuckDevicesSafely(unlock.session, { dryRun });
+      return result;
+    },
   };
 }
 
@@ -202,7 +213,7 @@ async function main() {
 
     await runDutyWatch(
       {
-        unlockSide: unlock ? buildUnlockSide(unlock) : null,
+        unlockSide: unlock ? buildUnlockSide(unlock, { dryRun: !options.execute }) : null,
         mciSide: mci ? buildMciSide(mci) : null,
       },
       { dryRun: !options.execute, shouldStop: () => stopping },

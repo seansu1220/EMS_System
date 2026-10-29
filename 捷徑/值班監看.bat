@@ -54,6 +54,8 @@ echo.
 echo   After that, keep this window open all day:
 echo.
 echo   * Unlock requests are handled automatically.
+echo   * After every EMS sign-in, devices stuck in
+echo     "continuous data" are locked then enabled.
 echo   * To grant MCI permission, paste the name list
 echo     here (one per line: unit,name) and press
 echo     Enter on an EMPTY line. RIGHT-CLICK pastes.

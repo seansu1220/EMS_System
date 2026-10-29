@@ -8,6 +8,7 @@
  *   4. 心跳發現掉線時要重新登入
  *   5. 收到結束指示要停得下來
  *   6. 跨夜之後查詢期間要跟著往前走（不然當天的案件會全變成「查無案件」）
+ *   7. 每次剛登入後都要重置一輪卡住的裝置（開啟時、掉線重新登入後）
  *
  * 執行：npm run tool:ems:test
  */
@@ -33,7 +34,7 @@ function stopAfter(rounds) {
 
 /** 收集替身被呼叫的情形。 */
 function createSpies(overrides = {}) {
-  const calls = { fetch: 0, batch: 0, heartbeat: 0, ensure: 0 };
+  const calls = { fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [] };
   return {
     calls,
     deps: {
@@ -52,6 +53,10 @@ function createSpies(overrides = {}) {
       ensureSignedIn: async () => {
         calls.ensure += 1;
         return overrides.loginResult?.(calls.ensure) ?? '已登入';
+      },
+      resetDevices: async (_session, options) => {
+        calls.reset.push(options.dryRun);
+        return null;
       },
     },
   };
@@ -109,6 +114,7 @@ test('雲端讀不到時不可以讓監看整個死掉', async () => {
     processBatch: async () => ({ done: 0, requeued: 0 }),
     heartbeat: async () => true,
     ensureSignedIn: async () => true,
+    resetDevices: async () => null,
   };
   // 沒有拋出例外就代表撐過去了，而且後面幾輪照跑。
   await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
@@ -205,4 +211,34 @@ test('看起來失敗的狀態要留著被登入檢查攔下', () => {
 test('試跑才有的狀態不算處理到了（監看一律正式模式，出現它們代表有別的問題）', () => {
   assert.equal(isHandledOutcome('已定位'), false);
   assert.equal(isHandledOutcome('已定位佔用'), false);
+});
+
+test('監看一開啟就先重置一輪卡住的裝置，試跑時只回報', async () => {
+  const live = createSpies();
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(2) }, live.deps));
+  assert.deepEqual(live.calls.reset, [false], '開啟時做一輪，之後沒重新登入就不再做');
+
+  const dry = createSpies();
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(2) }, dry.deps));
+  assert.deepEqual(dry.calls.reset, [true], '試跑模式要以試跑去檢查，不可以真的動手');
+});
+
+test('掉線後重新登入，要再重置一輪卡住的裝置', async () => {
+  const spies = createSpies({ alive: false, loginResult: () => '重新登入' });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 0, reloginWaitMs: 0 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(2) }, spies.deps));
+  assert.ok(spies.calls.reset.length >= 2, `開啟一次＋重新登入後一次，實際 ${spies.calls.reset.length} 次`);
+});
+
+test('處理工單前發現要重新登入，登入後先重置裝置再處理', async () => {
+  const spies = createSpies({
+    requests: (round) => (round === 1 ? [{ id: 'r1', temsis: 'T115070100001' }] : []),
+    loginResult: () => '重新登入',
+  });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(2) }, spies.deps));
+  assert.deepEqual(spies.calls.reset, [false, false], '開啟時一次、處理前重新登入後一次');
+  assert.equal(spies.calls.batch, 1);
 });

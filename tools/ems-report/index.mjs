@@ -24,6 +24,8 @@
  *   npm run tool:ems -- unlock-online --execute  真的解鎖，並把結果回寫網頁
  *   npm run tool:ems -- unlock-watch         常駐監看：只維持登入不解鎖（可用來測登入能撐多久）
  *   npm run tool:ems -- unlock-watch --execute   常駐監看：有人送出申請就立刻處理
+ *   npm run tool:ems -- device-reset         試跑：看裝置管理裡有哪些卡在「持續取得資料」
+ *   npm run tool:ems -- device-reset --execute   真的把那些裝置先鎖定再啟用
  *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
  *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
  *   npm run tool:ems -- guides               把篩選說明印成 PDF（放在 out/篩選說明/，不必登入）
@@ -38,6 +40,7 @@ import { startSession } from './session.mjs';
 import { resolveMonthRange, getRecentRange, buildCustomRange, countRangeDays } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
 import { runUnlockWatch } from './unlockWatch.mjs';
+import { resetStuckDevicesSafely } from './deviceReset.mjs';
 import { runOpenCaseFlow, removeProgress } from './openCasesFlow.mjs';
 import { printOpenCaseSummary, writeOpenCaseReport } from './openCasesReport.mjs';
 import {
@@ -147,14 +150,14 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
   'check-sheet', 'check-ekg-sheet',
-  'unlock', 'unlock-online', 'unlock-watch', 'open-cases', 'guides',
+  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'open-cases', 'guides',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
  *   |'check-ekg-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'|'open-cases'|'guides'} command
+ *   |'unlock-online'|'unlock-watch'|'device-reset'|'open-cases'|'guides'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -1394,6 +1397,8 @@ async function processUnlockQueue(queue, options) {
 
   const range = getRecentRange(UNLOCK.lookbackMonths);
   await withSession(async (session) => {
+    // 剛登入：先把裝置管理裡卡住的裝置重置一輪（失敗不影響工單）。
+    await resetStuckDevicesSafely(session, { dryRun: false });
     const outcomes = await runUnlockFlow(session, {
       temsisList: requests.map((request) => request.temsis),
       range,
@@ -1404,6 +1409,23 @@ async function processUnlockQueue(queue, options) {
     });
     printUnlockSummary(outcomes, { dryRun: false });
     log.info('以上結果已回寫網頁，申請人自己看得到，不需要另外通知。');
+  }, { freshLogin: options.freshLogin });
+}
+
+/**
+ * 單獨跑一輪裝置管理重置（`device-reset`）。
+ *
+ * 平常不需要單獨跑——線上解鎖工具每次剛登入後都會自動做一輪。
+ * 這個指令是給「第一次確認畫面判讀對不對」與臨時手動處理用的。
+ *
+ * ⚠ **預設是試跑**（只列出會處理哪幾台），要真的鎖定再啟用必須加 `--execute`。
+ */
+async function runDeviceResetCommand(options) {
+  await withSession(async (session) => {
+    await resetStuckDevicesSafely(session, { dryRun: options.dryRun });
+    if (options.dryRun) {
+      log.warn('本次為試跑：沒有鎖定也沒有啟用任何裝置。要真的處理請加上 --execute。');
+    }
   }, { freshLogin: options.freshLogin });
 }
 
@@ -1540,6 +1562,10 @@ async function main() {
   }
   if (options.command === 'unlock-online') {
     await runUnlockOnlineCommand(options);
+    return;
+  }
+  if (options.command === 'device-reset') {
+    await runDeviceResetCommand(options);
     return;
   }
   if (options.command === 'unlock-watch') {

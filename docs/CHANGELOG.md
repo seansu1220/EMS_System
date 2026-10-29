@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-10-29　小工具 v1.51.0 線上解鎖登入後自動重置「持續取得資料」的裝置
+
+### 問題描述
+使用者：線上解鎖目前只解鎖救護紀錄表，希望把裝置管理的問題一併解決——自動偵測開啟時、或每次剛登入後，
+到「系統設定 → 裝置管理」把狀態是「持續取得資料」的裝置全部按「鎖定」（變成管理者停用），再把那一列按「啟用」。
+
+### 根本原因
+裝置狀態卡在「持續取得資料」時會一直佔著資料，分隊改不了紀錄表；這原本只能人工到裝置管理逐台鎖定再啟用，
+解鎖工具沒有這一步。
+
+### 修改的檔案與內容
+- `tools/ems-report/deviceReset.mjs`（新增）：導向裝置管理、挑出卡住的裝置、**逐台**鎖定→回讀確認變成管理者停用→啟用→回讀確認不再停用。
+  - `pickStuckDevices` 為純函式：只挑「持續取得資料」；認不出唯一一列或沒有鎖定鈕的不動；一輪超過 20 台判定為讀錯，整輪不動。
+  - 鎖了卻沒確認啟用的標成 `leftDisabled`，摘要大字警告要人手動按啟用。
+  - `resetStuckDevicesSafely` 絕不拋錯，失敗只寫警告，不影響解鎖工單、不讓監看結束。
+- `tools/ems-report/pageFinder.mjs`：新增頁面端模式 `statusRows`／`clickStatusRow` 與 `findStatusRows`、`clickStatusRowButton`。
+  以「整列扣掉狀態欄、時間類欄位、按鈕格」的文字辨識同一列（在頁面內算成短碼，帳號原文不外流）；找列、驗此刻狀態、按下在同一次頁面執行內完成。
+- `tools/ems-report/config.mjs`：新增 `UNLOCK.deviceReset`（選單文字、狀態欄名、狀態值、按鈕文字、等待與上限）。此頁尚未探測，依使用者描述先填。
+- `tools/ems-report/unlockWatch.mjs`：監看開啟時、掉線重新登入後、處理工單前重新登入後各做一輪（試跑模式以試跑做）；新增可注入的 `deps.resetDevices`。
+- `tools/ems-report/index.mjs`：`unlock-online --execute` 登入後先做一輪；新增 `device-reset` 指令（預設試跑，`--execute` 才動手）。
+- `tools/duty-watch/index.mjs`：值班監看救護系統登入後、每次重新登入後也做一輪（在 `buildUnlockSide` 包一層，主迴圈不動）。
+- 捷徑：新增 `不常用/裝置管理重置-試跑.bat`；`線上解鎖工單.bat`、`線上解鎖工單-自動監看.bat`、`值班監看.bat` 說明各補一行；`不常用/說明.txt` 補說明。
+- `docs/TOOLS_SPEC.md`：新增 2.12 節，2.3 指令表與 2.8 模組表補上；版本 v1.51.0。
+- 測試：新增 `deviceReset.test.mjs`（8 項）、`deviceResetDom.test.mjs`（8 項，假頁面在真瀏覽器裡驗證鎖定後時間欄變了仍找得回同一列、「停用」不被當成「啟用」、帳號不外流等）；
+  `unlockWatch.test.mjs` 新增 3 項呼叫時機。ems-report 全部 508 項、duty-watch 20 項通過。
+
+---
+
 ## 2026-10-27　網頁 v1.31.1 框選更好起手（頁面只有一排時也能從下方拉框）
 
 ### 問題描述
