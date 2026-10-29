@@ -157,6 +157,7 @@ export async function processBatch(session, queue, requests) {
  *
  * **每次剛登入後**（監看開啟時、掉線重新登入後）會先重置裝置管理裡
  * 卡在「持續取得資料」的裝置（見 `deviceReset.mjs`，使用者 2026-10-29 指定）。
+ * 台數多時一輪近一小時，因此**每做完一台就先看有沒有新的解鎖申請**，有就先處理。
  */
 export async function runUnlockWatch(session, queue, options, deps = {}) {
   const fetchPending = deps.fetchPending ?? fetchPendingRequests;
@@ -172,6 +173,24 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   let lastStatus = Date.now();
   let handled = 0;
 
+  /**
+   * 重置卡住的裝置，每台之間穿插處理新的解鎖申請（使用者 2026-10-29 選定）。
+   * 試跑模式不按任何鈕、不會花時間，也就不必穿插。
+   */
+  const resetDevicesNow = (dryRun) => resetDevices(session, {
+    dryRun,
+    shouldStop: options.shouldStop,
+    betweenDevices: dryRun ? undefined : async () => {
+      const pending = await fetchPending(queue).catch(() => []);
+      if (pending.length === 0) return false;
+      log.step(`[${clock()}] 重置裝置途中收到 ${pending.length} 筆解鎖申請，先處理`);
+      const result = await runBatch(session, queue, pending);
+      handled += result.done;
+      lastHeartbeat = Date.now();
+      return true;
+    },
+  });
+
   log.step('進入常駐監看');
   log.info(`每 ${pollMs / 1000} 秒查一次有沒有新工單；每 ${heartbeatMs / 60000} 分鐘維持一次登入。`);
   if (options.dryRun) {
@@ -183,7 +202,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   log.info('要結束請直接關掉這個視窗，或按 Ctrl+C。');
 
   // 剛登入完成：先把卡住的裝置重置一輪（試跑時只回報）。
-  await resetDevices(session, { dryRun: options.dryRun });
+  await resetDevicesNow(options.dryRun);
 
   /** 目前是不是處在「掉線、等使用者回來登入」的狀態。 */
   let waitingForLogin = false;
@@ -206,7 +225,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
       signedInSince = Date.now();
       lastHeartbeat = Date.now();
       log.ok(`[${clock()}] 已重新登入，繼續監看`);
-      await resetDevices(session, { dryRun: options.dryRun });
+      await resetDevicesNow(options.dryRun);
     }
 
     const requests = await fetchPending(queue).catch((error) => {
@@ -236,7 +255,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
         }
         if (loginState === '重新登入') {
           signedInSince = Date.now();
-          await resetDevices(session, { dryRun: false });
+          await resetDevicesNow(false);
         }
         const result = await runBatch(session, queue, requests);
         handled += result.done;

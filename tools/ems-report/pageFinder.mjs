@@ -676,12 +676,13 @@ function queryPage(params) {
   if (params.mode === 'statusRows' || params.mode === 'clickStatusRow') {
     // 裝置管理：依「狀態」欄找出卡住的裝置，並按下**同一列裡的**鎖定／啟用鈕。
     //
-    // 這一頁沒有一個確定唯一的編號欄可用（尚未探測），因此「是哪一列」改用
-    // **整列除了狀態欄、時間類欄位與按鈕格之外的文字**來認：按了鎖定之後整頁重送，
-    // 狀態會變、時間可能會變，其餘欄位不變，才找得回同一列去按啟用。
-    // 那段文字可能含帳號，所以只在頁面裡算成雜湊值帶出去，原文不離開瀏覽器。
+    // 「是哪一列」優先用**裝置ID 欄**認（2026-10-29 探測確認有這一欄，且每列的
+    // 鎖定／啟用鈕 `onclick` 自帶該列的裝置ID）。找不到裝置ID 欄時才退回
+    // **整列除了狀態欄、時間類欄位與按鈕格之外的文字**。
+    // 兩種辨識文字都只在頁面裡算成雜湊值帶出去，原文不離開瀏覽器。
     const textOf = (cell) => (cell.textContent || '').replace(/\s+/g, ' ').trim();
     const statusWanted = params.statusColumns.map(normalize);
+    const identityWanted = params.identityColumns.map(normalize);
     const volatileWanted = params.volatileHeaderKeywords.map(normalize);
     const labelWanted = params.labelColumns.map(normalize);
     const buttonWanted = Object.fromEntries(
@@ -735,6 +736,21 @@ function queryPage(params) {
     const labelIndex = labelWanted
       .map((wanted) => headers.findIndex((header) => normalize(header).includes(wanted)))
       .find((index) => index >= 0) ?? -1;
+    const identityIndex = headers.findIndex((header) => identityWanted.includes(normalize(header)));
+    /** 說明用文字只留分隔符號前面那段（「中路分隊/姓名」→「中路分隊」），姓名不帶出。 */
+    const labelOfCell = (cell) => {
+      const text = textOf(cell);
+      return text.includes(params.labelSeparator) ? text.split(params.labelSeparator)[0].trim().slice(0, 20) : null;
+    };
+    /** 整列不會變的文字（沒有裝置ID 欄時的退路）。 */
+    const wholeRowIdentity = (cells) => cells
+      .filter((cell, index) => {
+        if (index === statusIndex || isButtonCell(cell)) return false;
+        const header = normalize(headers[index] ?? '');
+        return !volatileWanted.some((keyword) => header.includes(keyword));
+      })
+      .map((cell) => normalize(textOf(cell)))
+      .join('|');
     const rows = [];
     for (const row of table.rows) {
       if (row === headerRow) continue;
@@ -742,32 +758,37 @@ function queryPage(params) {
       const cells = [...row.cells];
       // 跨欄的「查無資料」、分頁列等欄數不足的列直接略過。
       if (!cells[statusIndex]) continue;
-      const identity = cells
-        .filter((cell, index) => {
-          if (index === statusIndex || isButtonCell(cell)) return false;
-          const header = normalize(headers[index] ?? '');
-          return !volatileWanted.some((keyword) => header.includes(keyword));
-        })
-        .map((cell) => normalize(textOf(cell)))
-        .join('|');
+      const deviceId = identityIndex >= 0 && cells[identityIndex] ? normalize(textOf(cells[identityIndex])) : '';
+      const identity = identityIndex >= 0 ? deviceId : wholeRowIdentity(cells);
+      const lockButton = findButton(row, 'lock');
+      const enableButton = findButton(row, 'enable');
+      /** 按鈕的 `onclick` 自己寫著這一列的裝置ID 嗎（沒有裝置ID 欄時無從驗證，視為通過）。 */
+      const selfIdentifies = (button) =>
+        Boolean(button) && (identityIndex < 0 || normalize(button.getAttribute('onclick') || '').includes(deviceId));
       rows.push({
         element: row,
         rowIndex: [...table.rows].indexOf(row),
         // 辨識文字全是空的列無從分辨，給 null，呼叫端一律不動它。
         fingerprint: identity.replace(/\|/g, '') ? hashText(identity) : null,
         status: textOf(cells[statusIndex]).slice(0, 20),
-        label: labelIndex >= 0 && cells[labelIndex] ? textOf(cells[labelIndex]).slice(0, 20) : null,
+        label: labelIndex >= 0 && cells[labelIndex] ? labelOfCell(cells[labelIndex]) : null,
+        // 裝置ID 末 4 碼：同一分隊有很多台時，人才分得出是哪一台（裝置ID 不是個資）。
+        idTail: deviceId ? deviceId.slice(-4) : null,
         buttons: {
-          lock: Boolean(findButton(row, 'lock')),
-          enable: Boolean(findButton(row, 'enable')),
+          lock: selfIdentifies(lockButton),
+          enable: selfIdentifies(enableButton),
         },
+        // 頁面內才用得到：真的要按的那兩顆（`describe` 會拿掉，不帶出頁面）。
+        lockButton,
+        enableButton,
       });
     }
     const countByFingerprint = new Map();
     for (const item of rows) {
       countByFingerprint.set(item.fingerprint, (countByFingerprint.get(item.fingerprint) ?? 0) + 1);
     }
-    const describe = ({ element, ...item }) => ({
+    // 拿掉頁面元素，只把可序列化的欄位帶出去。
+    const describe = ({ element, lockButton, enableButton, ...item }) => ({
       ...item,
       unique: item.fingerprint !== null && countByFingerprint.get(item.fingerprint) === 1,
     });
@@ -785,8 +806,9 @@ function queryPage(params) {
     if (!expected.some((wanted) => normalize(only.status).includes(wanted))) {
       return { clicked: false, reason: 'statusChanged', row: describe(only) };
     }
-    const button = findButton(only.element, params.buttonKey);
-    if (!button) return { clicked: false, reason: 'noButton', row: describe(only) };
+    // 按鈕必須在那一列裡，而且（有裝置ID 欄時）它的 onclick 自己寫著這一列的裝置ID。
+    if (!only.buttons[params.buttonKey]) return { clicked: false, reason: 'noButton', row: describe(only) };
+    const button = params.buttonKey === 'lock' ? only.lockButton : only.enableButton;
     button.scrollIntoView({ block: 'center' });
     button.click();
     return { clicked: true, row: describe(only) };
@@ -1293,15 +1315,19 @@ export async function clickRowButtonByColumnValue(frame, options) {
  * @property {string|null} fingerprint 辨識這一列的短碼（整列不會變的欄位算出的雜湊；認不出時為 null）
  * @property {boolean} unique 這個短碼在整張表裡是否只出現一次（不唯一的列一律不動）
  * @property {string} status 狀態欄的文字
- * @property {string|null} label 說明「是哪一台」的欄位（車輛／單位），找不到時為 null
+ * @property {string|null} label 說明「是哪一台」的單位（只取分隔符號前面那段，姓名不帶出），讀不到為 null
+ * @property {string|null} idTail 裝置ID 末 4 碼（沒有裝置ID 欄時為 null）
  * @property {{lock: boolean, enable: boolean}} buttons 同一列裡有沒有鎖定／啟用鈕
+ *   （有裝置ID 欄時，還要求按鈕的 `onclick` 自己寫著這一列的裝置ID 才算有）
  */
 
 /**
  * @typedef {Object} StatusRowQuery
  * @property {string[]} statusColumns 狀態欄名候選（**完全相等**比對）
+ * @property {string[]} identityColumns 用來認列的編號欄（**完全相等**比對；找不到才退回整列文字）
  * @property {string[]} labelColumns 說明用欄位候選（「包含」比對）
- * @property {string[]} volatileHeaderKeywords 欄名含這些字的欄不拿來辨識列
+ * @property {string} labelSeparator 說明用欄位只取這個符號前面那段；沒有這個符號就不取
+ * @property {string[]} volatileHeaderKeywords 沒有編號欄時，欄名含這些字的欄不拿來辨識列
  * @property {{lock: string[], enable: string[]}} buttonTexts 同列按鈕文字（**完全相等**比對）
  * @property {number} [maxRows]
  */
@@ -1309,7 +1335,7 @@ export async function clickRowButtonByColumnValue(frame, options) {
 /**
  * 讀出裝置管理清單每一列的狀態與按鈕（唯讀）。
  *
- * ⚠ 個資：只帶回狀態、說明用欄位（車輛／單位）與辨識短碼；帳號等欄位原文不離開頁面。
+ * ⚠ 個資：只帶回狀態、單位、裝置ID 末 4 碼與辨識短碼；使用者姓名等欄位原文不離開頁面。
  *
  * @param {import('playwright-core').Frame} frame
  * @param {StatusRowQuery} options
@@ -1331,7 +1357,7 @@ export async function findStatusRows(frame, options) {
  * 三個條件全成立才動手，且判斷與按下在同一次頁面執行內完成：
  *   1. 短碼相符的列**剛好一列**
  *   2. 那一列的狀態**此刻**仍是預期的狀態（例如鎖定前必須還是「持續取得資料」）
- *   3. 那一列裡面**有**指定的按鈕
+ *   3. 那一列裡面**有**指定的按鈕，且（有裝置ID 欄時）按鈕的 `onclick` 自己寫著這一列的裝置ID
  *
  * @param {import('playwright-core').Frame} frame
  * @param {StatusRowQuery & {fingerprint: string, expectedStatus: string[], buttonKey: 'lock'|'enable'}} options

@@ -1397,8 +1397,6 @@ async function processUnlockQueue(queue, options) {
 
   const range = getRecentRange(UNLOCK.lookbackMonths);
   await withSession(async (session) => {
-    // 剛登入：先把裝置管理裡卡住的裝置重置一輪（失敗不影響工單）。
-    await resetStuckDevicesSafely(session, { dryRun: false });
     const outcomes = await runUnlockFlow(session, {
       temsisList: requests.map((request) => request.temsis),
       range,
@@ -1409,6 +1407,9 @@ async function processUnlockQueue(queue, options) {
     });
     printUnlockSummary(outcomes, { dryRun: false });
     log.info('以上結果已回寫網頁，申請人自己看得到，不需要另外通知。');
+    // 登入後順便重置裝置管理裡卡住的裝置。放在工單**之後**：台數多時要近一小時，
+    // 不能讓申請人等它（失敗也不影響已回寫的工單）。
+    await resetStuckDevicesSafely(session, { dryRun: false });
   }, { freshLogin: options.freshLogin });
 }
 

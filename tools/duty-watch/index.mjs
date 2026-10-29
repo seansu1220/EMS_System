@@ -107,14 +107,52 @@ async function mciHeartbeat(session) {
   return isMciSignedIn(session.page);
 }
 
+/**
+ * 重置裝置管理裡卡在「持續取得資料」的裝置（每次剛登入後做，試跑時只回報）。
+ *
+ * 台數多時一輪近一小時，因此每做完一台就先處理新的解鎖申請（使用者 2026-10-29 選定），
+ * 並順便替一站通維持登入（這段期間主迴圈沒在跑，沒人幫它心跳）。
+ * 一站通那邊貼進來的名單會排隊，等重置做完才處理。
+ *
+ * @param {{session: Object, queue: Object}} unlock
+ * @param {{dryRun: boolean, shouldStop: () => boolean, keepOtherSideAlive: () => Promise<void>}} options
+ */
+function resetDevicesFor(unlock, { dryRun, shouldStop, keepOtherSideAlive }) {
+  return resetStuckDevicesSafely(unlock.session, {
+    dryRun,
+    shouldStop,
+    betweenDevices: dryRun ? undefined : async () => {
+      await keepOtherSideAlive();
+      const pending = await fetchPendingRequests(unlock.queue).catch(() => []);
+      if (pending.length === 0) return false;
+      log.step(`重置裝置途中收到 ${pending.length} 筆解鎖申請，先處理`);
+      await processBatch(unlock.session, unlock.queue, pending);
+      return true;
+    },
+  });
+}
+
+/**
+ * 做一個「隔一段時間才真的戳一下一站通」的函式（裝置重置期間用）。
+ * 掉線時只提醒，重新登入交給主迴圈——重置做完它就會發現並請你登入。
+ */
+function makeMciKeepAlive(mci) {
+  let lastBeat = Date.now();
+  return async () => {
+    if (!mci || Date.now() - lastBeat < WATCH.heartbeatMs) return;
+    lastBeat = Date.now();
+    if (!(await mciHeartbeat(mci.session).catch(() => false))) {
+      log.warn('一站通的登入似乎掉了；裝置重置做完後會請你重新登入。');
+    }
+  };
+}
+
 /** 開救護系統的視窗並登入。 */
 async function openUnlockSide(options) {
   log.step('［1／2］救護系統：請在開啟的瀏覽器完成登入');
   const session = await startEmsSession({ freshLogin: options.freshLogin });
   // 解鎖流程要用的查詢期間；監看跑很久，掛在 session 上一起帶著走。
   session.range = getRecentRange(UNLOCK.lookbackMonths);
-  // 剛登入：先把裝置管理裡卡在「持續取得資料」的裝置重置一輪（試跑時只回報）。
-  await resetStuckDevicesSafely(session, { dryRun: !options.execute });
   const queue = await connectQueue();
   return { session, queue };
 }
@@ -131,14 +169,14 @@ async function openMciSide(options) {
  *
  * 掉線後**重新登入成功的那一刻**也重置一輪卡住的裝置（每次剛登入後都做）。
  */
-function buildUnlockSide(unlock, { dryRun }) {
+function buildUnlockSide(unlock, resetOptions) {
   return {
     key: 'unlock',
     name: '救護系統',
     heartbeat: () => emsHeartbeat(unlock.session),
     ensureSignedIn: async (opts) => {
       const result = await ensureEmsSignedIn(unlock.session, opts);
-      if (result === '重新登入') await resetStuckDevicesSafely(unlock.session, { dryRun });
+      if (result === '重新登入') await resetDevicesFor(unlock, resetOptions);
       return result;
     },
   };
@@ -208,12 +246,20 @@ async function main() {
     if (options.only !== 'mci') unlock = await openUnlockSide(options);
     if (options.only !== 'unlock') mci = await openMciSide(options);
 
+    // 兩邊都登入完才重置裝置：放在救護系統登入後馬上做的話，一站通的登入會被拖上近一小時。
+    const resetOptions = {
+      dryRun: !options.execute,
+      shouldStop: () => stopping,
+      keepOtherSideAlive: makeMciKeepAlive(mci),
+    };
+    if (unlock) await resetDevicesFor(unlock, resetOptions);
+
     // 一次貼上多行時，行會在兩次取用之間到達，必須先開緩衝才不會漏（見 TOOLS_SPEC 0.7）。
     if (mci) await startLineBuffering();
 
     await runDutyWatch(
       {
-        unlockSide: unlock ? buildUnlockSide(unlock, { dryRun: !options.execute }) : null,
+        unlockSide: unlock ? buildUnlockSide(unlock, resetOptions) : null,
         mciSide: mci ? buildMciSide(mci) : null,
       },
       { dryRun: !options.execute, shouldStop: () => stopping },

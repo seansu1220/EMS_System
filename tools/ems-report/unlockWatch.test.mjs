@@ -56,6 +56,10 @@ function createSpies(overrides = {}) {
       },
       resetDevices: async (_session, options) => {
         calls.reset.push(options.dryRun);
+        // 模擬「做完一台」：讓監看有機會穿插處理解鎖申請。
+        if (overrides.simulateDevice && options.betweenDevices) {
+          calls.betweenResult = await options.betweenDevices();
+        }
         return null;
       },
     },
@@ -241,4 +245,32 @@ test('處理工單前發現要重新登入，登入後先重置裝置再處理',
     runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(2) }, spies.deps));
   assert.deepEqual(spies.calls.reset, [false, false], '開啟時一次、處理前重新登入後一次');
   assert.equal(spies.calls.batch, 1);
+});
+
+test('重置裝置途中有新的解鎖申請，先處理申請', async () => {
+  const spies = createSpies({
+    // 第 1 次查雲端發生在重置途中（開啟時那一輪），之後沒有新的。
+    requests: (round) => (round === 1 ? [{ id: 'r1', temsis: 'T115070100001' }] : []),
+    simulateDevice: true,
+  });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(1) }, spies.deps));
+  assert.equal(spies.calls.batch, 1, '重置途中的申請要先處理，不能等整輪做完');
+  assert.equal(spies.calls.betweenResult, true, '處理過申請要告訴重置流程畫面被帶走了');
+});
+
+test('重置裝置途中沒有新申請時，不去動解鎖流程', async () => {
+  const spies = createSpies({ simulateDevice: true });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(1) }, spies.deps));
+  assert.equal(spies.calls.batch, 0);
+  assert.equal(spies.calls.betweenResult, false);
+});
+
+test('試跑模式重置裝置時不穿插處理申請', async () => {
+  const spies = createSpies({ requests: () => [{ id: 'r1', temsis: 'T115070100001' }], simulateDevice: true });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(1) }, spies.deps));
+  assert.equal(spies.calls.betweenResult, undefined, '試跑不按任何鈕，不需要穿插');
+  assert.equal(spies.calls.batch, 0);
 });
