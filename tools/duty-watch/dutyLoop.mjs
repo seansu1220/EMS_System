@@ -142,6 +142,13 @@ async function beatSides(states, deps) {
  */
 async function handleUnlocks(state, deps, options) {
   const { log } = deps;
+  // 救護系統這邊的例行事（目前是「跨日時確認解鎖過的案件結案了沒」）。
+  // 掉線期間不做：沒登入時去查只會一件件失敗。沒到時間由它自己判斷、什麼都不做。
+  if (deps.runUnlockChores && !state.waitingForLogin) {
+    await deps.runUnlockChores().catch((error) => {
+      log.warn(`[${clock()}] 結案後比對沒跑成（不影響值班）：${error instanceof Error ? error.message : error}`);
+    });
+  }
   const requests = await deps.fetchPendingUnlocks().catch((error) => {
     // 雲端讀不到多半是網路暫時斷了，不該讓整個監看死掉。
     log.warn(`[${clock()}] 查不到雲端工單（下一輪再試）：${error.message}`);

@@ -27,9 +27,10 @@ import {
   TEMSIS_CODE_LENGTH,
   UNLOCK_REQUEST_MAX_BATCH,
   UNLOCK_RESULT_SUMMARY,
+  UNLOCK_REVISION_LABELS,
   UNLOCK_STATUS_LABELS,
 } from '../config/constants';
-import type { UnlockRequest } from '../types/unlockRequest';
+import type { UnlockRequest, UnlockRequestRevision } from '../types/unlockRequest';
 import type { UnlockPolicy } from '../types/unlockPolicy';
 import { UnlockLockPanel } from '../components/UnlockLockPanel';
 import {
@@ -53,6 +54,37 @@ function formatMoment(iso: string): string {
 }
 
 /**
+ * 解鎖前備份 → 結案後比對的那一塊（v1.35）。
+ *
+ * 只給救護科看（看得到所有工單的人）：這是在核對分隊解鎖後改了什麼，申請人自己不需要。
+ * `items` 本來就不含病患資料（姓名、身分證只寫欄位名），完整內容在救護科電腦上。
+ */
+function RevisionNote({ revision }: { revision: UnlockRequestRevision }) {
+  const status = UNLOCK_REVISION_LABELS[revision.state] ?? { label: revision.state, tone: 'slate' as const };
+  const changeText = revision.state === 'compared' && revision.changeCount !== null
+    ? revision.changeCount === 0 ? '：沒有改動' : `：${revision.changeCount} 處不同`
+    : '';
+  return (
+    <div className="mt-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600">
+      <div className="flex flex-wrap items-center gap-1">
+        <Badge tone={status.tone}>{status.label}</Badge>
+        <span className="text-slate-400">{revision.remark}{changeText}</span>
+      </div>
+      {revision.items.length > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          {revision.items.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      )}
+      {revision.state === 'compared' && (
+        <div className="mt-1 text-slate-400">
+          {formatMoment(revision.comparedAt ?? '')} 比對；完整內容在救護科電腦的比對報告
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * 一筆工單的結果欄。
  *
  * 申請人看到的是**一句話**加上案件日期與車輛（足夠確認是不是自己那件、現在能不能去改）。
@@ -60,7 +92,15 @@ function formatMoment(iso: string): string {
  * 那是維護時才用得到的東西，只給管理員看（使用者 2026-08-09 指定）；
  * 真要追整個過程，看執行電腦的 `out/watch.log` 比看這一欄清楚得多。
  */
-function ResultCell({ request, showDetail }: { request: UnlockRequest; showDetail: boolean }) {
+function ResultCell({
+  request,
+  showDetail,
+  showRevision,
+}: {
+  request: UnlockRequest;
+  showDetail: boolean;
+  showRevision: boolean;
+}) {
   const summary = UNLOCK_RESULT_SUMMARY[request.status] ?? '—';
   if (!request.result) return <span className="text-slate-400">{summary}</span>;
 
@@ -84,6 +124,7 @@ function ResultCell({ request, showDetail }: { request: UnlockRequest; showDetai
       <div className="text-xs text-slate-400">
         {formatMoment(processedAt)} 由 {processedBy || '（未記錄）'} 執行
       </div>
+      {showRevision && request.revision && <RevisionNote revision={request.revision} />}
     </div>
   );
 }
@@ -348,7 +389,7 @@ export function UnlockPage() {
                         </td>
                       )}
                       <td className="px-4 py-3">
-                        <ResultCell request={request} showDetail={canManage} />
+                        <ResultCell request={request} showDetail={canManage} showRevision={seesAll} />
                       </td>
                       {canManage && (
                         <td className="whitespace-nowrap px-4 py-3">

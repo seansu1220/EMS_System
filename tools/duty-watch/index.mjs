@@ -36,6 +36,8 @@ import { startSession as startEmsSession, ensureSignedIn as ensureEmsSignedIn } 
 import { closeQueue, connectQueue, fetchPendingRequests } from '../ems-report/unlockQueue.mjs';
 import { heartbeat as emsHeartbeat, processBatch } from '../ems-report/unlockWatch.mjs';
 import { resetStuckDevicesSafely } from '../ems-report/deviceReset.mjs';
+import { checkRevisionsSafely } from '../ems-report/revisionCheck.mjs';
+import { createDailyTrigger } from '../ems-report/revisionTrack.mjs';
 
 import { enableLiveLog as enableMciLiveLog } from '../mci-perm/logger.mjs';
 import {
@@ -192,8 +194,23 @@ function buildMciSide(mci) {
   };
 }
 
+/**
+ * 確認解鎖過的案件結案了沒、結案就比對（見 `ems-report/revisionCheck.mjs`）。
+ * 開啟時做一次，之後**跨日才再做**；試跑不做。
+ *
+ * @returns {() => Promise<void>} 每一輪都可以呼叫，沒到時間就什麼都不做
+ */
+function makeRevisionChores(unlock, dryRun) {
+  const daily = createDailyTrigger();
+  return async () => {
+    if (!unlock || dryRun || !daily.isDue()) return;
+    await checkRevisionsSafely(unlock.session, { queue: unlock.queue });
+    daily.markDone();
+  };
+}
+
 /** 把兩邊的實際動作包成主迴圈要用的 deps。 */
-function buildDeps(unlock, mci) {
+function buildDeps(unlock, mci, revisionChores) {
   const defaultUnit = loadMciSettings().defaultUnit;
   return {
     log,
@@ -204,6 +221,7 @@ function buildDeps(unlock, mci) {
     parseRoster: (lines) => resolveRosterInput(lines, { defaultUnit }),
     fetchPendingUnlocks: () => (unlock ? fetchPendingRequests(unlock.queue) : Promise.resolve([])),
     processUnlocks: (requests) => processBatch(unlock.session, unlock.queue, requests),
+    runUnlockChores: revisionChores,
     processRoster: async (entries, { execute }) => {
       // 值班監看一定回讀驗證：沒人盯著畫面，更不能「以為開好了其實沒有」。
       const results = await grantAll(mci.session, entries, { execute, verify: true });
@@ -253,6 +271,8 @@ async function main() {
       keepOtherSideAlive: makeMciKeepAlive(mci),
     };
     if (unlock) await resetDevicesFor(unlock, resetOptions);
+    const revisionChores = makeRevisionChores(unlock, !options.execute);
+    await revisionChores();
 
     // 一次貼上多行時，行會在兩次取用之間到達，必須先開緩衝才不會漏（見 TOOLS_SPEC 0.7）。
     if (mci) await startLineBuffering();
@@ -263,7 +283,7 @@ async function main() {
         mciSide: mci ? buildMciSide(mci) : null,
       },
       { dryRun: !options.execute, shouldStop: () => stopping },
-      buildDeps(unlock, mci),
+      buildDeps(unlock, mci, revisionChores),
     );
   } finally {
     process.off('SIGINT', requestStop);

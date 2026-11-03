@@ -98,12 +98,17 @@ async function describeOpenedPages(pages) {
  * @param {import('playwright-core').Frame} frame 放著「救護紀錄PDF」按鈕的 frame
  * @param {string[]} buttonTexts 按鈕文字候選
  * @param {number} index 第幾個符合的按鈕（0 起算）
- * @param {{exact?: boolean, shouldAbort?: () => Promise<string|null>}} [options]
+ * @param {{exact?: boolean, shouldAbort?: () => Promise<string|null>,
+ *   keepBytes?: boolean, maxPages?: number}} [options]
  *   `exact`：文字比對方式，**必須與當初算出 index 時完全相同**，
  *   否則兩邊的符合集合不一樣，序號會對到別張紀錄表。
  *   `shouldAbort`：每輪檢查一次，回傳非空字串就立刻放棄等待並以該字串說明原因
  *   （用來偵測「按下去之後原本的畫面被導走了」，這種情況再等下去也不會有紀錄表）
- * @returns {Promise<{text: string, kind: 'pdf'|'html', source: string}>}
+ *   `keepBytes`：連 PDF 原檔一起交回（v1.54.0 解鎖前備份用）。**只有呼叫端明確要求才給**，
+ *   其餘流程照舊只拿文字——原檔落不落檔由呼叫端負責，這裡仍然不寫任何檔案。
+ *   `maxPages`：PDF 最多讀幾頁（預設沿用 `extractPdfText` 的 5 頁；比對整份時要多讀）
+ * @returns {Promise<{text: string, kind: 'pdf'|'html', source: string, bytes?: Buffer}>}
+ *   `bytes` 只在 `keepBytes` 且來源是 PDF 時才有
  */
 export async function openRecordSheet(context, frame, buttonTexts, index = 0, options = {}) {
   /** @type {Buffer|null} */
@@ -222,11 +227,12 @@ export async function openRecordSheet(context, frame, buttonTexts, index = 0, op
     }
 
     if (pdfBytes) {
-      const text = await extractPdfText(pdfBytes);
+      const text = await extractPdfText(pdfBytes, options.maxPages ? { maxPages: options.maxPages } : {});
       if (!text.trim()) {
         throw new Error('紀錄表 PDF 讀得到檔案但抽不出文字（可能是掃描影像檔）');
       }
-      return { text, kind: 'pdf', source: pdfSource };
+      const sheet = { text, kind: 'pdf', source: pdfSource };
+      return options.keepBytes ? { ...sheet, bytes: pdfBytes } : sheet;
     }
 
     const waited = UNLOCK.sheetTimeoutMs / 1000;

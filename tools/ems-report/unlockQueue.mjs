@@ -416,11 +416,35 @@ export async function saveResult(session, requestId, outcome) {
         processedAt: new Date().toISOString(),
         processedBy: session.displayName,
       },
+      // 解鎖前備份成功的話，順便寫上「已備份第幾版、等結案後比對」（v1.54.0）。
+      // 沒有備份的一律寫 null：管理員「重新送單」後再跑一次，舊的那一版不該還掛著。
+      revision: outcome.revision ?? null,
     });
     return true;
   } catch (error) {
     // 這裡失敗代表「解鎖做了、但網頁上看不到結果」，必須講清楚，不能默默吞掉。
     log.warn(`結果回寫失敗，這一筆在網頁上會停在「處理中」：${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * 把結案後比對的結果寫回工單（v1.54.0）。
+ *
+ * ⚠ `revision.items` 必須是 `sheetDiff.toCloudItems` 產出的**不含病患資料**版本——
+ *   這個欄位所有看得到工單的人都看得到。
+ *
+ * @param {QueueSession} session
+ * @param {string} requestId
+ * @param {ReturnType<typeof import('./revisionTrack.mjs').toCloudRevision>} revision
+ * @returns {Promise<boolean>} 是否寫入成功（失敗下次再補寫）
+ */
+export async function saveRevision(session, requestId, revision) {
+  try {
+    await updateDoc(doc(session.db, COLLECTION, requestId), { revision });
+    return true;
+  } catch (error) {
+    log.warn(`比對結果寫回網頁失敗（下次再補寫）：${error.message}`);
     return false;
   }
 }

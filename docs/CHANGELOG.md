@@ -4,6 +4,59 @@
 
 ---
 
+## 2026-11-03　小工具 v1.54.0／網頁 v1.35.0 解鎖前先備份紀錄表、結案後比對差異
+
+### 問題描述
+使用者要求：
+1. 有人解鎖時，先把原本的救護紀錄表（「救護紀錄PDF(桃)」）下載，上傳到該案件的「救護紀錄(鎖)」那一列 →「上傳」；
+   檔案類型選「其他」、選剛下載的檔案，檔案說明填 `救護紀錄表內容-v1`（或看已經到第幾版）。
+2. 每天或每次開啟時：以 TEMSIS 確認案件後來有沒有結案（救護狀態變為「已結案」）；
+   已結案的，點開「救護紀錄PDF(桃)」，條列出兩張紀錄表的不同處。
+3. （追問後決定）上傳失敗要重試、增加等待時間，確認沒問題才往下，一直失敗就改報需人工處理；
+   舊版 PDF 留在本機；差異本機與雲端都留，雲端遇到個資只寫「更正了哪一欄」，不寫內容。
+
+### 根本原因
+原本的解鎖流程只讀紀錄表上的指派案號與 TEMSIS，全文用完即丟，解鎖之後分隊改了什麼完全無從得知。
+另外查詢結果每一列有「救護紀錄PDF」與「救護紀錄PDF(桃)」兩顆按鈕，舊版固定開第一顆，不一定是「(桃)」那顆。
+
+### 修改的檔案與內容
+- **新增** `tools/ems-report/sheetBackup.mjs`：解鎖前備份。找目標紀錄表**同一列**的「上傳」、檔案類型選「其他」、
+  交出 PDF（記憶體直接給檔案欄）、填檔案說明、確定上傳，回讀清單出現這一版才算成功；
+  重試 3 次（等 4／10／20 秒），每次先看這一版是不是已經傳上去了，避免傳兩份。
+- **新增** `tools/ems-report/revisionTrack.mjs`：追蹤清單（`out/internal/解鎖前後比對/追蹤清單.json`）與規則——
+  版號（系統清單與本機清單取最大加一）、檔名、已結案判斷、查詢期間（TEMSIS 案件日期前一天～今天）、
+  哪幾件該查／逾期／被下一版取代、每日觸發器、挑「(桃)」按鈕。
+- **新增** `tools/ems-report/revisionCheck.mjs`：結案後比對。逐件查救護狀態，已結案就開「(桃)」PDF（核對 TEMSIS）、
+  存結案後 PDF、比對、寫 `…-差異.txt`，有工單的把摘要寫回工單；絕不丟錯。
+- **新增** `tools/ems-report/sheetDiff.mjs`：逐行比對與欄位判斷（純函式）；本機版完整報告、
+  **雲端版只寫欄位名**（姓名、身分證等一律「更正「姓名」」；只有時間、檢傷、生命徵象且值像數字時才寫改前改後）。
+- `tools/ems-report/unlock.mjs`：查詢結果改開「(桃)」那顆並保留原檔（讀不到案號時改開另一顆讀）；
+  定位到目標後**先備份、失敗就不解鎖**；備份後重新進入案件確認目標沒變；解鎖成功才列入追蹤；`runUnlockFlow` 新增 `requestIds`。
+  順手修正：案件內只有一顆解鎖按鈕時，改取**按鈕所在那一列**當目標（舊版固定取第 1 張，第 1 張沒鎖頭時車輛會讀錯，現在還會傳錯列）。
+- `tools/ems-report/recordSheet.mjs`：`keepBytes`（交回 PDF 原檔）、`maxPages` 選項。
+- `tools/ems-report/unlockQueue.mjs`：`saveResult` 一併寫 `revision`；新增 `saveRevision`。
+- `tools/ems-report/unlockWatch.mjs`：開啟時與跨日時跑結案後比對；工單帶 `requestIds`。
+- `tools/ems-report/index.mjs`：`unlock-online` 沒有工單但今天還沒確認過也會登入比對；`unlock --execute` 結束時順便比對；
+  新增 `revision-check` 指令。
+- `tools/ems-report/config.mjs`：新增 `UNLOCK.backup`、`UNLOCK.revision`、`PATHS.revisionDir`。
+- `tools/duty-watch/index.mjs`、`dutyLoop.mjs`：值班監看開啟時與跨日時跑結案後比對（`runUnlockChores`）。
+- 測試：新增 `sheetDiff.test.mjs`、`revisionTrack.test.mjs`，`unlockWatch.test.mjs` 加三項；
+  寫測試時抓到頁碼規則 `數字/數字` 會把血壓 120/80 當頁碼丟掉，已改成只認帶「頁」的寫法。
+  ems-report 548 項、duty-watch 20 項全過。
+- 捷徑：新增 `捷徑/不常用/解鎖前後比對.bat`，`說明.txt` 補說明。
+- 網頁：`src/types/unlockRequest.ts` 新增 `UnlockRequestRevision`；`unlockRequestService.ts` 讀 `revision`、
+  建立時寫 null、重新送單清空；`UnlockPage.tsx` 結果欄多一塊「備份／比對」（只給看得到所有工單的人）；
+  `constants.ts` 新增 `UNLOCK_REVISION_LABELS`。安全規則不需改（回寫本來就由 `isStaff()` 更新）。
+- 規格書：`docs/TOOLS_SPEC.md` v1.54.0（0.3 個資例外、2.3、2.4、2.7、2.8、新增 2.13、5.3、5.5、5.7、5.9、7.7）；
+  `docs/SPEC.md` v1.35.0（2.8 結果欄、重新送單、資料模型、安全規則）。
+- `package.json`：版本 1.28.0。
+
+### 尚未實跑確認
+上傳畫面只有 8 月的結構快照、沒有真的傳過；救護紀錄表 PDF 的實際行結構也沒有樣本。
+建議第一次先跑「解鎖救護紀錄表.bat」（試跑）看上傳畫面找不找得到，第一件比對完打開差異報告看欄位判斷準不準（見 TOOLS_SPEC 2.13）。
+
+---
+
 ## 2026-11-03　網頁 v1.34.0 救護科管理者只能用解鎖工單、測試用傷票、小工具
 
 ### 問題描述

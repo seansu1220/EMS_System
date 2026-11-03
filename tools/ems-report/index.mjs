@@ -26,6 +26,7 @@
  *   npm run tool:ems -- unlock-watch --execute   常駐監看：有人送出申請就立刻處理
  *   npm run tool:ems -- device-reset         試跑：看裝置管理裡有哪些卡在「持續取得資料」
  *   npm run tool:ems -- device-reset --execute   真的把那些裝置先鎖定再啟用
+ *   npm run tool:ems -- revision-check       解鎖過的案件結案了沒？結案就比對解鎖前後的紀錄表
  *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
  *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
  *   npm run tool:ems -- guides               把篩選說明印成 PDF（放在 out/篩選說明/，不必登入）
@@ -41,6 +42,9 @@ import { resolveMonthRange, getRecentRange, buildCustomRange, countRangeDays } f
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
 import { runUnlockWatch } from './unlockWatch.mjs';
 import { resetStuckDevicesSafely } from './deviceReset.mjs';
+import { checkRevisionsSafely } from './revisionCheck.mjs';
+import { countDueToday, loadTracker } from './revisionTrack.mjs';
+import { TRACKER_FILE } from './sheetBackup.mjs';
 import { runOpenCaseFlow, removeProgress } from './openCasesFlow.mjs';
 import { printOpenCaseSummary, writeOpenCaseReport } from './openCasesReport.mjs';
 import {
@@ -150,14 +154,14 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
   'check-sheet', 'check-ekg-sheet',
-  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'open-cases', 'guides',
+  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'revision-check', 'open-cases', 'guides',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
  *   |'check-ekg-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'|'device-reset'|'open-cases'|'guides'} command
+ *   |'unlock-online'|'unlock-watch'|'device-reset'|'revision-check'|'open-cases'|'guides'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -1348,7 +1352,33 @@ async function runUnlockCommand(options) {
   await withSession(async (session) => {
     const outcomes = await runUnlockFlow(session, { temsisList, range, dryRun: options.dryRun });
     printUnlockSummary(outcomes, { dryRun: options.dryRun });
+    // 正式模式順便確認之前解鎖過的案件結案了沒（沒有雲端連線，工單上的結果由線上工具補寫）。
+    if (!options.dryRun) await checkRevisionsSafely(session, { queue: null });
   }, { freshLogin: options.freshLogin });
+}
+
+/**
+ * 單獨跑一輪結案後比對（`revision-check`）。
+ *
+ * 平常不需要單獨跑——線上解鎖工具每次開啟時（監看則是每天）都會自動做。
+ * 這支給「想現在就看結果」與第一次確認畫面判讀對不對用。
+ * 只讀不改系統資料，所以不分試跑／正式；連得上雲端就順便把結果寫回工單。
+ */
+async function runRevisionCheckCommand(options) {
+  let queue = null;
+  try {
+    queue = await connectQueue();
+  } catch (error) {
+    log.warn(`連不上網頁的工單（只做本機比對，工單上的結果下次補寫）：${error instanceof Error ? error.message : error}`);
+  }
+  try {
+    await withSession(async (session) => {
+      const summary = await checkRevisionsSafely(session, { queue });
+      if (summary.checked === 0 && summary.compared === 0) log.ok('追蹤清單裡沒有要確認的案件。');
+    }, { freshLogin: options.freshLogin });
+  } finally {
+    if (queue) await closeQueue(queue);
+  }
 }
 
 /**
@@ -1373,15 +1403,34 @@ async function runUnlockOnlineCommand(options) {
   }
 }
 
+/**
+ * 追蹤清單裡今天還沒確認結案的件數（讀不到清單就當 0，不擋工單）。
+ * @returns {Promise<number>}
+ */
+async function countRevisionsDueToday() {
+  try {
+    return countDueToday(await loadTracker(TRACKER_FILE), new Date(), UNLOCK.revision);
+  } catch (error) {
+    log.warn(`讀不到結案後比對的追蹤清單（不影響解鎖）：${error instanceof Error ? error.message : error}`);
+    return 0;
+  }
+}
+
 /** 線上工單的實際內容（與雲端連線的開關由呼叫端負責）。 */
 async function processUnlockQueue(queue, options) {
   const requests = await fetchPendingRequests(queue);
-  if (requests.length === 0) {
+  // 使用者 2026-11-03 指定「每天或每次開啟時」確認解鎖過的案件結案了沒。
+  // 沒有工單、但今天還沒確認過的話，仍要登入一次——否則一天都沒有工單時就永遠不會比對。
+  const revisionsDue = await countRevisionsDueToday();
+  if (requests.length === 0 && revisionsDue === 0) {
     log.ok('目前沒有待處理的解鎖工單，不需要登入救護系統。');
     return;
   }
-
-  log.step(`待處理的解鎖工單：${requests.length} 筆`);
+  if (requests.length === 0) {
+    log.step(`沒有待處理的工單，但有 ${revisionsDue} 件解鎖過的案件今天還沒確認結案，仍要登入一次`);
+  } else {
+    log.step(`待處理的解鎖工單：${requests.length} 筆`);
+  }
   for (const [position, request] of requests.entries()) {
     log.info(
       `  ${position + 1}. ${maskCode(request.temsis)}　${request.requestedByName || '（未記錄申請人）'}`
@@ -1397,16 +1446,22 @@ async function processUnlockQueue(queue, options) {
 
   const range = getRecentRange(UNLOCK.lookbackMonths);
   await withSession(async (session) => {
-    const outcomes = await runUnlockFlow(session, {
-      temsisList: requests.map((request) => request.temsis),
-      range,
-      dryRun: false,
-      // 逐筆回寫，不等整批跑完：中途關掉視窗時，前面做完的幾筆在網頁上才不會停在「待處理」。
-      onCaseStart: (_temsis, index) => markRunning(queue, requests[index].id),
-      onCaseDone: (outcome, index) => saveResult(queue, requests[index].id, outcome),
-    });
-    printUnlockSummary(outcomes, { dryRun: false });
-    log.info('以上結果已回寫網頁，申請人自己看得到，不需要另外通知。');
+    if (requests.length > 0) {
+      const outcomes = await runUnlockFlow(session, {
+        temsisList: requests.map((request) => request.temsis),
+        // 結案後比對的結果要寫回同一張工單。
+        requestIds: requests.map((request) => request.id),
+        range,
+        dryRun: false,
+        // 逐筆回寫，不等整批跑完：中途關掉視窗時，前面做完的幾筆在網頁上才不會停在「待處理」。
+        onCaseStart: (_temsis, index) => markRunning(queue, requests[index].id),
+        onCaseDone: (outcome, index) => saveResult(queue, requests[index].id, outcome),
+      });
+      printUnlockSummary(outcomes, { dryRun: false });
+      log.info('以上結果已回寫網頁，申請人自己看得到，不需要另外通知。');
+    }
+    // 確認解鎖過的案件結案了沒，結案就比對（只讀不改，一件十幾秒）。放在工單之後、裝置重置之前。
+    await checkRevisionsSafely(session, { queue });
     // 登入後順便重置裝置管理裡卡住的裝置。放在工單**之後**：台數多時要近一小時，
     // 不能讓申請人等它（失敗也不影響已回寫的工單）。
     await resetStuckDevicesSafely(session, { dryRun: false });
@@ -1567,6 +1622,10 @@ async function main() {
   }
   if (options.command === 'device-reset') {
     await runDeviceResetCommand(options);
+    return;
+  }
+  if (options.command === 'revision-check') {
+    await runRevisionCheckCommand(options);
     return;
   }
   if (options.command === 'unlock-watch') {

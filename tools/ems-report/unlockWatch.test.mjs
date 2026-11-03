@@ -9,6 +9,7 @@
  *   5. 收到結束指示要停得下來
  *   6. 跨夜之後查詢期間要跟著往前走（不然當天的案件會全變成「查無案件」）
  *   7. 每次剛登入後都要重置一輪卡住的裝置（開啟時、掉線重新登入後）
+ *   8. 開啟時與跨日時要確認解鎖過的案件結案了沒（試跑不做）
  *
  * 執行：npm run tool:ems:test
  */
@@ -34,7 +35,7 @@ function stopAfter(rounds) {
 
 /** 收集替身被呼叫的情形。 */
 function createSpies(overrides = {}) {
-  const calls = { fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [] };
+  const calls = { fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [], revisions: 0 };
   return {
     calls,
     deps: {
@@ -54,6 +55,12 @@ function createSpies(overrides = {}) {
         calls.ensure += 1;
         return overrides.loginResult?.(calls.ensure) ?? '已登入';
       },
+      // 結案後比對一律換成替身：真的那支會去讀 out/internal 的追蹤清單、操作頁面。
+      checkRevisions: async () => {
+        calls.revisions += 1;
+        return { checked: 0, compared: 0 };
+      },
+      dailyTrigger: overrides.dailyTrigger ?? { isDue: () => false, markDone: () => {} },
       resetDevices: async (_session, options) => {
         calls.reset.push(options.dryRun);
         // 模擬「做完一台」：讓監看有機會穿插處理解鎖申請。
@@ -273,4 +280,37 @@ test('試跑模式重置裝置時不穿插處理申請', async () => {
     runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(1) }, spies.deps));
   assert.equal(spies.calls.betweenResult, undefined, '試跑不按任何鈕，不需要穿插');
   assert.equal(spies.calls.batch, 0);
+});
+
+test('監看一開啟就確認一輪解鎖過的案件結案了沒', async () => {
+  const spies = createSpies();
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(2) }, spies.deps));
+  assert.equal(spies.calls.revisions, 1, '開啟時查一次，同一天之內不再查');
+});
+
+test('試跑模式不做結案後比對', async () => {
+  const spies = createSpies({ dailyTrigger: { isDue: () => true, markDone: () => {} } });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(2) }, spies.deps));
+  assert.equal(spies.calls.revisions, 0);
+});
+
+test('跨日之後要再確認一輪結案，做完就不再重複', async () => {
+  let round = 0;
+  let done = 0;
+  // 第 2 輪時日曆換了一天；做完（markDone）之後就不再到期。
+  const dailyTrigger = {
+    isDue: () => {
+      round += 1;
+      return round >= 2 && done < 2;
+    },
+    markDone: () => {
+      done += 1;
+    },
+  };
+  const spies = createSpies({ dailyTrigger });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(4) }, spies.deps));
+  assert.equal(spies.calls.revisions, 2, '開啟時一次＋跨日一次');
 });

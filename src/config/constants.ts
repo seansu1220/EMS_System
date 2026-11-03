@@ -147,6 +147,18 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
 };
 
 /**
+ * 解鎖前備份 → 結案後比對的狀態說明（v1.35，對應 `UnlockRevisionState`）。
+ * 救護科（看得到所有工單的人）在結果欄看到的那一行。
+ */
+export const UNLOCK_REVISION_LABELS: Record<string, { label: string; tone: Tone }> = {
+  waiting: { label: '已備份原紀錄表，等結案後比對', tone: 'blue' },
+  compared: { label: '結案後比對完成', tone: 'green' },
+  superseded: { label: '結案前又解鎖一次，改用下一次的備份比對', tone: 'slate' },
+  expired: { label: '解鎖後太久沒結案，不再比對', tone: 'slate' },
+  gaveUp: { label: '比對一直失敗，請自行到系統核對', tone: 'red' },
+};
+
+/**
  * 一次最多能送出幾筆解鎖工單。
  * 純粹是防手殘（例如整欄幾百個編號誤貼進來），不是系統限制。
  */

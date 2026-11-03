@@ -56,6 +56,42 @@ export interface UnlockRequestResult {
   processedBy: string;
 }
 
+/**
+ * 解鎖前備份 → 結案後比對的進度（v1.35 起，本機工具 v1.54.0）。
+ *
+ * - `waiting`：已備份解鎖前的紀錄表，等分隊改完、結案後比對
+ * - `compared`：已比對，`items` 是改了哪些地方
+ * - `superseded`：還沒等到結案就又被解鎖，改拿下一次的備份比對
+ * - `expired`：解鎖後太久都沒結案，不再追
+ * - `gaveUp`：比對一直失敗，要救護科自己到系統看
+ */
+export type UnlockRevisionState = 'waiting' | 'compared' | 'superseded' | 'expired' | 'gaveUp';
+
+/**
+ * 工單上的比對結果。
+ *
+ * ⚠ 個資：`items` 只寫**改了哪些欄位**（例如「更正「姓名」」「「到院時間」10:38 → 10:45」），
+ *   姓名、身分證這類**只寫欄位名、不寫內容**（使用者 2026-11-03 指定）；
+ *   完整的改前改後只存在救護科電腦的 `out/internal/`。
+ */
+export interface UnlockRequestRevision {
+  /** 第幾版備份（系統上傳清單的檔案說明 `救護紀錄表內容-v{N}`）。 */
+  version: number;
+  /** 檔案說明原文，例如 `救護紀錄表內容-v1`。 */
+  remark: string;
+  state: UnlockRevisionState;
+  /** 備份（＝解鎖）時間（ISO 字串）。 */
+  backedUpAt: string;
+  /** 最近一次去系統確認結案的時間；還沒確認過為 null。 */
+  lastCheckedAt: string | null;
+  /** 比對完成時間；還沒比對為 null。 */
+  comparedAt: string | null;
+  /** 幾處不同；還沒比對為 null。 */
+  changeCount: number | null;
+  /** 改了哪些地方（不含病患資料）。 */
+  items: string[];
+}
+
 /** 解鎖工單。 */
 export interface UnlockRequest {
   /** Firestore 文件 ID。 */
@@ -74,6 +110,8 @@ export interface UnlockRequest {
   status: UnlockRequestStatus;
   /** 執行結果；尚未處理為 null。 */
   result: UnlockRequestResult | null;
+  /** 解鎖前備份與結案後比對（v1.35）；沒有備份過為 null。 */
+  revision: UnlockRequestRevision | null;
   /**
    * 是否不受鎖定時段限制（v1.33 起）。
    *

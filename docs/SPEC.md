@@ -1,6 +1,10 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.34.0　建立日期：2026-07-22　最後更新：2026-11-03
+> 版本：v1.35.0　建立日期：2026-07-22　最後更新：2026-11-03
+> v1.35.0：解鎖工單新欄位 **`revision`**（解鎖前備份 → 結案後比對，本機工具 v1.54.0）：救護科電腦解鎖前先把原本的
+> 　　　　 紀錄表備份上傳（檔案說明 `救護紀錄表內容-v1`），之後案件結案了就比對前後兩份；結果欄多一塊
+> 　　　　 「備份／比對」狀態與**改了哪些欄位**（只給看得到所有工單的人；姓名、身分證只寫欄位名、不寫內容）。
+> 　　　　 「重新送單」一併清空 `revision`（見 2.8、3）
 > v1.34.0：**救護科管理者改成只進得去解鎖工單、測試用傷票領取、小工具三頁**（同解鎖專用，業務資料讀不到）；
 > 　　　　 保留看得到所有人的工單、設定鎖定時段、送單不受鎖定限制。規則 `isStaff()` 排除 `emsManager`，
 > 　　　　 `unlockRequests` 讀取另加 `isLockManager()`（見 2.1.1、2.7、3）
@@ -411,12 +415,31 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
   那是維護時才用得到的東西，對分隊只是雜訊；要追整個過程請看執行電腦的
   `tools/ems-report/out/watch.log`，比這一欄清楚得多。
   一句話的對照表集中在 `src/config/constants.ts` 的 `UNLOCK_RESULT_SUMMARY`。
+- **看得到所有工單的人另外看得到「備份／比對」那一塊**（v1.35，`revision` 欄位，使用者 2026-11-03 指定）：
+  救護科電腦按下「調整為未結案」之前，會先把原本的「救護紀錄PDF(桃)」上傳到案件內部那一張紀錄表的「上傳」
+  （檔案類型「其他」，檔案說明 `救護紀錄表內容-v1`，解鎖過幾次就往上加），之後每次開啟（監看則是每天）
+  確認案件結案了沒，結案就比對前後兩份。這一塊顯示：
+
+  | `revision.state` | 顯示 |
+  | --- | --- |
+  | `waiting` | 已備份原紀錄表，等結案後比對 |
+  | `compared` | 結案後比對完成（N 處不同／沒有改動），下面條列**改了哪些地方** |
+  | `superseded` | 結案前又解鎖一次，改用下一次的備份比對 |
+  | `expired` | 解鎖後太久沒結案，不再比對（本機預設 60 天） |
+  | `gaveUp` | 比對一直失敗，請自行到系統核對 |
+
+  條列的寫法是「更正「姓名」」「「到院時間」10:38 → 10:45」：**姓名、身分證、電話、地址這類只寫欄位名、不寫內容**；
+  只有時間、檢傷、生命徵象這類單看認不出是誰的欄位，而且值只是數字或分級時，才寫出改前改後
+  （判斷在本機工具 `sheetDiff.toCloudItems`，見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 2.13）。
+  完整的改前改後只存在救護科電腦的 `out/internal/解鎖前後比對/`。
+  申請人自己看不到這一塊（這是救護科在核對分隊解鎖後改了什麼）；
+  狀態文字集中在 `src/config/constants.ts` 的 `UNLOCK_REVISION_LABELS`。
 
 **管理員專屬的兩個動作**（v1.18.3 起，每一列各一顆按鈕，按下前都會再確認一次）：
 
 | 動作 | 效果 | 什麼時候用 |
 | --- | --- | --- |
-| **重新送單** | 狀態退回 `pending`、`result` 清空，救護科電腦下一輪會再跑一次 | 解鎖流程本身出過狀況（例如頁面沒載完被誤判成「查無案件」），案件其實沒問題 |
+| **重新送單** | 狀態退回 `pending`、`result` 與 `revision` 清空，救護科電腦下一輪會再跑一次（會備份新的一版） | 解鎖流程本身出過狀況（例如頁面沒載完被誤判成「查無案件」），案件其實沒問題 |
 | **刪除** | 整張工單刪掉，**無法復原** | 誤送、重複送、或已經人工處理完不需要留著 |
 
 「待處理」的工單不需要重新送單，該按鈕會停用。兩個動作都只有管理員做得到——
@@ -581,11 +604,14 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
   ——文件 ID 就是年份，重複匯入同年直接覆蓋。
 - `unlockRequests/{id}`（v1.17 新增）：{ temsis, reason, requestedBy, requestedByName, requestedAt,
   status（pending/running/unlocked/**usageCleared**/noAction/failed/**locked**（v1.32））, result（{caseDate, vehicle, squad, detail,
-  processedAt, processedBy} 或 null）, **lockBypass**（v1.33，不受鎖定時段限制；管理員／救護科管理者送的或管理員重新送單的為 true）}
+  processedAt, processedBy} 或 null）, **lockBypass**（v1.33，不受鎖定時段限制；管理員／救護科管理者送的或管理員重新送單的為 true）,
+  **revision**（v1.35，解鎖前備份 → 結案後比對：{version, remark, state（waiting/compared/superseded/expired/gaveUp）,
+  backedUpAt, lastCheckedAt, comparedAt, changeCount, items（改了哪些地方，**不含病患資料**）} 或 null；
+  由本機工具寫入，型別 `UnlockRequestRevision`）}
   ——**一個 TEMSIS 一張工單**。網頁只負責申請與查結果，實際解鎖由本機工具執行後回寫，
   原因與完整流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章。
   ⚠ 這是「個案編號上雲」的**唯一例外**（只有編號、事由與結果，沒有任何病患資料），
-  取捨說明見 TOOLS_SPEC 0.3。
+  取捨說明見 TOOLS_SPEC 0.3。`revision.items` 只寫欄位名（時間、檢傷、生命徵象可帶數值），同樣沒有病患資料。
 - `unlockPolicy/main`（v1.32 新增）：{ lockedThroughMonth（西元 `YYYY-MM` 或 null）, updatedAt（伺服器時間）, updatedBy, updatedByName }
   ——解鎖工單的鎖定時段，全系統只有這一份。`lockedThroughMonth` 是「鎖到哪個月（含）」，null＝沒有鎖定；
   文件不存在時視為 `2026-09`（見 2.8）。
@@ -618,7 +644,7 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
     v1.32 起另加 `!temsisInLockedPeriod(temsis)`：TEMSIS 前 4 碼＋`-`＋第 5～6 碼跟鎖定月份做字串比較，
     鎖定月份（含）以前的建立不了；鎖定月份讀 `unlockPolicy/main`，不存在時為 `'2026-09'`。
     v1.33 起例外：`lockBypass == true` 的不檢查鎖定，而 `lockBypass == true` **只有 `isLockManager()` 能帶**。
-  - 更新（回寫結果，以及管理員的「重新送單」）：僅 `isStaff()`，
+  - 更新（回寫結果與 `revision`，以及管理員的「重新送單」）：僅 `isStaff()`，
     且不可竄改 `temsis`／`reason`／`requestedBy`／`requestedAt`；
     `lockBypass` 只有 `isLockManager()` 能改（v1.33，否則本機工具那組一般使用者帳號就能把鎖定時段內的舊工單放行）。
   - 刪除：僅管理員。

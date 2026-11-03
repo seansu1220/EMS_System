@@ -39,6 +39,8 @@ import {
 } from './pageFinder.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
+import { addTrackedEntry, createEntry, pickSheetButton, toCloudRevision } from './revisionTrack.mjs';
+import { backupBeforeUnlock, TRACKER_FILE } from './sheetBackup.mjs';
 import {
   extractLabeledCode,
   extractLabeledValue,
@@ -65,6 +67,10 @@ import {
  * @property {string|null} [squad] 該張紀錄表的派遣分隊
  * @property {string|null} [usageOccupiedAt] 線上使用狀況那一列的日期（這筆從什麼時候被佔用著）；
  *   只有走第二條路徑時才會有值
+ * @property {{version: number, remark: string, backupFile: string}} [backup]
+ *   解鎖前備份成功時的版號、檔案說明與本機檔名（v1.54.0）
+ * @property {ReturnType<typeof toCloudRevision>|null} [revision]
+ *   要寫進工單的「已備份、等結案後比對」（只有解鎖成功且列入追蹤時才有）
  */
 
 /**
@@ -118,8 +124,9 @@ async function readCaseRowInfo(page, recordIndex) {
  * 開啟一張救護紀錄表，讀出指派案號與 TEMSIS。
  *
  * @param {number} index 第幾個「救護紀錄PDF」按鈕
- * @param {{exact?: boolean}} [options] 文字比對方式，**必須與算出 index 時相同**
- * @returns {Promise<{dispatchNo: string|null, temsis: string|null, kind: string}>}
+ * @param {{exact?: boolean, keepBytes?: boolean}} [options] 文字比對方式，**必須與算出 index 時相同**；
+ *   `keepBytes`＝連 PDF 原檔一起交回（解鎖前備份用，見 `sheetBackup.mjs`）
+ * @returns {Promise<{dispatchNo: string|null, temsis: string|null, kind: string, bytes: Buffer|null}>}
  */
 async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
   const sheet = await openRecordSheet(context, content(page), buttonTexts, index, options);
@@ -142,6 +149,7 @@ async function readSheetCodes(context, page, buttonTexts, index, options = {}) {
     caseDateLabel: caseDate?.label ?? null,
     vehicleLabel: vehicle?.label ?? null,
     kind: sheet.kind,
+    bytes: sheet.bytes ?? null,
     /** 欄位抓不到時用來排查的標籤清單（只有欄位名稱，沒有內容）。 */
     availableLabels: dispatchNo && caseDate && vehicle ? [] : listSheetLabels(sheet.text),
   };
@@ -256,8 +264,31 @@ export async function performUnlock(page, unlockIndex) {
 }
 
 /**
+ * 開查詢結果那一列的紀錄表：優先開「救護紀錄PDF(桃)」，並留下原檔供解鎖前備份。
+ *
+ * 同一列有兩顆紀錄表按鈕，舊版一律開第一顆（不一定是「(桃)」那顆）。
+ * 使用者 2026-11-03 指定備份與比對都用「(桃)」，所以改成明確挑它；
+ * 萬一「(桃)」那份讀不到指派案號，再回頭開另一顆讀案號——不能因為換了一顆按鈕就讓解鎖整個卡住。
+ *
+ * @param {import('./pageFinder.mjs').ClickableMatch[]} row 查詢結果那一列的紀錄表按鈕
+ */
+async function readListSheet(context, page, row) {
+  const sheetButton = pickSheetButton(row, UNLOCK.backup.sheetButtonMarker);
+  const codes = await readSheetCodes(context, page, UNLOCK.buttonTexts.openRecordSheet, sheetButton.index, {
+    keepBytes: UNLOCK.backup.enabled,
+  });
+  const other = row.find((button) => button.index !== sheetButton.index);
+  if (codes.dispatchNo || !other) return codes;
+  log.warn(`「${sheetButton.text}」讀不到指派案號，改開同一列的「${other.text}」讀案號`);
+  const fallback = await readSheetCodes(context, page, UNLOCK.buttonTexts.openRecordSheet, other.index);
+  // 案號與 TEMSIS 取自讀得到的那一份；要備份的原檔仍是「(桃)」那一份。
+  return { ...fallback, bytes: codes.bytes };
+}
+
+/**
  * 步驟 1~2：以 TEMSIS 查到案件，開紀錄表取得指派案號。
- * @returns {Promise<{dispatchNo: string, sheetTemsis: string|null}>}
+ * @returns {Promise<{dispatchNo: string, sheetTemsis: string|null, caseDate: string|null,
+ *   sheetBytes: Buffer|null}>} `sheetBytes`＝「救護紀錄PDF(桃)」原檔（解鎖前備份用）
  */
 async function findDispatchNoByTemsis(context, page, temsis, range) {
   log.step(`查詢救護紀錄表（TEMSIS ${maskCode(temsis)}）`);
@@ -282,7 +313,7 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   // 先從查詢結果那一列讀日期與出勤單位（HTML 表格有標題列可對照，比從 PDF 抓可靠）。
   const listInfo = await readListRowInfo(page, rows[0][0].index);
 
-  const codes = await readSheetCodes(context, page, UNLOCK.buttonTexts.openRecordSheet, rows[0][0].index);
+  const codes = await readListSheet(context, page, rows[0]);
   if (!codes.dispatchNo) {
     await captureSnapshot(context, '解鎖-紀錄表讀不到指派案號');
     throw new Error(
@@ -314,7 +345,7 @@ async function findDispatchNoByTemsis(context, page, temsis, range) {
   }
   // 出勤車輛不在這裡讀：一件案子可能出動兩台車，要等確定解哪一張紀錄表後，
   // 才從案件內部那一列讀（見 readCaseRowInfo）。
-  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis, caseDate };
+  return { dispatchNo: codes.dispatchNo, sheetTemsis: codes.temsis, caseDate, sheetBytes: codes.bytes };
 }
 
 /**
@@ -400,12 +431,15 @@ export async function locateUnlockTarget(context, page, temsis, deps = {}) {
     };
   }
   if (paired.unlockCount === 1) {
+    // 取「那顆按鈕所在的那一列」，不是固定第一張：第 1 張沒鎖頭、按鈕在第 2 張那一列時，
+    // 舊版會把第 1 張當目標，讀到的車輛是別台的；v1.54.0 起還要往那一列的「上傳」備份，傳錯列更不行。
+    const owner = paired.pairs.find((pair) => pair.unlockIndex === 0);
     return {
       temsis,
       status: '已定位',
       unlockIndex: 0,
-      recordIndex: paired.pairs[0]?.recordIndex ?? 0,
-      detail: '案件內只有一張紀錄表，該張即為解鎖目標',
+      recordIndex: owner?.recordIndex ?? paired.pairs[0]?.recordIndex ?? 0,
+      detail: '案件內只有一顆解鎖按鈕，它所在的那張紀錄表即為解鎖目標',
     };
   }
   if (paired.recordCount === 0) {
@@ -646,18 +680,104 @@ async function applyOnlineUsageFallback(context, page, temsis, outcome, options)
 }
 
 /**
+ * 解鎖前先備份原本的紀錄表（v1.54.0，使用者 2026-11-03 指定），並確認目標沒變。
+ *
+ * 備份失敗（重試完仍不行）就**不解鎖**、改報需人工處理：沒留住原本的內容，
+ * 之後結案了也無從比對改了什麼（使用者 2026-11-03 決定）。
+ *
+ * 上傳會把畫面帶離案件內部，所以備份完要**重新進入案件**，並確認
+ * 「第 N 個解鎖按鈕」對到的仍是同一張、而且還鎖著——對不上就不猜，交給人。
+ *
+ * @param {UnlockOutcome} outcome 會被就地更新（說明、狀態、`backup`）
+ * @param {{sheetBytes: Buffer|null}} caseInfo
+ * @param {() => Promise<unknown>} reenterCase
+ * @returns {Promise<boolean>} 可以繼續按下解鎖（試跑一律回 false）
+ */
+async function prepareBackupBeforeUnlock(context, page, outcome, caseInfo, reenterCase, options) {
+  if (!UNLOCK.backup.enabled) return !options.dryRun;
+  const result = await backupBeforeUnlock(context, page, {
+    temsis: outcome.temsis,
+    recordIndex: outcome.recordIndex ?? 0,
+    bytes: caseInfo.sheetBytes,
+    dryRun: options.dryRun,
+    reenterCase,
+  });
+  if (!result.ok) {
+    outcome.status = '需人工處理';
+    outcome.detail = `${outcome.detail}；${result.detail}。為了保留原本的內容，這筆沒有解鎖`;
+    log.warn(`${maskCode(outcome.temsis)}：${outcome.detail}`);
+    return false;
+  }
+  outcome.detail = `${outcome.detail}；${result.detail}`;
+  if (options.dryRun) return false;
+  outcome.backup = { version: result.version, remark: result.remark, backupFile: result.backupFile };
+
+  try {
+    await reenterCase();
+  } catch (error) {
+    outcome.status = '需人工處理';
+    outcome.detail = `${outcome.detail}；備份後要重新進入案件時失敗（${error instanceof Error ? error.message : error}），沒有解鎖`;
+    return false;
+  }
+  const target = await readTargetRecord(page, outcome.unlockIndex);
+  if (!target || target.recordIndex !== outcome.recordIndex || !target.locked) {
+    outcome.status = '需人工處理';
+    outcome.detail = `${outcome.detail}；備份後重新進入案件，第 ${outcome.unlockIndex + 1} 個解鎖按鈕`
+      + (target ? `對到的是第 ${target.recordIndex + 1} 張「${target.recordText}」` : '找不到對應的那一列')
+      + `（原本是第 ${(outcome.recordIndex ?? 0) + 1} 張、有鎖頭），不猜，沒有解鎖`;
+    log.warn(`${maskCode(outcome.temsis)}：${outcome.detail}`);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 解鎖成功後列入「結案後比對」的追蹤清單（見 `revisionCheck.mjs`）。
+ *
+ * 只有**確定解開了**才列：按了但無法確認的那種，案件可能仍是已結案，
+ * 之後一查就會拿兩份一樣的紀錄表比出「沒有改動」，反而誤導。
+ *
+ * @param {UnlockOutcome} outcome 會被就地補上 `revision`
+ * @param {string|null} requestId 線上工單的文件 ID（手動解鎖為 null）
+ */
+async function trackForRevision(outcome, requestId) {
+  if (!outcome.backup) return;
+  if (outcome.status !== '已解鎖') {
+    outcome.detail = `${outcome.detail}（已上傳備份 ${outcome.backup.remark}，但無法確認解鎖，未列入結案後比對）`;
+    return;
+  }
+  const entry = createEntry({
+    temsis: outcome.temsis,
+    version: outcome.backup.version,
+    remark: outcome.backup.remark,
+    backupFile: outcome.backup.backupFile,
+    requestId,
+    caseDate: outcome.caseDate ?? null,
+    vehicle: outcome.vehicle ?? null,
+    squad: outcome.squad ?? null,
+  }, new Date());
+  try {
+    await addTrackedEntry(TRACKER_FILE, entry);
+    outcome.revision = toCloudRevision(entry);
+    log.info(`已列入結案後比對：之後開啟線上解鎖工具時會確認結案了沒，結案就比對 ${entry.remark}`);
+  } catch (error) {
+    log.warn(`追蹤清單寫不進去，這件結案後不會自動比對：${error instanceof Error ? error.message : error}`);
+  }
+}
+
+/**
  * 處理一筆 TEMSIS。
- * @param {{dryRun: boolean}} options dryRun＝true 時只定位，不按下解鎖
+ * @param {{dryRun: boolean, requestId?: string|null}} options dryRun＝true 時只定位，不按下解鎖；
+ *   `requestId`＝線上工單的文件 ID（結案後比對的結果要寫回那張工單）
  * @returns {Promise<UnlockOutcome>}
  */
 async function processTemsis(context, page, temsis, range, options) {
   try {
     const caseInfo = await findDispatchNoByTemsis(context, page, temsis, range);
     await openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range);
-    const outcome = await locateUnlockTarget(context, page, temsis, {
-      // 走同一條路重新查一次案件；比對到一半畫面被導走時才用得到。
-      reenterCase: () => openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range),
-    });
+    // 走同一條路重新查一次案件；比對到一半畫面被導走、或備份上傳完要回來時用得到。
+    const reenterCase = () => openCaseByDispatchNo(context, page, caseInfo.dispatchNo, range);
+    const outcome = await locateUnlockTarget(context, page, temsis, { reenterCase });
     outcome.caseDate = caseInfo.caseDate;
     // 「無需處理」是正常結果，不該用警告的樣子出現在紀錄裡。
     if (outcome.status === '已定位') log.ok(`${maskCode(temsis)}：${outcome.detail}`);
@@ -679,8 +799,13 @@ async function processTemsis(context, page, temsis, range, options) {
     }
 
     // 只有明確定位到目標才會動手；其餘狀態一律略過，交給人處理。
-    if (outcome.status === '已定位' && !options.dryRun) {
-      await unlockLocatedTarget(page, outcome);
+    // 動手之前先備份原本的紀錄表（試跑時只看上傳畫面找不找得到、會是第幾版）。
+    if (outcome.status === '已定位') {
+      const ready = await prepareBackupBeforeUnlock(context, page, outcome, caseInfo, reenterCase, options);
+      if (ready) {
+        await unlockLocatedTarget(page, outcome);
+        await trackForRevision(outcome, options.requestId ?? null);
+      }
     }
     // 紀錄表沒有鎖頭時**還沒完**：卡住的原因可能是被線上使用佔用著，
     // 要再去「系統設定 → 線上使用狀況」把那筆佔用紀錄刪掉才放得開
@@ -740,17 +865,19 @@ export async function promptTemsisList() {
  *
  * @param {import('./session.mjs').EmsSession} session
  * @param {{temsisList: string[], range: import('./dateRange.mjs').MonthRange,
- *   dryRun?: boolean,
+ *   dryRun?: boolean, requestIds?: (string|null)[],
  *   onCaseStart?: (temsis: string, index: number) => Promise<void>|void,
  *   onCaseDone?: (outcome: UnlockOutcome, index: number) => Promise<void>|void}} options
  *   dryRun＝true 時只定位、不解鎖。
+ *   `requestIds`：與 `temsisList` 一一對應的線上工單文件 ID（手動解鎖不給），
+ *   結案後比對的結果才知道要寫回哪一張工單。
  *   兩個回呼供**線上工單**逐筆回寫進度與結果用（見 `unlockQueue.mjs`）：
  *   跑完整批才一次回寫的話，中途關掉視窗前面做完的幾筆在網頁上仍會停在「待處理」。
  *   回呼丟出例外不會中斷解鎖流程——雲端寫不進去是它的事，案件已經解了。
  * @returns {Promise<UnlockOutcome[]>}
  */
 export async function runUnlockFlow(session, options) {
-  const { temsisList, range, dryRun = false, onCaseStart, onCaseDone } = options;
+  const { temsisList, range, dryRun = false, requestIds = [], onCaseStart, onCaseDone } = options;
   // 開頭這幾行要把**兩條解鎖路徑**都講到（使用者 2026-09-13 指出）：
   // 只寫「會按下調整為未結案」的話，看的人不會知道它也可能去刪線上使用狀況的紀錄。
   const unlockButton = UNLOCK.buttonTexts.unlock[0];
@@ -759,7 +886,9 @@ export async function runUnlockFlow(session, options) {
     log.step(`試跑模式：只找出該怎麼解，不會按下「${unlockButton}」，也不會刪除「${usageMenu}」的紀錄`);
   } else {
     log.step('正式模式：定位到目標後會**實際動手**');
-    log.info(`有鎖頭的案件：按下「${unlockButton}」`);
+    log.info(UNLOCK.backup.enabled
+      ? `有鎖頭的案件：先把原本的紀錄表備份上傳（${UNLOCK.backup.remarkPrefix}N），再按下「${unlockButton}」`
+      : `有鎖頭的案件：按下「${unlockButton}」`);
     log.info(`沒鎖頭卻被佔用的案件：刪除「${usageMenu}」裡的那一列`);
     log.info('定位不明確的案件一律略過，不會亂解。每筆都會記下案件日期與出勤車輛供事後核對。');
   }
@@ -781,7 +910,10 @@ export async function runUnlockFlow(session, options) {
   for (const [position, temsis] of temsisList.entries()) {
     log.step(`第 ${position + 1} / ${temsisList.length} 筆：${maskCode(temsis)}`);
     await notify(onCaseStart, temsis, position);
-    const outcome = await processTemsis(session.context, session.page, temsis, range, { dryRun });
+    const outcome = await processTemsis(session.context, session.page, temsis, range, {
+      dryRun,
+      requestId: requestIds[position] ?? null,
+    });
     outcomes.push(outcome);
     await notify(onCaseDone, outcome, position);
   }
@@ -906,5 +1038,6 @@ function describeAction(outcome) {
   const sheet = typeof outcome.recordIndex === 'number' && outcome.recordIndex >= 0
     ? `第 ${outcome.recordIndex + 1} 張紀錄表`
     : '紀錄表張次不明';
-  return `${UNLOCK.buttonTexts.unlock[0]}（${sheet}）`;
+  const backup = outcome.backup ? `，已備份 ${outcome.backup.remark}` : '';
+  return `${UNLOCK.buttonTexts.unlock[0]}（${sheet}${backup}）`;
 }

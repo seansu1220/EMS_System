@@ -34,6 +34,8 @@ import type {
   TemsisLockedError,
   UnlockRequest,
   UnlockRequestResult,
+  UnlockRequestRevision,
+  UnlockRevisionState,
 } from '../types/unlockRequest';
 
 /** Firestore Timestamp / 字串 → ISO 字串。 */
@@ -42,6 +44,28 @@ function toIso(value: unknown): string {
     return (value as { toDate: () => Date }).toDate().toISOString();
   }
   return typeof value === 'string' ? value : '';
+}
+
+/** 認得的比對狀態；不認得的一律當「等待結案」，不會讓畫面壞掉。 */
+const REVISION_STATES: readonly UnlockRevisionState[] = ['waiting', 'compared', 'superseded', 'expired', 'gaveUp'];
+
+/** Firestore 的 `revision` 欄位 → 強型別；不是物件就當沒有。 */
+function mapRevision(value: unknown): UnlockRequestRevision | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<Record<keyof UnlockRequestRevision, unknown>>;
+  const state = REVISION_STATES.includes(raw.state as UnlockRevisionState)
+    ? (raw.state as UnlockRevisionState)
+    : 'waiting';
+  return {
+    version: typeof raw.version === 'number' ? raw.version : 0,
+    remark: typeof raw.remark === 'string' ? raw.remark : '',
+    state,
+    backedUpAt: toIso(raw.backedUpAt),
+    lastCheckedAt: toIso(raw.lastCheckedAt) || null,
+    comparedAt: toIso(raw.comparedAt) || null,
+    changeCount: typeof raw.changeCount === 'number' ? raw.changeCount : null,
+    items: Array.isArray(raw.items) ? raw.items.filter((item): item is string => typeof item === 'string') : [],
+  };
 }
 
 /** 將 Firestore 文件轉為強型別工單。 */
@@ -67,6 +91,7 @@ function mapRequest(snapshot: QueryDocumentSnapshot<DocumentData>): UnlockReques
           processedBy: result.processedBy ?? '',
         }
       : null,
+    revision: mapRevision(data.revision),
   };
 }
 
@@ -174,6 +199,7 @@ export async function createUnlockRequests(
         requestedAt: serverTimestamp(),
         status: 'pending',
         result: null,
+        revision: null,
         lockBypass,
       });
     }
@@ -204,6 +230,8 @@ export async function requeueUnlockRequest(requestId: string): Promise<void> {
     await updateDoc(doc(db, COLLECTIONS.unlockRequests, requestId), {
       status: 'pending',
       result: null,
+      // 上一次的備份／比對進度跟著清掉：重跑會備份新的一版，舊的不該還掛在畫面上。
+      revision: null,
       lockBypass: true,
     });
   } catch (error) {

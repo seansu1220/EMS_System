@@ -17,6 +17,8 @@ import { resetStuckDevicesSafely } from './deviceReset.mjs';
 import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
+import { checkRevisionsSafely } from './revisionCheck.mjs';
+import { createDailyTrigger } from './revisionTrack.mjs';
 import { ensureSignedIn, isSignedIn } from './session.mjs';
 import { runUnlockFlow, printUnlockSummary } from './unlock.mjs';
 import { fetchPendingRequests, markRunning, resetToPending, saveResult } from './unlockQueue.mjs';
@@ -119,6 +121,8 @@ export async function processBatch(session, queue, requests) {
   let requeued = 0;
   const outcomes = await runUnlockFlow(session, {
     temsisList: requests.map((request) => request.temsis),
+    // 結案後比對的結果要寫回同一張工單，所以把工單編號一起帶進去。
+    requestIds: requests.map((request) => request.id),
     // 現算而不是沿用開視窗時的快照，跨夜之後才不會漏掉當天的案件。
     range: refreshQueryRange(session),
     dryRun: false,
@@ -151,9 +155,13 @@ export async function processBatch(session, queue, requests) {
  *   `dryRun`＝true 時只監看與心跳、不解鎖也不回寫
  *   （這正好可以拿來實測「登入到底能撐多久」）
  * @param {{fetchPending?: Function, processBatch?: Function, heartbeat?: Function,
- *   ensureSignedIn?: Function, resetDevices?: Function}} [deps]
- *   碰外部世界的五件事都可以換成替身，測試才跑得起來
- *   （比照 `locateUnlockTarget` 的既有作法）。
+ *   ensureSignedIn?: Function, resetDevices?: Function, checkRevisions?: Function,
+ *   dailyTrigger?: {isDue: () => boolean, markDone: () => void}}} [deps]
+ *   碰外部世界的六件事都可以換成替身，測試才跑得起來
+ *   （比照 `locateUnlockTarget` 的既有作法）；`dailyTrigger` 換掉就能測「跨日」。
+ *
+ * **開啟時與每天一次**（跨日後的第一輪）會確認解鎖過的案件結案了沒，結案就比對
+ * 解鎖前後的紀錄表（見 `revisionCheck.mjs`，使用者 2026-11-03 指定）。試跑模式不做。
  *
  * **每次剛登入後**（監看開啟時、掉線重新登入後）會先重置裝置管理裡
  * 卡在「持續取得資料」的裝置（見 `deviceReset.mjs`，使用者 2026-10-29 指定）。
@@ -165,6 +173,8 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   const beat = deps.heartbeat ?? heartbeat;
   const ensureLogin = deps.ensureSignedIn ?? ensureSignedIn;
   const resetDevices = deps.resetDevices ?? resetStuckDevicesSafely;
+  const checkRevisions = deps.checkRevisions ?? checkRevisionsSafely;
+  const daily = deps.dailyTrigger ?? createDailyTrigger();
   const { pollMs, heartbeatMs, statusEveryMs, reloginWaitMs, reloginRemindEveryMs } = UNLOCK.watch;
   const startedAt = Date.now();
   /** 最近一次登入成功的時間；掉線期間為 null。這才是「連續登入多久」的基準。 */
@@ -203,6 +213,15 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
 
   // 剛登入完成：先把卡住的裝置重置一輪（試跑時只回報）。
   await resetDevicesNow(options.dryRun);
+
+  /** 確認解鎖過的案件結案了沒（開啟時一次，之後每天一次；試跑不做）。 */
+  const checkRevisionsNow = async () => {
+    if (options.dryRun) return;
+    await checkRevisions(session, { queue });
+    daily.markDone();
+    lastHeartbeat = Date.now(); // 剛剛才操作過系統，心跳時間重算
+  };
+  await checkRevisionsNow();
 
   /** 目前是不是處在「掉線、等使用者回來登入」的狀態。 */
   let waitingForLogin = false;
@@ -281,6 +300,9 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
         continue;
       }
     }
+
+    // 跨日了：再確認一輪結案（掉線期間不做，等重新登入後的下一輪）。
+    if (daily.isDue()) await checkRevisionsNow();
 
     if (Date.now() - lastStatus >= statusEveryMs) {
       lastStatus = Date.now();
