@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toQueueStatus } from './unlockQueue.mjs';
+import { isTemsisInLockedPeriod, toQueueStatus } from './unlockQueue.mjs';
 import { runUnlockFlow } from './unlock.mjs';
 
 test('解鎖成功對應到網頁的「已解鎖」', () => {
@@ -29,6 +29,20 @@ test('需人工處理、查無案件、失敗，對申請人來說都是「需�
 
 test('沒見過的狀態一律當成失敗，不可以誤報成已解鎖', () => {
   assert.equal(toQueueStatus('某個新狀態'), 'failed');
+});
+
+test('鎖定時段：鎖定月份當月與以前都算鎖定，之後的不算', () => {
+  // 鎖到 2026-09（民國 115 年 9 月，含）：9/30 的案件鎖、10/1 的不鎖、跨年的舊案件也鎖。
+  assert.equal(isTemsisInLockedPeriod('2026093010100310380001', '2026-09'), true);
+  assert.equal(isTemsisInLockedPeriod('2026090110100310380001', '2026-09'), true);
+  assert.equal(isTemsisInLockedPeriod('2025120110100310380001', '2026-09'), true);
+  assert.equal(isTemsisInLockedPeriod('2026100110100310380001', '2026-09'), false);
+  assert.equal(isTemsisInLockedPeriod('2027010110100310380001', '2026-09'), false);
+});
+
+test('鎖定時段：沒有鎖定或編號太短（判不出月份）一律不算鎖定', () => {
+  assert.equal(isTemsisInLockedPeriod('2025120110100310380001', null), false);
+  assert.equal(isTemsisInLockedPeriod('20251', '2026-09'), false);
 });
 
 /** 造一個假 session：解鎖流程只會用到 context 與 page，這裡都不會真的被碰到。 */

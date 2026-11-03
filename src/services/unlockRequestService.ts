@@ -25,9 +25,12 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { COLLECTIONS, TEMSIS_CODE_LENGTH, UNLOCK_REQUEST_MAX_BATCH } from '../config/constants';
+import { formatRocMonth, isTemsisLocked } from '../lib/unlockLockLogic';
 import type { AppUser } from '../types/user';
+import type { MonthKey } from '../types/unlockPolicy';
 import type {
   TemsisLengthError,
+  TemsisLockedError,
   UnlockRequest,
   UnlockRequestResult,
 } from '../types/unlockRequest';
@@ -104,16 +107,41 @@ export function describeTemsisLengthError({ temsis, length }: TemsisLengthError)
 }
 
 /**
+ * 挑出案件日期落在鎖定時段內的 TEMSIS 編號（純函式，v1.32 起）。
+ *
+ * 案件月份取 TEMSIS 前 6 碼；鎖定月份當月也算在內。
+ * 安全規則用同一種比法再擋一次，這裡先擋是為了讓人當場看到原因，而不是一句「權限不足」。
+ *
+ * @param lockedThroughMonth 鎖定到哪個月（含）；null＝沒有鎖定
+ */
+export function findTemsisLockedErrors(
+  temsisList: string[],
+  lockedThroughMonth: MonthKey | null,
+): TemsisLockedError[] {
+  if (lockedThroughMonth === null) return [];
+  return temsisList
+    .filter((temsis) => isTemsisLocked(temsis, lockedThroughMonth))
+    .map((temsis) => ({ temsis, lockedThroughMonth }));
+}
+
+/** 落在鎖定時段時給使用者看的一句話（畫面與送出檢查共用同一種說法）。 */
+export function describeTemsisLockedError({ temsis, lockedThroughMonth }: TemsisLockedError): string {
+  return `${temsis}：${formatRocMonth(lockedThroughMonth)}（含）以前的案件，該時段已經被鎖，請洽救護科人員`;
+}
+
+/**
  * 送出一批解鎖工單（一個 TEMSIS 一張工單，方便逐筆回報結果）。
  *
  * @param user 申請人（顯示名稱會一併存下，看清單時不必再查 users）
+ * @param lockedThroughMonth 目前的鎖定時段（含）；null＝沒有鎖定
  * @returns 實際建立的工單數
- * @throws 清單為空、超過單次上限、有編號長度不對、或寫入失敗時
+ * @throws 清單為空、超過單次上限、有編號長度不對、落在鎖定時段、或寫入失敗時
  */
 export async function createUnlockRequests(
   user: AppUser,
   temsisList: string[],
   reason: string,
+  lockedThroughMonth: MonthKey | null,
 ): Promise<number> {
   if (temsisList.length === 0) throw new Error('請至少填入一個 TEMSIS 編號。');
   if (temsisList.length > UNLOCK_REQUEST_MAX_BATCH) {
@@ -125,6 +153,10 @@ export async function createUnlockRequests(
   const lengthErrors = findTemsisLengthErrors(temsisList);
   if (lengthErrors.length > 0) {
     throw new Error(lengthErrors.map(describeTemsisLengthError).join('\n'));
+  }
+  const lockedErrors = findTemsisLockedErrors(temsisList, lockedThroughMonth);
+  if (lockedErrors.length > 0) {
+    throw new Error(lockedErrors.map(describeTemsisLockedError).join('\n'));
   }
   try {
     for (const temsis of temsisList) {

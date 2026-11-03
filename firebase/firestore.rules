@@ -10,6 +10,8 @@ rules_version = '2';
 // - **解鎖專用（role == 'unlocker'，v1.17 起）**：權限最低。只能建立解鎖工單、
 //   讀取**自己送出的**工單；業務/屬性/公版/假日一律讀不到也寫不了。
 //   給各分隊申請解鎖用，不需要也不應該看到科內業務。
+// - **救護科管理者（role == 'emsManager'，v1.32 起）**：權限同一般使用者，
+//   另外可以改解鎖工單的「鎖定時段」（unlockPolicy/main）。
 // - 待審核 / 未通過的帳號：完全不能存取業務資料，只能讀寫自己的 users 文件。
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -41,6 +43,12 @@ service cloud.firestore {
     // ⚠️ 須與 src/lib/permissions.ts 的 canUseTaskSystem() 一致。
     function isStaff() {
       return isAdmin() || (isApproved() && myUser().role != 'unlocker');
+    }
+
+    // 可設定解鎖工單「鎖定時段」的人＝管理員，或角色為「救護科管理者」的已核准帳號（v1.32 起）。
+    // ⚠️ 須與 src/lib/permissions.ts 的 canManageUnlockLock() 一致。
+    function isLockManager() {
+      return isAdmin() || (isApproved() && myUser().role == 'emsManager');
     }
 
     // 建立資料時記錄建立者，強制等於自己。
@@ -117,17 +125,59 @@ service cloud.firestore {
     // ⚠️ 這一條同時管住 list：Firestore 會要求查詢本身「證明得出結果都符合規則」，
     // 因此解鎖專用帳號**必須**帶上 where('requestedBy','==',uid) 才查得動，
     // 沒帶條件的整包查詢會被直接拒絕（見 unlockRequestService.subscribeUnlockRequests）。
+    // ── 鎖定時段（v1.32 起）──
+    // unlockPolicy/main：{ lockedThroughMonth（西元 'YYYY-MM' 或 null）, updatedAt, updatedBy, updatedByName }
+    // 鎖定到某個月＝那個月（含）以前的案件**任何人都不能再送解鎖工單**。
+    // 案件月份取 TEMSIS 前 6 碼（前 8 碼就是案發日期），組成 'YYYY-MM' 跟鎖定月份做字串比較。
+    // ⚠️ 比法須與 src/lib/unlockLockLogic.ts 的 isTemsisLocked()、
+    //    tools/ems-report/unlockQueue.mjs 的 isTemsisInLockedPeriod() 完全相同。
+    function unlockPolicyPath() {
+      return /databases/$(database)/documents/unlockPolicy/main;
+    }
+
+    // 還沒有人設定過時，預設鎖到民國 115 年 9 月（使用者 2026-11-03 指定）。
+    // ⚠️ 須與 src/config/constants.ts 的 UNLOCK_LOCK_DEFAULT_THROUGH_MONTH 一致。
+    function lockedThroughMonth() {
+      return exists(unlockPolicyPath()) ? get(unlockPolicyPath()).data.lockedThroughMonth : '2026-09';
+    }
+
+    function temsisInLockedPeriod(temsis) {
+      let cutoff = lockedThroughMonth();
+      return cutoff != null && temsis[0:4] + '-' + temsis[4:6] <= cutoff;
+    }
+
+    match /unlockPolicy/{policyId} {
+      // 送工單前要先知道哪些月份不能送，所以已核准的帳號都讀得到。
+      allow read: if isApproved();
+
+      // 只有管理員與救護科管理者改得動，欄位固定、修改者必須是自己、時間必須是伺服器時間。
+      allow create, update: if isLockManager()
+        && policyId == 'main'
+        && request.resource.data.keys().hasOnly(['lockedThroughMonth', 'updatedAt', 'updatedBy', 'updatedByName'])
+        && (request.resource.data.lockedThroughMonth == null
+          || (request.resource.data.lockedThroughMonth is string
+            && request.resource.data.lockedThroughMonth.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')))
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedByName is string
+        && request.resource.data.updatedAt == request.time;
+
+      // 刪掉會悄悄退回預設值，一律禁止（要全部解除請把 lockedThroughMonth 設成 null）。
+      allow delete: if false;
+    }
+
     match /unlockRequests/{requestId} {
       allow read: if isStaff()
         || (isApproved() && resource.data.requestedBy == request.auth.uid);
 
       // 新工單一律從 pending 開始，且申請人必須是自己——
       // 不能替別人送，也不能直接送一張「已解鎖」的假工單。
+      // TEMSIS 至少 6 碼才判得出月份；落在鎖定時段內的一律不收（v1.32 起，管理員也一樣）。
       allow create: if isApproved()
         && request.resource.data.requestedBy == request.auth.uid
         && request.resource.data.status == 'pending'
         && request.resource.data.temsis is string
-        && request.resource.data.temsis.size() > 0;
+        && request.resource.data.temsis.size() >= 6
+        && !temsisInLockedPeriod(request.resource.data.temsis);
 
       // 只有業務人員能回寫結果，且不可竄改申請內容（TEMSIS、事由、申請人、申請時間）。
       allow update: if isStaff()

@@ -1,6 +1,10 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.31.1　建立日期：2026-07-22　最後更新：2026-10-27
+> 版本：v1.32.0　建立日期：2026-07-22　最後更新：2026-11-03
+> v1.32.0：新增**「救護科管理者」角色**（`emsManager`，權限同一般使用者＋可設定鎖定時段）；解鎖工單新增**鎖定時段**：
+> 　　　　 以月份為單位，鎖定月份（含）以前的案件（依 TEMSIS 前 6 碼）任何人都不能送解鎖申請，
+> 　　　　 畫面顯示「該時段已經被鎖，請洽救護科人員」；預設鎖到民國 115 年 9 月。新增 `unlockPolicy/main` 與安全規則、
+> 　　　　 工單新狀態 `locked`（時段已鎖定）（見 2.1.1、2.6、2.8、3）
 > v1.31.1：框選更好起手：頁面清單一律跟左邊工具列一樣高（頁面只有一排時下方空白也能拉框），卡片的邊框、頁碼文字處也能起手拉框（見 2.10）
 > v1.31.0：PDF 頁面清單可**一次選多頁、一起移動**：空白處拉框框選、Ctrl＋點選加選、Shift＋點選連選；拖曳勾選的其中一頁＝整批搬過去；
 > 　　　　 工具列新增「往前移／往後移」（整批移一格）（見 2.10）
@@ -114,22 +118,27 @@
 **資料範圍：全體已核准使用者共用同一批業務 / 屬性 / 待辦公版**（代理職務時可互相接手）。
 `ownerUid` 欄位語意自 v1.8 起改為「**建立者**」，不再用於資料隔離。
 
-| 動作 | 管理員 | 一般使用者（已核准） | **解鎖專用**（v1.17） | 待審核 / 未通過 |
-| --- | --- | --- | --- | --- |
-| 讀取業務、屬性、待辦公版 | ✅ | ✅ | ❌ | ❌ |
-| 新增 / 編輯業務（含進度、待辦、完成/解除） | ✅ | ✅ | ❌ | ❌ |
-| 新增 / 改名 / 排序屬性、新增與編輯待辦公版 | ✅ | ✅ | ❌ | ❌ |
-| **刪除業務** | ✅ | ❌ | ❌ | ❌ |
-| **刪除屬性**（v1.8.1 起） | ✅ | ❌ | ❌ | ❌ |
-| **刪除待辦公版**（v1.8.1 起） | ✅ | ❌ | ❌ | ❌ |
-| 使用者管理（核准 / 停用帳號 / 指派角色） | ✅ | ❌ | ❌ | ❌ |
-| **提出解鎖工單**（v1.17 起） | ✅ | ✅ | ✅ | ❌ |
-| **看得到所有人的解鎖工單** | ✅ | ✅ | ❌（只看自己送的） | ❌ |
-| **回寫解鎖結果**（本機工具用這個身分） | ✅ | ✅ | ❌ | ❌ |
+| 動作 | 管理員 | 一般使用者（已核准） | **救護科管理者**（v1.32） | **解鎖專用**（v1.17） | 待審核 / 未通過 |
+| --- | --- | --- | --- | --- | --- |
+| 讀取業務、屬性、待辦公版 | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 新增 / 編輯業務（含進度、待辦、完成/解除） | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 新增 / 改名 / 排序屬性、新增與編輯待辦公版 | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **刪除業務** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **刪除屬性**（v1.8.1 起） | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **刪除待辦公版**（v1.8.1 起） | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 使用者管理（核准 / 停用帳號 / 指派角色） | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **提出解鎖工單**（v1.17 起；鎖定時段內誰都不行，v1.32） | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **看得到所有人的解鎖工單** | ✅ | ✅ | ✅ | ❌（只看自己送的） | ❌ |
+| **回寫解鎖結果**（本機工具用這個身分） | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **設定解鎖工單的鎖定時段**（v1.32 起） | ✅ | ❌ | ✅ | ❌ | ❌ |
 
 **「解鎖專用」角色**（v1.17 起，使用者 2026-08-06 指定）：權限最低，給各分隊申請解鎖用。
 用這種帳號登入只進得去 `/unlock`，導覽列不顯示業務管理的任何入口，
 連 Firestore 都讀不到業務資料。管理員與一般使用者則兩邊都能用、可自由切換。
+
+**「救護科管理者」角色**（v1.32 起，`role == 'emsManager'`，使用者 2026-11-03 指定）：
+權限與一般使用者完全相同，另外可以在解鎖工單頁**鎖定／解鎖申請解鎖的時段**（見 2.8 鎖定時段）。
+不能刪除業務、不能管理使用者——那仍只限管理員。
 
 角色**只能由管理員在使用者管理頁指派**：註冊時一律是 member/pending，不能自己選；
 `admin` 也不在可指派清單內——管理員身分來自 email 白名單，改文件的 role 欄位並不會提權。
@@ -281,6 +290,7 @@
 - 每列顯示：顯示名稱、email、角色、狀態徽章（待審核＝橙、已核准＝綠、未通過＝紅）。
 - 動作（皆二次確認）：`核准`（→ approved）、`拒絕 / 停用`（→ rejected）。
 - 管理員自己的帳號與其他白名單 email 不可在此調整（權限來自 email 白名單）。
+- 角色下拉選單（`ASSIGNABLE_ROLES`）：**一般使用者／救護科管理者（v1.32）／解鎖專用**；選了立即生效，不另外確認。
 - 頁首顯示待審核數量提醒；非管理員進入此路徑一律導回首頁。
 
 ### 2.7 路由
@@ -323,6 +333,38 @@
 原因：長度不對的編號送出去，要等救護科電腦跑完回「查無案件」才知道打錯，白等一輪
 （使用者 2026-09-07 指定）。**只檢查長度**，不檢查編號真的存不存在——那要連上目標系統才知道。
 
+**鎖定時段（v1.32，使用者 2026-11-03 指定）。** 以**月份**為單位：鎖定到某個月，
+那個月（含）以前的救護紀錄表**任何人都不能再申請解鎖**（管理員、救護科管理者也一樣）。
+
+- **案件月份從 TEMSIS 前 6 碼判斷**（前 8 碼就是案發日期，本機工具實測 284 件全部吻合），
+  不必等救護科電腦查過才知道。
+- 頁首顯示一行提醒「115 年 9 月（含）以前的救護紀錄表已鎖定，不受理解鎖申請，有需要請洽救護科人員」。
+- 輸入框邊打邊檢查（同長度檢查），落在鎖定時段的每個編號各列一行：
+
+  > `2026093010100310380001`：115 年 9 月（含）以前的案件，該時段已經被鎖，請洽救護科人員
+
+  有這種編號時「送出申請」停用；鎖定設定還沒讀到之前也停用（免得送出才被規則擋下）。
+  `createUnlockRequests()` 送出前再擋一次，**安全規則是最終防線**（見 3 安全規則）。
+- **預設鎖到民國 115 年 9 月**（`UNLOCK_LOCK_DEFAULT_THROUGH_MONTH = '2026-09'`）：
+  資料庫還沒有 `unlockPolicy/main` 時，網頁、規則、本機工具三邊都用這個預設值；
+  救護科管理者存過一次之後就以資料庫為準。
+- **鎖定前就已排隊的工單**：救護科電腦拿單時會先讀鎖定設定，落在範圍內的直接回寫狀態
+  `locked`（時段已鎖定），不會真的去解鎖（見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 5.2）。
+- 救護科自己真的要改鎖定時段內的案件，可以先解鎖該月份，或在救護科電腦用本機工具手動解鎖（不經過工單）。
+
+**鎖定時段面板**（只有管理員與救護科管理者看得到，在申請表單上方，`UnlockLockPanel`）：
+
+| 元件 | 說明 |
+| --- | --- |
+| 目前狀態 | 「目前鎖定：115 年 9 月（含）以前的救護紀錄表，不受理解鎖申請。」＋最後修改者與時間（沿用預設值時註明） |
+| 民國年＋月份選單 | 年份從民國 110 年（`UNLOCK_LOCK_FIRST_ROC_YEAR`）列到今年；預設選在目前鎖定的月份 |
+| **鎖定到這個月（含）** | 鎖定範圍改成選的月份。只能往後推：已在鎖定範圍內會提示改按解鎖；不能鎖還沒到的月份 |
+| **從這個月起解鎖** | 鎖定範圍退回到選的月份的**前一個月**（鎖定是連續一段，無法只開中間某個月）。選的月份本來就沒鎖會提示 |
+| 全部解除 | `lockedThroughMonth` 設成 `null`，任何月份都可以申請 |
+
+三個動作按下前都會再確認一次。判斷邏輯集中在 `src/lib/unlockLockLogic.ts`（純函式：`planLock`／`planUnlock`／
+`isTemsisLocked`／`formatRocMonth`），讀寫在 `src/services/unlockPolicyService.ts`。
+
 **下半：工單清單。** 即時更新，新的排前面。管理員與一般使用者看得到全部（多一欄「申請人」），
 解鎖專用帳號只看得到自己送的。每一筆顯示狀態、TEMSIS、事由與結果：
 
@@ -334,6 +376,7 @@
 | `usageCleared` | 已解除佔用 | 本來就是未結案，但還有人開著；已經幫你放開，可以進系統修改了 |
 | `noAction` | 案件未結案 | 案件未結案，不需解鎖。有問題請洽救護科承辦人 |
 | `failed` | 需人工處理 | 請洽救護科承辦人處理 |
+| `locked`（v1.32） | 時段已鎖定 | 該時段已經被鎖，請洽救護科人員 |
 
 **`usageCleared` 是第二種解鎖方式的結果**（v1.20，使用者 2026-09-11 指定）。
 有些案件**本來就是未結案**（紀錄表後面沒有那個「鎖」字），分隊卻還是進不去改——
@@ -516,7 +559,7 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
 
 ## 3. 資料模型（Firestore）
 
-- `users/{uid}`：{ uid, email, displayName, **role**（admin/member/**unlocker**）, **status**（pending/approved/rejected）,
+- `users/{uid}`：{ uid, email, displayName, **role**（admin/member/**unlocker**/**emsManager**（v1.32））, **status**（pending/approved/rejected）,
   **reviewedAt**, **reviewedBy**, createdAt }（粗體為 v1.8 新增）
 - `categories/{id}`：{ name, sortOrder, ownerUid（建立者）, createdAt }
 - `tasks/{id}`：見 2.3 欄位表（ownerUid 為建立者）
@@ -525,12 +568,15 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
   offDayCount（全年放假天數，供人工核對）, updatedBy, updatedAt }（v1.12 新增，見 2.7）
   ——文件 ID 就是年份，重複匯入同年直接覆蓋。
 - `unlockRequests/{id}`（v1.17 新增）：{ temsis, reason, requestedBy, requestedByName, requestedAt,
-  status（pending/running/unlocked/**usageCleared**/noAction/failed）, result（{caseDate, vehicle, squad, detail,
+  status（pending/running/unlocked/**usageCleared**/noAction/failed/**locked**（v1.32））, result（{caseDate, vehicle, squad, detail,
   processedAt, processedBy} 或 null）}
   ——**一個 TEMSIS 一張工單**。網頁只負責申請與查結果，實際解鎖由本機工具執行後回寫，
   原因與完整流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章。
   ⚠ 這是「個案編號上雲」的**唯一例外**（只有編號、事由與結果，沒有任何病患資料），
   取捨說明見 TOOLS_SPEC 0.3。
+- `unlockPolicy/main`（v1.32 新增）：{ lockedThroughMonth（西元 `YYYY-MM` 或 null）, updatedAt（伺服器時間）, updatedBy, updatedByName }
+  ——解鎖工單的鎖定時段，全系統只有這一份。`lockedThroughMonth` 是「鎖到哪個月（含）」，null＝沒有鎖定；
+  文件不存在時視為 `2026-09`（見 2.8）。
 - `triageTagCounter/main`（v1.21 新增）：{ nextSerial（下一個要發的流水號，0 ~ 100000）, updatedAt }
   ——全系統只有這一份，測試用傷票的號碼從這裡接續往下發（見 2.9）。
 - `triageTagIssues/{起始流水號}`（v1.21 新增）：{ startSerial, count, **unit**, **weekIndex**, requestedBy, requestedByName, requestedAt }
@@ -556,10 +602,15 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
     這一條同時管住 list——Firestore 要求查詢本身證明得出結果都合規，
     因此解鎖專用帳號**必須**帶 `where('requestedBy','==',uid)` 才查得動。
   - 建立：任何已核准帳號皆可，但強制 `requestedBy == 自己`、`status == 'pending'`、
-    `temsis` 非空字串——不能替別人送，也不能直接送一張「已解鎖」的假工單。
+    `temsis` 為字串且**至少 6 碼**——不能替別人送，也不能直接送一張「已解鎖」的假工單。
+    v1.32 起另加 `!temsisInLockedPeriod(temsis)`：TEMSIS 前 4 碼＋`-`＋第 5～6 碼跟鎖定月份做字串比較，
+    鎖定月份（含）以前的**誰都建立不了**（管理員也一樣）；鎖定月份讀 `unlockPolicy/main`，不存在時為 `'2026-09'`。
   - 更新（回寫結果，以及管理員的「重新送單」）：僅 `isStaff()`，
     且不可竄改 `temsis`／`reason`／`requestedBy`／`requestedAt`。
   - 刪除：僅管理員。
+- `unlockPolicy`（v1.32 起）：已核准帳號都可讀；**只有 `isLockManager()`（管理員或 `role == 'emsManager'`）可寫**，
+  且文件 ID 必須是 `main`、欄位只能是那四個、`lockedThroughMonth` 為 null 或合法的 `YYYY-MM`、
+  `updatedBy == 自己`、`updatedAt == request.time`。**不可刪除**（刪掉會悄悄退回預設值；要全部解除請設 null）。
 - `triageTagCounter` / `triageTagIssues` / `triageTagUnitWeeks`（v1.21 起；單位週用量 v1.22 起）：
   - 讀：計數器任何已核准帳號可讀；領取紀錄 `isStaff()` 看全部，其他已核准帳號只讀得到自己的
     （同解鎖工單，查詢須帶 `where('requestedBy','==',uid)`）。
@@ -635,14 +686,15 @@ EMS_System/
 │  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）、
 │  │                pdfWorkspace.ts（工作區 reducer 與下載規劃，純函式）、pdfEditLogic.ts（標記與旋轉換算）、
 │  │                pdfPageLogic.ts（頁碼與檔名）、pdfEngine.ts（讀檔、圖片轉 PDF、打包）、pdfRender.ts（繪圖）、
-│  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）、pdfUsageLogic.ts（使用紀錄彙總）
+│  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）、pdfUsageLogic.ts（使用紀錄彙總）、
+│  │                unlockLockLogic.ts（解鎖工單鎖定時段的月份換算與判斷，純函式，v1.32）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
-│  │                userService、holidayService、unlockRequestService、triageTagService、pdfToolUsageService
+│  │                userService、holidayService、unlockRequestService、unlockPolicyService（v1.32）、triageTagService、pdfToolUsageService
 │  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、usePdfWorkspace、usePdfToolUsage
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
-│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、ui；
+│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、UnlockLockPanel（v1.32）、ui；
 │  │                pdf/（PdfToolbox 工作區與檔案列、工具列、頁面清單、側邊預覽面板、大圖、下載區、共用元件）
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
 │                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、

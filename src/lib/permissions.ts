@@ -67,7 +67,7 @@ export function canUseTaskSystem(user: AppUser | null): boolean {
   return isAdmin(user) || (isApproved(user) && user?.role !== 'unlocker');
 }
 
-/** 是否可使用解鎖工單（三種角色只要已核准都可以）。 */
+/** 是否可使用解鎖工單（所有角色只要已核准都可以）。 */
 export function canUseUnlockRequests(user: AppUser | null): boolean {
   return isApproved(user);
 }
@@ -89,6 +89,15 @@ export function isUnlockOnly(user: AppUser | null): boolean {
  */
 export function canSeeAllUnlockRequests(user: AppUser | null): boolean {
   return canUseTaskSystem(user);
+}
+
+/**
+ * 是否可設定解鎖工單的**鎖定時段**（v1.32 起：管理員與「救護科管理者」）。
+ *
+ * ⚠️ 須與 `firebase/firestore.rules` 的 `isLockManager()` 一致。
+ */
+export function canManageUnlockLock(user: AppUser | null): boolean {
+  return isAdmin(user) || (isApproved(user) && user?.role === 'emsManager');
 }
 
 /**

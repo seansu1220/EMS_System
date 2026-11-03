@@ -517,6 +517,21 @@ export const UNLOCK = {
   /** 查詢期間：今天往回推幾個月（使用者指定「近兩個月」）。 */
   lookbackMonths: 2,
 
+  /**
+   * 線上工單的「鎖定時段」（網頁 v1.32 起，救護科管理者在解鎖工單頁設定，存在 Firestore `unlockPolicy/main`）。
+   *
+   * 案件月份（TEMSIS 前 6 碼）在鎖定月份（含）以前的工單**不去解鎖**，直接回寫「時段已鎖定」。
+   * 網頁送出時就會擋，這裡處理的是「鎖定之前就已經排隊」的那幾張。
+   */
+  lock: {
+    /**
+     * 雲端還沒有人設定過時的預設值：民國 115 年 9 月（含）以前（使用者 2026-11-03 指定）。
+     * ⚠ 須與網頁 `src/config/constants.ts` 的 `UNLOCK_LOCK_DEFAULT_THROUGH_MONTH`、
+     *   `firebase/firestore.rules` 的 `lockedThroughMonth()` 一致。
+     */
+    defaultThroughMonth: '2026-09',
+  },
+
   /** 案件列表功能在左側選單的文字。 */
   caseListMenuText: '案件列表',
 

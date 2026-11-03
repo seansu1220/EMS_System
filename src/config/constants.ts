@@ -40,6 +40,8 @@ export const COLLECTIONS = {
   triageTagUnitWeeks: 'triageTagUnitWeeks',
   /** PDF 工具使用紀錄（每次下載一筆，只有管理員讀得到，保留 30 天，見 config/pdfTools）。 */
   pdfToolUsage: 'pdfToolUsage',
+  /** 解鎖工單的鎖定時段設定（只有一份文件 `main`，見 types/unlockPolicy）。 */
+  unlockPolicy: 'unlockPolicy',
 } as const;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */
@@ -90,6 +92,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   admin: '管理員',
   member: '一般使用者',
   unlocker: '解鎖專用',
+  emsManager: '救護科管理者',
 };
 
 /**
@@ -100,6 +103,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
  */
 export const ASSIGNABLE_ROLES: readonly { value: string; label: string; hint: string }[] = [
   { value: 'member', label: '一般使用者', hint: '可用業務管理與解鎖工單' },
+  { value: 'emsManager', label: '救護科管理者', hint: '一般使用者的權限，另外可以鎖定／解鎖申請解鎖的時段' },
   { value: 'unlocker', label: '解鎖專用', hint: '只能提出解鎖工單，看不到業務資料' },
 ];
 
@@ -116,6 +120,8 @@ export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }>
   // 直接進去改就好。本機工具的終端機仍講「本來就沒鎖」，那是給操作的人看的。
   noAction: { label: '案件未結案', tone: 'slate' },
   failed: { label: '需人工處理', tone: 'red' },
+  // 鎖定時段（v1.32）：送出時就會被擋，只有「鎖定前就已排隊」的工單會由本機工具標成這個狀態。
+  locked: { label: '時段已鎖定', tone: 'slate' },
 };
 
 /**
@@ -137,6 +143,7 @@ export const UNLOCK_RESULT_SUMMARY: Record<string, string> = {
   usageCleared: '本來就是未結案，但還有人開著；已經幫你放開，可以進系統修改了',
   noAction: '案件未結案，不需解鎖。有問題請洽救護科承辦人',
   failed: '請洽救護科承辦人處理',
+  locked: '該時段已經被鎖，請洽救護科人員',
 };
 
 /**
@@ -152,3 +159,19 @@ export const UNLOCK_REQUEST_MAX_BATCH = 50;
  * 白等一輪；所以在網頁送出前就用長度擋掉（使用者 2026-09-07 指定）。
  */
 export const TEMSIS_CODE_LENGTH = 22;
+
+/**
+ * 還沒有人設定過鎖定時段時（資料庫沒有 `unlockPolicy/main`）的預設值：
+ * 民國 115 年 9 月（含）以前的救護紀錄表一律不受理解鎖（使用者 2026-11-03 指定）。
+ *
+ * ⚠️ 須與 `firebase/firestore.rules` 的 `lockedThroughMonth()`、
+ * `tools/ems-report/config.mjs` 的 `UNLOCK.lock.defaultThroughMonth` 一致。
+ * 救護科管理者在解鎖工單頁存過一次之後，就以資料庫裡的值為準，這個預設值不再有作用。
+ */
+export const UNLOCK_LOCK_DEFAULT_THROUGH_MONTH = '2026-09';
+
+/** 鎖定時段的月份選單從民國幾年開始列（太早的年份不會有人要申請解鎖）。 */
+export const UNLOCK_LOCK_FIRST_ROC_YEAR = 110;
+
+/** 民國年＝西元年減去這個數。 */
+export const ROC_YEAR_OFFSET = 1911;

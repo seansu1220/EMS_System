@@ -87,7 +87,7 @@ export async function setUserStatus(
 }
 
 /**
- * 變更帳號角色（一般使用者 ⇄ 解鎖專用）；僅管理員可執行。
+ * 變更帳號角色（一般使用者／救護科管理者／解鎖專用）；僅管理員可執行。
  *
  * ⚠ 不能用來指派 `admin`：管理員身分以 email 白名單認定
  * （見 `lib/permissions.ts` 與 `firestore.rules` 的 `isAdmin()`），

@@ -19,6 +19,8 @@
  * 6. **測試用傷票**：號碼只能接續往下領（計數器、領取紀錄、單位週用量必須一起寫、互相對得上），
  *    不能挑號碼、跳號或冒名；單位須為月報表上的分隊且同單位每週最多 30 張；
  *    解鎖專用帳號只讀得到自己的領取紀錄。
+ * 7. **鎖定時段**（v1.32）：案件月份（TEMSIS 前 6 碼）在鎖定月份（含）以前的工單誰都送不出去
+ *    （尚未設定時預設鎖到 2026-09）；只有管理員與救護科管理者能改鎖定時段，且不可刪除。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -126,6 +128,13 @@ await seed(async (db) => {
     role: 'unlocker',
     status: 'approved',
   });
+  await setDoc(doc(db, 'users/ems-manager-uid'), {
+    uid: 'ems-manager-uid',
+    email: 'ems-manager@example.com',
+    displayName: '救護科管理者',
+    role: 'emsManager',
+    status: 'approved',
+  });
   await setDoc(doc(db, 'unlockRequests/req-mine'), {
     temsis: '2026071210100310384101',
     reason: '處置漏填',
@@ -157,6 +166,7 @@ const admin = dbFor('admin-uid', ADMIN_EMAIL);
 const member = dbFor('member-uid', 'member@example.com');
 const pending = dbFor('pending-uid', 'pending@example.com');
 const unlocker = dbFor('unlocker-uid', 'squad@example.com');
+const emsManager = dbFor('ems-manager-uid', 'ems-manager@example.com');
 
 // ── 1. 管理員 ──
 await check('管理員可讀業務', assertSucceeds(getDoc(doc(admin, 'tasks/task-1'))));
@@ -318,7 +328,7 @@ await check(
   '解鎖專用帳號可送出自己的解鎖工單',
   assertSucceeds(
     addDoc(collection(unlocker, 'unlockRequests'), {
-      temsis: '2026080110100310380001',
+      temsis: '2026100110100310380001',
       reason: '補登處置',
       requestedBy: 'unlocker-uid',
       requestedByName: '某分隊',
@@ -332,7 +342,7 @@ await check(
   '不可冒用他人名義送工單',
   assertFails(
     addDoc(collection(unlocker, 'unlockRequests'), {
-      temsis: '2026080110100310380002',
+      temsis: '2026100110100310380002',
       reason: '冒名',
       requestedBy: 'member-uid',
       requestedByName: '同事',
@@ -346,7 +356,7 @@ await check(
   '不可直接送一張「已解鎖」的假工單',
   assertFails(
     addDoc(collection(unlocker, 'unlockRequests'), {
-      temsis: '2026080110100310380003',
+      temsis: '2026100110100310380003',
       reason: '假的',
       requestedBy: 'unlocker-uid',
       requestedByName: '某分隊',
@@ -426,7 +436,7 @@ await check(
   '待審核帳號不可送出解鎖工單',
   assertFails(
     addDoc(collection(pending, 'unlockRequests'), {
-      temsis: '2026080110100310380004',
+      temsis: '2026100110100310380004',
       reason: '還沒核准',
       requestedBy: 'pending-uid',
       requestedByName: '待審核者',
@@ -435,6 +445,94 @@ await check(
       result: null,
     }),
   ),
+);
+
+// ── 5.1 解鎖工單的鎖定時段（v1.32）──
+
+/** 造一張要送出的工單（申請人＝自己、狀態 pending）。 */
+function lockTestRequest(uid, temsis) {
+  return {
+    temsis,
+    reason: '鎖定時段測試',
+    requestedBy: uid,
+    requestedByName: '測試',
+    requestedAt: '2026-11-03T01:00:00.000Z',
+    status: 'pending',
+    result: null,
+  };
+}
+
+/** 救護科管理者／管理員改鎖定時段時要寫的內容。 */
+function lockPolicy(uid, lockedThroughMonth) {
+  return { lockedThroughMonth, updatedAt: serverTimestamp(), updatedBy: uid, updatedByName: '測試' };
+}
+
+await check(
+  '尚未設定時預設鎖到 115 年 9 月：9 月的案件不能送',
+  assertFails(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2026093010100310380001'))),
+);
+await check(
+  '尚未設定時：更早的月份也不能送',
+  assertFails(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2025120110100310380001'))),
+);
+await check(
+  '鎖定時段管理員也一樣不能送',
+  assertFails(addDoc(collection(admin, 'unlockRequests'), lockTestRequest('admin-uid', '2026090110100310380001'))),
+);
+await check(
+  'TEMSIS 不到 6 碼（判不出月份）不能送',
+  assertFails(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '20261'))),
+);
+await check('解鎖專用帳號讀得到鎖定時段', assertSucceeds(getDoc(doc(unlocker, 'unlockPolicy/main'))));
+await check('待審核帳號讀不到鎖定時段', assertFails(getDoc(doc(pending, 'unlockPolicy/main'))));
+await check(
+  '一般使用者不可改鎖定時段',
+  assertFails(setDoc(doc(member, 'unlockPolicy/main'), lockPolicy('member-uid', null))),
+);
+await check(
+  '解鎖專用帳號不可改鎖定時段',
+  assertFails(setDoc(doc(unlocker, 'unlockPolicy/main'), lockPolicy('unlocker-uid', null))),
+);
+await check(
+  '救護科管理者可鎖到 115 年 10 月',
+  assertSucceeds(setDoc(doc(emsManager, 'unlockPolicy/main'), lockPolicy('ems-manager-uid', '2026-10'))),
+);
+await check(
+  '鎖到 10 月後：10 月的案件不能送',
+  assertFails(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2026103110100310380001'))),
+);
+await check(
+  '鎖到 10 月後：11 月的案件可以送',
+  assertSucceeds(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2026110110100310380001'))),
+);
+await check(
+  '救護科管理者不可寫不合法的月份',
+  assertFails(setDoc(doc(emsManager, 'unlockPolicy/main'), lockPolicy('ems-manager-uid', '2026-13'))),
+);
+await check(
+  '救護科管理者不可冒用別人當修改者',
+  assertFails(setDoc(doc(emsManager, 'unlockPolicy/main'), lockPolicy('admin-uid', '2026-08'))),
+);
+await check(
+  '鎖定時段不可夾帶其他欄位',
+  assertFails(setDoc(doc(emsManager, 'unlockPolicy/main'), { ...lockPolicy('ems-manager-uid', '2026-08'), extra: 1 })),
+);
+await check(
+  '管理員可改鎖定時段（全部解除）',
+  assertSucceeds(setDoc(doc(admin, 'unlockPolicy/main'), lockPolicy('admin-uid', null))),
+);
+await check(
+  '全部解除後：以前的月份也可以送',
+  assertSucceeds(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2025120110100310380002'))),
+);
+await check('鎖定時段連管理員也不可刪除', assertFails(deleteDoc(doc(admin, 'unlockPolicy/main'))));
+await check(
+  '救護科管理者讀得到業務（權限同一般使用者）',
+  assertSucceeds(getDoc(doc(emsManager, 'tasks/task-1'))),
+);
+await check(
+  '救護科管理者不可刪除業務',
+  assertFails(deleteDoc(doc(emsManager, 'tasks/task-1'))),
 );
 
 // ── 6. 測試用傷票（計數器 + 領取紀錄 + 單位週用量必須一起寫、互相對得上）──

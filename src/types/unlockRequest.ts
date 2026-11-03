@@ -27,6 +27,9 @@
  *   但救護科實際動的是完全不同的地方，事後回頭核對要分得出來
  * - `noAction`：紀錄表沒有鎖頭，**而且也沒有人佔用**，這筆真的不需要動作（對應「無需處理」）
  * - `failed`：程式判斷不出來或流程出錯，要人接手（對應「需人工處理／查無案件／失敗」）
+ * - `locked`：案件日期落在救護科**鎖定的時段**內，不予解鎖（v1.32 起）。
+ *   送出時就會被擋下，這個狀態只會出現在「鎖定之前就已排隊」的工單上——
+ *   由本機工具拿單時直接回寫，不會真的去動目標系統
  */
 export type UnlockRequestStatus =
   | 'pending'
@@ -34,7 +37,8 @@ export type UnlockRequestStatus =
   | 'unlocked'
   | 'usageCleared'
   | 'noAction'
-  | 'failed';
+  | 'failed'
+  | 'locked';
 
 /** 本機工具跑完之後回寫的結果。 */
 export interface UnlockRequestResult {
@@ -78,6 +82,14 @@ export interface UnlockRequestInput {
   temsisList: string[];
   /** 申請事由（同一批共用）。 */
   reason: string;
+}
+
+/** 一筆落在鎖定時段內的 TEMSIS 編號（送出前的檢查結果）。 */
+export interface TemsisLockedError {
+  /** 使用者輸入的原始編號。 */
+  temsis: string;
+  /** 目前鎖定到哪個月（含），西元 `YYYY-MM`。 */
+  lockedThroughMonth: string;
 }
 
 /** 一筆長度不對的 TEMSIS 編號（送出前的檢查結果）。 */

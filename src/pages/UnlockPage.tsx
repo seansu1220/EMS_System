@@ -13,12 +13,16 @@ import {
   createUnlockRequests,
   deleteUnlockRequest,
   describeTemsisLengthError,
+  describeTemsisLockedError,
   findTemsisLengthErrors,
+  findTemsisLockedErrors,
   parseTemsisList,
   requeueUnlockRequest,
   subscribeUnlockRequests,
 } from '../services/unlockRequestService';
-import { canSeeAllUnlockRequests, isAdmin } from '../lib/permissions';
+import { subscribeUnlockPolicy } from '../services/unlockPolicyService';
+import { canManageUnlockLock, canSeeAllUnlockRequests, isAdmin } from '../lib/permissions';
+import { formatRocMonth } from '../lib/unlockLockLogic';
 import {
   TEMSIS_CODE_LENGTH,
   UNLOCK_REQUEST_MAX_BATCH,
@@ -26,6 +30,8 @@ import {
   UNLOCK_STATUS_LABELS,
 } from '../config/constants';
 import type { UnlockRequest } from '../types/unlockRequest';
+import type { UnlockPolicy } from '../types/unlockPolicy';
+import { UnlockLockPanel } from '../components/UnlockLockPanel';
 import {
   Badge,
   Button,
@@ -87,6 +93,8 @@ export function UnlockPage() {
   const seesAll = canSeeAllUnlockRequests(user);
   /** 管理員才看得到執行細節，也才動得了別人的工單（重新送單／刪除）。 */
   const canManage = isAdmin(user);
+  /** 管理員與救護科管理者可以設定鎖定時段（v1.32）。 */
+  const canManageLock = canManageUnlockLock(user);
 
   const [requests, setRequests] = useState<UnlockRequest[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -98,6 +106,20 @@ export function UnlockPage() {
   /** 正在處理中的那一列（避免連按，也讓按鈕在寫入期間停用）。 */
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 鎖定時段設定；還沒讀到為 null（讀到之前不讓送出，免得送出去才被規則擋下）。 */
+  const [policy, setPolicy] = useState<UnlockPolicy | null>(null);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    return subscribeUnlockPolicy(
+      (nextPolicy) => {
+        setPolicy(nextPolicy);
+        setPolicyError(null);
+      },
+      (error) => setPolicyError(error.message),
+    );
+  }, [user]);
 
   useEffect(() => {
     if (!user) return undefined;
@@ -120,6 +142,12 @@ export function UnlockPage() {
    * 在這裡當場講清楚差幾碼，比較快（使用者 2026-09-07 指定）。
    */
   const lengthErrors = useMemo(() => findTemsisLengthErrors(parsed), [parsed]);
+  const lockedThroughMonth = policy?.lockedThroughMonth ?? null;
+  /** 落在鎖定時段內的編號（邊打邊檢查，跟長度檢查一樣當場講清楚）。 */
+  const lockedErrors = useMemo(
+    () => findTemsisLockedErrors(parsed, lockedThroughMonth),
+    [parsed, lockedThroughMonth],
+  );
   const pendingCount = requests?.filter((item) => item.status === 'pending').length ?? 0;
 
   async function handleSubmit(event: FormEvent) {
@@ -129,7 +157,7 @@ export function UnlockPage() {
     setNotice('');
     setSubmitting(true);
     try {
-      const count = await createUnlockRequests(user, parsed, reason);
+      const count = await createUnlockRequests(user, parsed, reason, lockedThroughMonth);
       setRawTemsis('');
       setReason('');
       setNotice(`已送出 ${count} 筆工單，等救護科電腦執行。`);
@@ -171,7 +199,15 @@ export function UnlockPage() {
         <p className="mt-1 text-sm text-slate-500">
           執行電腦有開啟就會自動偵測並解鎖。案件狀態若變為需人工處理，請通知救護科承辦人。
         </p>
+        {lockedThroughMonth !== null && (
+          <p className="mt-1 text-sm text-amber-700">
+            {formatRocMonth(lockedThroughMonth)}（含）以前的救護紀錄表已鎖定，不受理解鎖申請，有需要請洽救護科人員。
+          </p>
+        )}
       </div>
+
+      <ErrorBanner message={policyError} />
+      {user && canManageLock && policy && <UnlockLockPanel user={user} policy={policy} />}
 
       <Card>
         <form className="space-y-4" onSubmit={handleSubmit}>
@@ -193,6 +229,13 @@ export function UnlockPage() {
               <div className="mt-2 space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
                 {lengthErrors.map((item) => (
                   <p key={item.temsis}>{describeTemsisLengthError(item)}</p>
+                ))}
+              </div>
+            )}
+            {lockedErrors.length > 0 && (
+              <div className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                {lockedErrors.map((item) => (
+                  <p key={item.temsis}>{describeTemsisLockedError(item)}</p>
                 ))}
               </div>
             )}
@@ -220,8 +263,10 @@ export function UnlockPage() {
               type="submit"
               disabled={
                 submitting
+                || (policy === null && policyError === null)
                 || parsed.length === 0
                 || lengthErrors.length > 0
+                || lockedErrors.length > 0
                 || reason.trim() === ''
               }
             >

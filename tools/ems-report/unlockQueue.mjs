@@ -21,6 +21,7 @@ import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   getFirestore,
   query,
@@ -28,11 +29,32 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { PATHS } from './config.mjs';
+import { PATHS, UNLOCK } from './config.mjs';
 import { log } from './logger.mjs';
+import { maskCode } from './sheetFields.mjs';
 
 /** Firestore 集合名稱（與網頁端 `COLLECTIONS.unlockRequests` 一致）。 */
 const COLLECTION = 'unlockRequests';
+
+/** 鎖定時段設定文件（與網頁端 `COLLECTIONS.unlockPolicy` + `main` 一致）。 */
+const POLICY_COLLECTION = 'unlockPolicy';
+const POLICY_DOC_ID = 'main';
+
+/**
+ * 這個 TEMSIS 的案件月份是否落在鎖定時段內（鎖定月份當月也算，純函式）。
+ *
+ * ⚠ 比法必須與網頁 `src/lib/unlockLockLogic.ts` 的 `isTemsisLocked()`、
+ *   `firebase/firestore.rules` 的 `temsisInLockedPeriod()` 完全相同：
+ *   TEMSIS 前 4 碼＋`-`＋第 5～6 碼，跟鎖定月份（西元 `YYYY-MM`）做字串大小比較。
+ *
+ * @param {string} temsis
+ * @param {string|null} lockedThroughMonth 鎖定到哪個月（含）；null＝沒有鎖定
+ * @returns {boolean}
+ */
+export function isTemsisInLockedPeriod(temsis, lockedThroughMonth) {
+  if (lockedThroughMonth === null || temsis.length < 6) return false;
+  return `${temsis.slice(0, 4)}-${temsis.slice(4, 6)}` <= lockedThroughMonth;
+}
 
 /**
  * 解鎖結果 → 工單狀態的對照（純函式，方便測試）。
@@ -211,14 +233,28 @@ function toIso(value) {
 }
 
 /**
- * 抓出所有待處理的工單（先送的先做）。
+ * 抓出所有待處理、**而且不在鎖定時段內**的工單（先送的先做）。
  *
  * 刻意在**開瀏覽器之前**呼叫：沒有待處理工單時就不必白登入一次救護系統。
+ * 落在鎖定時段內的工單（鎖定之前就已經排隊的）會在這裡直接回寫「時段已鎖定」，
+ * 不會交給解鎖流程（見 {@link settleLockedRequests}）。
  *
  * @param {QueueSession} session
  * @returns {Promise<QueueRequest[]>}
  */
 export async function fetchPendingRequests(session) {
+  const requests = await readPendingRequests(session);
+  if (requests.length === 0) return requests;
+  return settleLockedRequests(session, requests);
+}
+
+/**
+ * 讀出雲端上所有待處理的工單（先送的先做，空編號略過）。
+ *
+ * @param {QueueSession} session
+ * @returns {Promise<QueueRequest[]>}
+ */
+async function readPendingRequests(session) {
   try {
     const snapshot = await getDocs(
       query(collection(session.db, COLLECTION), where('status', '==', 'pending')),
@@ -248,6 +284,68 @@ export async function fetchPendingRequests(session) {
     }
     throw new Error(`讀取待處理工單失敗（unlockQueue.fetchPendingRequests）：${error.message}`);
   }
+}
+
+/**
+ * 讀雲端的鎖定時段（鎖定到哪個月，含）。
+ *
+ * 還沒有人設定過就用 `UNLOCK.lock.defaultThroughMonth`。
+ * 讀取失敗只警告、當作沒有鎖定：網頁送出時安全規則已經擋過一次，
+ * 這裡只是補「鎖定前就排隊」的那幾張，不值得因此讓整批解鎖停擺。
+ *
+ * @param {QueueSession} session
+ * @returns {Promise<string|null>} 西元 `YYYY-MM`；null＝沒有鎖定
+ */
+async function readLockedThroughMonth(session) {
+  try {
+    const snapshot = await getDoc(doc(session.db, POLICY_COLLECTION, POLICY_DOC_ID));
+    if (!snapshot.exists()) return UNLOCK.lock.defaultThroughMonth;
+    const value = snapshot.data().lockedThroughMonth;
+    return typeof value === 'string' ? value : null;
+  } catch (error) {
+    log.warn(`讀取鎖定時段失敗，這一輪不檢查鎖定時段（unlockQueue.readLockedThroughMonth）：${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * 把落在鎖定時段內的工單直接回寫「時段已鎖定」，回傳剩下要真的去解鎖的。
+ *
+ * 回寫失敗也**照樣不去解鎖**：救護科已經鎖了這個時段，寧可讓工單停在待處理，
+ * 也不能因為一次寫入失敗就把鎖定時段內的案件解開。
+ *
+ * @param {QueueSession} session
+ * @param {QueueRequest[]} requests
+ * @returns {Promise<QueueRequest[]>}
+ */
+export async function settleLockedRequests(session, requests) {
+  const lockedThroughMonth = await readLockedThroughMonth(session);
+  if (lockedThroughMonth === null) return requests;
+
+  const remaining = [];
+  for (const request of requests) {
+    if (!isTemsisInLockedPeriod(request.temsis, lockedThroughMonth)) {
+      remaining.push(request);
+      continue;
+    }
+    log.info(`　${maskCode(request.temsis)} 落在鎖定時段（${lockedThroughMonth} 含以前），不解鎖，直接回報`);
+    try {
+      await updateDoc(doc(session.db, COLLECTION, request.id), {
+        status: 'locked',
+        result: {
+          caseDate: null,
+          vehicle: null,
+          squad: null,
+          detail: `案件月份在鎖定時段內（鎖定到 ${lockedThroughMonth}，含），未執行解鎖`,
+          processedAt: new Date().toISOString(),
+          processedBy: session.displayName,
+        },
+      });
+    } catch (error) {
+      log.warn(`回寫「時段已鎖定」失敗，這一筆會停在待處理（仍不會去解鎖）：${error.message}`);
+    }
+  }
+  return remaining;
 }
 
 /**

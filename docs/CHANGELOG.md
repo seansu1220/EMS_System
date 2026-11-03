@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-11-03　網頁 v1.32.0／小工具 v1.52.0 救護科管理者角色＋解鎖工單鎖定時段
+
+### 問題描述
+使用者要求：
+1. 使用者權限多一個「救護科管理者」。
+2. 解鎖工單要能鎖時間區間：先鎖 115/9/30 以前的救護紀錄表，不給改；有人申請時顯示「該時段已經被鎖，請洽救護科人員」。
+3. 救護科管理者在頁面上可以鎖定／解鎖時段，以月份為單位；鎖了某個月，那個月以前全部不能申請解鎖。
+
+### 根本原因
+原本沒有角色能管這件事，解鎖工單也不看案件日期，送什麼都收。
+網頁送單時只有 TEMSIS，但 TEMSIS 前 8 碼就是案發日期（本機工具已實測 284 件全部吻合），所以送出當下就能判斷月份，不必等救護科電腦查。
+
+### 修改的檔案與內容
+- **新角色 `emsManager`（救護科管理者）**：權限同一般使用者，另外可設定鎖定時段。
+  - `src/types/user.ts`：`UserRole` 加上 `emsManager`。
+  - `src/config/constants.ts`：角色標籤、可指派角色清單。
+  - `src/lib/permissions.ts`：新增 `canManageUnlockLock()`（管理員或救護科管理者）。
+  - `src/pages/UsersPage.tsx`：頁首說明補上新角色；下拉選單自動多一項。
+- **鎖定時段資料**：新增 Firestore `unlockPolicy/main`，存 `lockedThroughMonth`（西元 `YYYY-MM`，null＝不鎖）。
+  - `src/types/unlockPolicy.ts`（新檔）：型別。
+  - `src/services/unlockPolicyService.ts`（新檔）：訂閱與寫入。
+  - 文件不存在時預設 `2026-09`（115 年 9 月），網頁 `UNLOCK_LOCK_DEFAULT_THROUGH_MONTH`、規則、工具 `UNLOCK.lock.defaultThroughMonth` 三處一致。部署後不必手動建資料就已經鎖到 9 月。
+- **判斷邏輯**：`src/lib/unlockLockLogic.ts`（新檔，純函式）。
+  - `isTemsisLocked`：TEMSIS 前 6 碼組成 `YYYY-MM`，跟鎖定月份做字串比較（與規則、工具同一比法）。
+  - `planLock`／`planUnlock`：鎖定只能往後推、不能鎖未來月份；解鎖某月＝退回到前一個月。
+  - `formatRocMonth`：顯示成民國年月。
+- **送出時擋下**：
+  - `src/services/unlockRequestService.ts`：新增 `findTemsisLockedErrors`／`describeTemsisLockedError`；`createUnlockRequests` 多收鎖定月份，送出前再擋一次。
+  - `src/pages/UnlockPage.tsx`：頁首顯示鎖定提醒；輸入框邊打邊列出落在鎖定時段的編號（「該時段已經被鎖，請洽救護科人員」），有的話不能送出；設定還沒讀到前也不能送出。
+- **鎖定面板**：`src/components/UnlockLockPanel.tsx`（新檔）。只有管理員與救護科管理者看得到；民國年＋月份選單，「鎖定到這個月（含）」「從這個月起解鎖」「全部解除」，都會先確認。
+- **工單新狀態 `locked`（時段已鎖定）**：`src/types/unlockRequest.ts`、`constants.ts` 的狀態標籤與一句話。
+- **安全規則** `firebase/firestore.rules`：
+  - 新增 `isLockManager()`、`lockedThroughMonth()`、`temsisInLockedPeriod()`。
+  - `unlockRequests` 建立時 TEMSIS 至少 6 碼，且不可落在鎖定時段（管理員也一樣）。
+  - `unlockPolicy`：已核准可讀；只有管理員／救護科管理者可寫，欄位與格式固定，修改者須為自己、時間須為伺服器時間；不可刪除。
+- **本機工具**（處理鎖定前就已排隊的工單）：
+  - `tools/ems-report/unlockQueue.mjs`：`fetchPendingRequests` 拿單後呼叫新的 `settleLockedRequests`，讀 `unlockPolicy/main`，鎖定範圍內的直接回寫 `locked`、不去解鎖；回寫失敗也不解鎖。新增純函式 `isTemsisInLockedPeriod`。
+  - `tools/ems-report/config.mjs`：新增 `UNLOCK.lock.defaultThroughMonth`。
+- **測試**：
+  - `scripts/rules.test.mjs`：原本「應成功送出」的測試編號改成 115 年 10 月（8 月現在會被預設鎖定擋下）；新增鎖定時段與救護科管理者 19 項，共 118 項全過。
+  - `tools/ems-report/unlockQueue.test.mjs`：新增鎖定判斷 2 項；ems-report 全部 514 項通過。
+- **規格書**：`docs/SPEC.md` v1.32.0（2.1.1 權限表、2.6、2.8 鎖定時段、3 資料模型與安全規則、5 目錄結構）；`docs/TOOLS_SPEC.md` v1.52.0（5.2、5.5、5.9）。
+- `package.json`：版本 1.25.0。
+
+---
+
 ## 2026-10-29　小工具 v1.51.2 裝置管理重置預估時間校正
 
 ### 問題描述

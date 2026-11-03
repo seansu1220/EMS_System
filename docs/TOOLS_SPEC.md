@@ -1,6 +1,8 @@
 # 小工具規格書（TOOLS SPEC）
 
-> 版本：v1.51.2　建立日期：2026-07-26　最後更新：2026-10-29
+> 版本：v1.52.0　建立日期：2026-07-26　最後更新：2026-11-03
+> v1.52.0：線上工單配合網頁 v1.32 的**鎖定時段**：拿單時先讀雲端 `unlockPolicy/main`，案件月份（TEMSIS 前 6 碼）
+> 　　　　 在鎖定月份（含）以前的工單**不去解鎖**，直接回寫新狀態 `locked`（時段已鎖定）（見 5.2、5.5、5.9）。
 > v1.51.2：裝置管理重置的預估時間依第一次正式執行實測校正（一台 25 秒→7 秒；實際 133 台 14 分鐘做完）。
 > v1.51.1：裝置管理重置依第一次試跑的實際畫面修正（見 2.12）——拿掉「超過 20 台整輪不動」（實際就有 133 台）；
 > 　　　　 改用**裝置ID 認列＋按鈕自證**；每做完一台**穿插處理新的解鎖申請**、可停在兩台之間；
@@ -2719,6 +2721,18 @@ out/2026-09-月報表/
 
 **先拿工單、再開瀏覽器**：沒有待處理工單時就不必白登入一次救護系統。
 
+**鎖定時段的工單不去解鎖**（v1.52.0 起，配合網頁 v1.32）。救護科管理者可以在網頁上把某個月（含）以前
+鎖起來（存在 Firestore `unlockPolicy/main` 的 `lockedThroughMonth`，西元 `YYYY-MM`；
+雲端還沒有這份文件時用 `UNLOCK.lock.defaultThroughMonth`＝`2026-09`）。網頁送出與安全規則都會擋，
+但**鎖定之前就已經排隊**的工單仍會出現在待處理裡，因此 `fetchPendingRequests()` 拿到工單後
+會再呼叫 `settleLockedRequests()`：案件月份（TEMSIS 前 6 碼）落在鎖定範圍內的，
+直接回寫 `status: 'locked'`、不交給解鎖流程，也不會開瀏覽器。
+- 判斷用純函式 `isTemsisInLockedPeriod()`，比法與網頁 `isTemsisLocked()`、規則 `temsisInLockedPeriod()`
+  **完全相同**（`YYYY-MM` 字串大小比較），三邊改一邊就要改三邊。
+- 回寫 `locked` 失敗時**照樣不去解鎖**（工單停在待處理、下一輪再試）——寧可慢，也不能把鎖定時段解開。
+- 讀不到鎖定設定時只警告、這一輪當作沒有鎖定：送出時規則已擋過一次，這裡只是補漏，不值得讓整批停擺。
+- 救護科自己要改鎖定時段內的案件：在本機直接跑「正式解鎖救護紀錄表.bat」（`unlock --execute`，手動輸入 TEMSIS），不經過工單，不受此限制。
+
 **逐筆回寫，不等整批跑完**：中途關掉視窗時，前面做完的幾筆在網頁上才不會停在「待處理」。
 回寫失敗只警告不中斷——案件已經解了，雲端寫不寫得進去是另一回事
 （那一筆會停在「處理中」，紀錄檔會明講）。
@@ -2734,6 +2748,7 @@ out/2026-09-月報表/
 | `已解除佔用` | `usageCleared` | 本來就是未結案，但還有人開著；已經幫你放開，可以進系統修改了 |
 | `無需處理` | `noAction` | 案件未結案，不需解鎖 |
 | 其餘 | `failed` | 請洽救護科承辦人處理 |
+| （不進解鎖流程） | `locked`（v1.52.0） | 該時段已經被鎖，請洽救護科人員 |
 
 > ⚠ **新增解鎖路徑時，`unlockWatch.isHandledOutcome()` 要同步加上它的成功狀態**
 > （2026-09-11 踩到）。監看在每一筆「看起來失敗」的案件之後會多做一次登入檢查，
@@ -2874,7 +2889,7 @@ out/2026-09-月報表/
 | `reason` | 申請事由 |
 | `requestedBy` / `requestedByName` | 申請人 uid 與顯示名稱（存名稱是為了看清單時不必再查 users） |
 | `requestedAt` | 申請時間 |
-| `status` | `pending` → `running` → `unlocked`／`noAction`／`failed` |
+| `status` | `pending` → `running` → `unlocked`／`usageCleared`／`noAction`／`failed`；鎖定時段內的直接 `pending` → `locked`（v1.52.0） |
 | `result` | 案件日期、出勤車輛、分隊、說明、處理時間、執行者 |
 
 狀態對照（`unlockQueue.toQueueStatus`，有測試釘住）：
@@ -2966,7 +2981,7 @@ out/2026-09-月報表/
 
 | 檔案 | 職責 |
 | --- | --- |
-| `unlockQueue.mjs` | 連 Firebase、拿待處理工單、回寫進度與結果、狀態對照（**純函式部分有測試**）、`resetToPending` 退回、`closeQueue` 收尾 |
+| `unlockQueue.mjs` | 連 Firebase、拿待處理工單、回寫進度與結果、狀態對照（**純函式部分有測試**）、`resetToPending` 退回、`closeQueue` 收尾；v1.52.0 起拿單時讀鎖定時段，`settleLockedRequests` 把鎖定範圍內的直接回寫 `locked`（判斷用純函式 `isTemsisInLockedPeriod`，有測試） |
 | `unlockWatch.mjs` | 常駐監看的主迴圈、心跳、掉線時退回工單、每批重算查詢期間（`refreshQueryRange`）。碰外部世界的四件事（查雲端、處理一批、心跳、重新登入）都可注入替身，因此整個迴圈可離線測試 |
 | `session.mjs` | 新增 `isSignedIn`（看畫面上有沒有登入表單）與 `ensureSignedIn`（掉線時在同一個視窗請本人重新登入，沿用 `performLogin`，驗證碼由本人輸入這件事只有一個實作） |
 | `unlock.mjs` | 加了 `onCaseStart`／`onCaseDone` 兩個回呼供逐筆回寫；回呼丟例外不會中斷解鎖 |

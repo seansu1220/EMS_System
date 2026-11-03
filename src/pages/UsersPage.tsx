@@ -56,7 +56,7 @@ export function UsersPage() {
     }
   }
 
-  /** 變更帳號角色（解鎖專用 ⇄ 一般使用者）。 */
+  /** 變更帳號角色（一般使用者／救護科管理者／解鎖專用）。 */
   async function handleSetRole(target: AppUser, role: Exclude<UserRole, 'admin'>) {
     if (!user) return;
     setBusyUid(target.uid);
@@ -79,6 +79,7 @@ export function UsersPage() {
         <p className="mt-1 text-sm text-slate-500">
           新註冊的帳號預設為「待審核」，須在此核准後才能登入使用系統。
           一般使用者可新增與編輯業務，但不能刪除業務；
+          <strong>救護科管理者</strong>權限同一般使用者，另外可以在解鎖工單頁鎖定／解鎖申請解鎖的時段；
           <strong>解鎖專用</strong>帳號只進得去解鎖工單頁，看不到任何業務資料（給各分隊申請解鎖用）。
         </p>
       </div>
