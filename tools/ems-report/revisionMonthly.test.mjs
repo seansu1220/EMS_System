@@ -185,3 +185,30 @@ test('總表各分頁的編號是超連結，指向同一件的原表資料夾',
   assert.deepEqual(linkAt('已結案-申請事由', 4), { text: '02', hyperlink: '已結案/02_DONE2' });
   assert.deepEqual(linkAt('已結案-修改內容', 3), { text: '01', hyperlink: '已結案/01_DONE1' });
 });
+
+test('修改內容分頁：同一件改好幾處時，編號～出勤車輛上下合併成一格，欄位與前後內容仍一處一列', () => {
+  const workbook = buildRevisionReportWorkbook(OCTOBER, {
+    open: [],
+    closed: [
+      { entry: entry({ temsis: 'DONE1' }), rows: [], error: null },
+      {
+        entry: entry({ temsis: 'DONE2' }),
+        rows: [
+          { field: 'GCS-E', before: '4', after: '1' },
+          { field: 'GCS-V', before: '5', after: '1' },
+          { field: 'GCS-M', before: '6', after: '1' },
+        ],
+        error: null,
+      },
+    ],
+  }, null);
+  const sheet = workbook.getWorksheet('已結案-修改內容');
+  assert.equal(sheet.getCell('A3').isMerged, false);
+  for (const column of ['A', 'B', 'C', 'D']) {
+    assert.equal(sheet.getCell(`${column}5`).master.address, `${column}4`);
+    assert.equal(sheet.getCell(`${column}6`).master.address, `${column}4`);
+  }
+  assert.equal(sheet.getCell('E5').isMerged, false);
+  assert.deepEqual([4, 5, 6].map((row) => sheet.getCell(`F${row}`).value), ['GCS-E', 'GCS-V', 'GCS-M']);
+  assert.deepEqual(sheet.getCell('A4').value, { text: '02', hyperlink: '已結案/02_DONE2' });
+});

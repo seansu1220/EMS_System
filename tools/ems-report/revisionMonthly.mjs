@@ -295,6 +295,32 @@ function linkCaseNumbers(sheet, group) {
 }
 
 /**
+ * 同一件改了好幾處時，前面重複的案件欄（編號～出勤車輛）上下合併成一格（使用者 2026-11-03 指定），
+ * 一眼看出哪幾列是同一件；欄位、原內容、修改後內容仍然一處一列。
+ * 合併後篩選只認得第一列，所以這個分頁不開篩選。
+ *
+ * @param {ExcelJS.Worksheet} sheet
+ * @param {number} lastColumn 合併到第幾欄（含）
+ */
+function mergeCaseCells(sheet, lastColumn) {
+  // 第 1 列是大標、第 2 列是欄名，資料從第 3 列開始；同一件的列一定相鄰（buildChangeRows 依件展開）。
+  const numberAt = (rowNumber) => {
+    const value = sheet.getRow(rowNumber).getCell(1).value;
+    return typeof value === 'object' && value ? value.text : String(value ?? '');
+  };
+  let start = 3;
+  while (start <= sheet.rowCount) {
+    let end = start;
+    while (end + 1 <= sheet.rowCount && numberAt(end + 1) === numberAt(start)) end += 1;
+    for (let column = 1; column <= lastColumn; column += 1) {
+      if (end > start) sheet.mergeCells(start, column, end, column);
+      sheet.getRow(start).getCell(column).alignment = { vertical: 'middle' };
+    }
+    start = end + 1;
+  }
+}
+
+/**
  * 組出報表活頁簿（不寫檔）。
  * @param {{start: string, end: string}} range
  * @param {{open: import('./revisionTrack.mjs').RevisionEntry[], closed: ClosedCase[]}} cases
@@ -324,8 +350,8 @@ export function buildRevisionReportWorkbook(range, cases, details) {
   for (const column of ['原內容', '修改後內容']) {
     changeSheet.getColumn(CHANGE_COLUMNS.indexOf(column) + 1).alignment = { wrapText: true, vertical: 'top' };
   }
-  changeSheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: CHANGE_COLUMNS.length } };
   linkCaseNumbers(changeSheet, caseFolders.closed);
+  mergeCaseCells(changeSheet, CHANGE_COLUMNS.indexOf('出勤車輛') + 1);
   return workbook;
 }
 
