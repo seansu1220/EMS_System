@@ -33,7 +33,14 @@ import {
   takeBufferedLines,
 } from '../ems-report/logger.mjs';
 import { startSession as startEmsSession, ensureSignedIn as ensureEmsSignedIn } from '../ems-report/session.mjs';
-import { closeQueue, connectQueue, fetchPendingRequests } from '../ems-report/unlockQueue.mjs';
+import {
+  closeQueue,
+  connectQueue,
+  fetchPendingRequests,
+  fetchRevisionCheckRequest,
+  markRevisionCheckRunning,
+  saveRevisionCheckResult,
+} from '../ems-report/unlockQueue.mjs';
 import { heartbeat as emsHeartbeat, processBatch } from '../ems-report/unlockWatch.mjs';
 import { resetStuckDevicesSafely } from '../ems-report/deviceReset.mjs';
 import { checkRevisionsSafely } from '../ems-report/revisionCheck.mjs';
@@ -196,15 +203,21 @@ function buildMciSide(mci) {
 
 /**
  * 確認解鎖過的案件結案了沒、結案就比對（見 `ems-report/revisionCheck.mjs`）。
- * 開啟時做一次，之後**跨日才再做**；試跑不做。
+ * 開啟時做一次，之後**跨日才再做**；管理員在網頁按「立即比對」（v1.55）時也做，
+ * 並把結果寫回網頁（每天那一輪剛好碰上就一併認領）。試跑不做。
  *
- * @returns {() => Promise<void>} 每一輪都可以呼叫，沒到時間就什麼都不做
+ * @returns {() => Promise<void>} 每一輪都可以呼叫，沒到時間、也沒人按就什麼都不做
  */
 function makeRevisionChores(unlock, dryRun) {
   const daily = createDailyTrigger();
   return async () => {
-    if (!unlock || dryRun || !daily.isDue()) return;
-    await checkRevisionsSafely(unlock.session, { queue: unlock.queue });
+    if (!unlock || dryRun) return;
+    const requestedAt = await fetchRevisionCheckRequest(unlock.queue);
+    if (!requestedAt && !daily.isDue()) return;
+    if (requestedAt) log.step('管理員在網頁上要求立即比對');
+    const claimed = requestedAt ? await markRevisionCheckRunning(unlock.queue, requestedAt) : false;
+    const summary = await checkRevisionsSafely(unlock.session, { queue: unlock.queue });
+    if (claimed) await saveRevisionCheckResult(unlock.queue, summary);
     daily.markDone();
   };
 }

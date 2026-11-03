@@ -166,6 +166,41 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── 「立即比對」請求（v1.37，使用者 2026-11-03 指定：按鈕只有管理員看得到）──
+    // 只有一份文件 unlockControl/revisionCheck：
+    //   - 管理員按按鈕 → 寫 requestedAt（伺服器時間）、requestedBy、requestedByName
+    //   - 本機監看（一般使用者身分的程式帳號）看到新請求 → 回寫處理狀態與筆數
+    // requestedAt 比 handledRequestAt 新＝還沒處理（見 tools/ems-report/unlockQueue.mjs）。
+    match /unlockControl/{controlId} {
+      allow read: if isStaff();
+
+      // 管理員送出請求：只能動請求欄位，送出者必須是自己、時間必須是伺服器時間。
+      allow create: if isAdmin()
+        && controlId == 'revisionCheck'
+        && request.resource.data.keys().hasOnly(['requestedAt', 'requestedBy', 'requestedByName'])
+        && revisionCheckRequestValid();
+      allow update: if controlId == 'revisionCheck' && (
+        (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['requestedAt', 'requestedBy', 'requestedByName'])
+          && revisionCheckRequestValid())
+        // 本機監看回寫：不能動請求欄位，認領的請求時間不能比目前的請求還新。
+        || (isStaff()
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'handledRequestAt', 'handledByName', 'startedAt', 'finishedAt', 'checkedCount', 'comparedCount'])
+          && request.resource.data.status in ['running', 'done']
+          && request.resource.data.handledRequestAt is timestamp
+          && request.resource.data.handledRequestAt <= resource.data.requestedAt)
+      );
+      allow delete: if false;
+    }
+
+    function revisionCheckRequestValid() {
+      return request.resource.data.requestedAt == request.time
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.requestedByName is string;
+    }
+
     match /unlockRequests/{requestId} {
       // 救護科管理者不是業務人員，但要管鎖定時段，所以也看得到全部（v1.34）。
       // ⚠️ 須與 src/lib/permissions.ts 的 canSeeAllUnlockRequests() 一致。

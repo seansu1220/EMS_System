@@ -27,7 +27,9 @@ echo   with the sheet after closing.
 echo.
 echo   The online unlock tools already do this
 echo   every time they start (and daily while
-echo   watching). Use this one to see it now.
+echo   watching, or when the admin presses
+echo   "Revision Check" on the web page).
+echo   Use this one to see it now.
 echo   Report: tools\ems-report\out\internal\
 echo ============================================
 echo.

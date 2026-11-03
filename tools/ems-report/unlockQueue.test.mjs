@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTemsisInLockedPeriod, shouldSettleAsLocked, toQueueStatus } from './unlockQueue.mjs';
+import { isRevisionCheckPending, isTemsisInLockedPeriod, shouldSettleAsLocked, toQueueStatus } from './unlockQueue.mjs';
 import { runUnlockFlow } from './unlock.mjs';
 
 test('解鎖成功對應到網頁的「已解鎖」', () => {
@@ -97,4 +97,17 @@ test('沒有給回呼時照常運作（一般的 unlock 指令就是這樣用）
     dryRun: true,
   });
   assert.equal(outcomes.length, 1);
+});
+
+test('立即比對：從沒按過就沒有請求', () => {
+  assert.equal(isRevisionCheckPending({ requestedAtMs: null, handledRequestAtMs: null }), false);
+});
+
+test('立即比對：按了還沒人處理過＝待處理', () => {
+  assert.equal(isRevisionCheckPending({ requestedAtMs: 1000, handledRequestAtMs: null }), true);
+});
+
+test('立即比對：處理過的那一次不再重做，之後再按才算新的', () => {
+  assert.equal(isRevisionCheckPending({ requestedAtMs: 1000, handledRequestAtMs: 1000 }), false);
+  assert.equal(isRevisionCheckPending({ requestedAtMs: 2000, handledRequestAtMs: 1000 }), true);
 });

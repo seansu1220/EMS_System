@@ -34,6 +34,7 @@ import {
 import type { UnlockRequest, UnlockRequestRevision } from '../types/unlockRequest';
 import type { UnlockPolicy } from '../types/unlockPolicy';
 import { UnlockLockPanel } from '../components/UnlockLockPanel';
+import { RevisionCheckPanel } from '../components/RevisionCheckPanel';
 import {
   Badge,
   Button,
@@ -264,6 +265,8 @@ export function UnlockPage() {
 
       <ErrorBanner message={policyError} />
       {user && canManageLock && policy && <UnlockLockPanel user={user} policy={policy} />}
+      {/* 只有管理員看得到（v1.37，使用者 2026-11-03 指定）；安全規則也只讓管理員送出。 */}
+      {user && canManage && <RevisionCheckPanel user={user} />}
 
       <Card>
         <form className="space-y-4" onSubmit={handleSubmit}>

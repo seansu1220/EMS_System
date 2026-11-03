@@ -25,6 +25,7 @@ import {
   getDocs,
   getFirestore,
   query,
+  serverTimestamp,
   terminate,
   updateDoc,
   where,
@@ -39,6 +40,10 @@ const COLLECTION = 'unlockRequests';
 /** 鎖定時段設定文件（與網頁端 `COLLECTIONS.unlockPolicy` + `main` 一致）。 */
 const POLICY_COLLECTION = 'unlockPolicy';
 const POLICY_DOC_ID = 'main';
+
+/** 「立即比對」請求文件（與網頁端 `COLLECTIONS.unlockControl` + `revisionCheck` 一致）。 */
+const CONTROL_COLLECTION = 'unlockControl';
+const REVISION_CHECK_DOC_ID = 'revisionCheck';
 
 /**
  * 這個 TEMSIS 的案件月份是否落在鎖定時段內（鎖定月份當月也算，純函式）。
@@ -445,6 +450,96 @@ export async function saveRevision(session, requestId, revision) {
     return true;
   } catch (error) {
     log.warn(`比對結果寫回網頁失敗（下次再補寫）：${error.message}`);
+    return false;
+  }
+}
+
+/** Firestore Timestamp → 毫秒；不是 Timestamp（含沒有這個欄位）回傳 null。 */
+function toMillis(value) {
+  return value && typeof value.toMillis === 'function' ? value.toMillis() : null;
+}
+
+/**
+ * 管理員按了「立即比對」而還沒處理（純函式）。
+ *
+ * 請求時間比上次認領的請求時間新＝還沒處理；從沒按過＝沒有請求。
+ * ⚠ 判斷法須與網頁 `src/lib/revisionCheckLogic.ts` 的 `revisionCheckPhase()` 一致。
+ *
+ * @param {{requestedAtMs: number|null, handledRequestAtMs: number|null}} control
+ * @returns {boolean}
+ */
+export function isRevisionCheckPending({ requestedAtMs, handledRequestAtMs }) {
+  if (requestedAtMs === null) return false;
+  return handledRequestAtMs === null || requestedAtMs > handledRequestAtMs;
+}
+
+/**
+ * 讀管理員在網頁上按的「立即比對」（v1.55）。
+ *
+ * 讀不到只警告、當作沒有請求：這是額外的觸發點，不值得因此讓監看停擺。
+ *
+ * @param {QueueSession} session
+ * @returns {Promise<import('firebase/firestore').Timestamp|null>} 待處理請求的請求時間；沒有則 null
+ */
+export async function fetchRevisionCheckRequest(session) {
+  try {
+    const snapshot = await getDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID));
+    if (!snapshot.exists()) return null;
+    const { requestedAt, handledRequestAt } = snapshot.data();
+    const pending = isRevisionCheckPending({
+      requestedAtMs: toMillis(requestedAt),
+      handledRequestAtMs: toMillis(handledRequestAt),
+    });
+    return pending ? requestedAt : null;
+  } catch (error) {
+    log.warn(`讀取「立即比對」請求失敗（下一輪再試，unlockQueue.fetchRevisionCheckRequest）：${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * 認領「立即比對」請求：網頁會改顯示「比對中」。
+ *
+ * @param {QueueSession} session
+ * @param {import('firebase/firestore').Timestamp} requestedAt 認領的是哪一次請求
+ * @returns {Promise<boolean>} 是否寫入成功（失敗照樣比對，只是網頁看不到進度）
+ */
+export async function markRevisionCheckRunning(session, requestedAt) {
+  try {
+    await updateDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID), {
+      status: 'running',
+      handledRequestAt: requestedAt,
+      handledByName: session.displayName,
+      startedAt: serverTimestamp(),
+      finishedAt: null,
+      checkedCount: null,
+      comparedCount: null,
+    });
+    return true;
+  } catch (error) {
+    log.warn(`「立即比對」狀態寫回網頁失敗（unlockQueue.markRevisionCheckRunning）：${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * 「立即比對」做完：把確認了幾件、比對了幾件寫回網頁。
+ *
+ * @param {QueueSession} session
+ * @param {{checked: number, compared: number}} summary `checkRevisionsSafely` 的回傳值
+ * @returns {Promise<boolean>} 是否寫入成功
+ */
+export async function saveRevisionCheckResult(session, summary) {
+  try {
+    await updateDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID), {
+      status: 'done',
+      finishedAt: serverTimestamp(),
+      checkedCount: summary.checked,
+      comparedCount: summary.compared,
+    });
+    return true;
+  } catch (error) {
+    log.warn(`「立即比對」結果寫回網頁失敗（unlockQueue.saveRevisionCheckResult）：${error.message}`);
     return false;
   }
 }

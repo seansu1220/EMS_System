@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-11-03　網頁 v1.37／小工具 v1.55.0 管理員可按「立即比對」
+
+### 問題描述
+使用者詢問解鎖後的結案比對什麼時候跑、能不能提早。原本只在監看程式開啟時與每天跨日後的第一輪做，
+同仁白天解鎖、改完又結案，要到半夜才比對；手動跑 `解鎖前後比對.bat` 又要再輸入一次驗證碼。
+使用者選定：在網頁加「立即比對」按鈕，**只有管理員看得到**；不要改成定時多跑幾次。
+
+### 根本原因
+網頁與本機監看之間沒有「叫它現在做」的管道，比對只能靠開啟時與跨日觸發。
+
+### 修改的檔案與內容
+- `firebase/firestore.rules`：新增 `unlockControl/revisionCheck`——只有管理員能寫請求欄位（伺服器時間、送出者＝自己），
+  `isStaff()`（本機監看的程式帳號）只能回寫處理狀態欄位；不可刪除。
+- `scripts/rules.test.mjs`：新增 15 項（一般使用者／救護科管理者送不出、冒用、夾帶欄位、監看認領與回寫、不可刪除等），共 145 項全過。
+- 網頁：
+  - `src/types/revisionCheck.ts`（新增）：`RevisionCheckControl`、`RevisionCheckPhase`。
+  - `src/lib/revisionCheckLogic.ts`（新增）：`revisionCheckPhase()` 純函式（idle／waiting／running／done）。
+  - `src/services/revisionCheckService.ts`（新增）：`subscribeRevisionCheck`、`requestRevisionCheck`。
+  - `src/components/RevisionCheckPanel.tsx`（新增）：面板與「立即比對」按鈕，顯示等待／比對中／完成筆數。
+  - `src/pages/UnlockPage.tsx`：只有管理員（`isAdmin`）顯示面板。
+  - `src/config/constants.ts`：`COLLECTIONS.unlockControl`、`UNLOCK_WATCH_POLL_SECONDS`。
+- 本機工具：
+  - `tools/ems-report/unlockQueue.mjs`：`isRevisionCheckPending`（純函式）、`fetchRevisionCheckRequest`、
+    `markRevisionCheckRunning`、`saveRevisionCheckResult`（都只警告不丟例外）。
+  - `tools/ems-report/unlockWatch.mjs`：每一輪讀請求，有就先確認登入再比對並回寫；開啟時與跨日那一輪碰上請求就一併認領；
+    把重複的「確認登入」抽成 `confirmSignedIn`。
+  - `tools/duty-watch/index.mjs`：值班監看的例行事同樣支援立即比對。
+  - 測試：`unlockWatch.test.mjs` 新增 4 項、`unlockQueue.test.mjs` 新增 3 項；ems-report 566 項、duty-watch 20 項全過。
+- 規格書：`docs/SPEC.md` v1.37（2.1.1、2.8、3、安全規則、目錄結構）、`docs/TOOLS_SPEC.md` v1.55.0（2.13）。
+
+---
+
 ## 2026-11-03　網頁 v1.36 使用者管理改成分頁＋依角色分組
 
 ### 問題描述

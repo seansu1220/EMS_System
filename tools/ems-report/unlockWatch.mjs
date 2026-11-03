@@ -21,7 +21,15 @@ import { checkRevisionsSafely } from './revisionCheck.mjs';
 import { createDailyTrigger, shouldBackupRequest } from './revisionTrack.mjs';
 import { ensureSignedIn, isSignedIn } from './session.mjs';
 import { runUnlockFlow, printUnlockSummary } from './unlock.mjs';
-import { fetchPendingRequests, markRunning, resetToPending, saveResult } from './unlockQueue.mjs';
+import {
+  fetchPendingRequests,
+  fetchRevisionCheckRequest,
+  markRevisionCheckRunning,
+  markRunning,
+  resetToPending,
+  saveResult,
+  saveRevisionCheckResult,
+} from './unlockQueue.mjs';
 import { maskCode } from './sheetFields.mjs';
 
 /** 把毫秒說成人話（給「已連續登入多久」用）。 */
@@ -158,12 +166,15 @@ export async function processBatch(session, queue, requests) {
  *   （這正好可以拿來實測「登入到底能撐多久」）
  * @param {{fetchPending?: Function, processBatch?: Function, heartbeat?: Function,
  *   ensureSignedIn?: Function, resetDevices?: Function, checkRevisions?: Function,
- *   dailyTrigger?: {isDue: () => boolean, markDone: () => void}}} [deps]
- *   碰外部世界的六件事都可以換成替身，測試才跑得起來
- *   （比照 `locateUnlockTarget` 的既有作法）；`dailyTrigger` 換掉就能測「跨日」。
+ *   dailyTrigger?: {isDue: () => boolean, markDone: () => void},
+ *   revisionRequests?: {fetch: Function, markRunning: Function, saveResult: Function}}} [deps]
+ *   碰外部世界的事都可以換成替身，測試才跑得起來
+ *   （比照 `locateUnlockTarget` 的既有作法）；`dailyTrigger` 換掉就能測「跨日」，
+ *   `revisionRequests` 換掉就能測「管理員按了立即比對」。
  *
  * **開啟時與每天一次**（跨日後的第一輪）會確認解鎖過的案件結案了沒，結案就比對
  * 解鎖前後的紀錄表（見 `revisionCheck.mjs`，使用者 2026-11-03 指定）。試跑模式不做。
+ * 管理員在網頁按「立即比對」（v1.55）時，下一輪（最慢 `pollMs`）就做一次，結果寫回網頁。
  *
  * **每次剛登入後**（監看開啟時、掉線重新登入後）會先重置裝置管理裡
  * 卡在「持續取得資料」的裝置（見 `deviceReset.mjs`，使用者 2026-10-29 指定）。
@@ -177,6 +188,11 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   const resetDevices = deps.resetDevices ?? resetStuckDevicesSafely;
   const checkRevisions = deps.checkRevisions ?? checkRevisionsSafely;
   const daily = deps.dailyTrigger ?? createDailyTrigger();
+  const revisionRequests = deps.revisionRequests ?? {
+    fetch: fetchRevisionCheckRequest,
+    markRunning: markRevisionCheckRunning,
+    saveResult: saveRevisionCheckResult,
+  };
   const { pollMs, heartbeatMs, statusEveryMs, reloginWaitMs, reloginRemindEveryMs } = UNLOCK.watch;
   const startedAt = Date.now();
   /** 最近一次登入成功的時間；掉線期間為 null。這才是「連續登入多久」的基準。 */
@@ -216,10 +232,18 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   // 剛登入完成：先把卡住的裝置重置一輪（試跑時只回報）。
   await resetDevicesNow(options.dryRun);
 
-  /** 確認解鎖過的案件結案了沒（開啟時一次，之後每天一次；試跑不做）。 */
-  const checkRevisionsNow = async () => {
+  /**
+   * 確認解鎖過的案件結案了沒（開啟時一次、之後每天一次、管理員按「立即比對」時；試跑不做）。
+   * 有還沒處理的「立即比對」就一併認領，做完把結果寫回網頁——每天那一輪剛好碰上也算數，不必連做兩次。
+   *
+   * @param {unknown} [requestedAt] 呼叫端已經讀到的請求時間；沒給就自己讀一次
+   */
+  const checkRevisionsNow = async (requestedAt) => {
     if (options.dryRun) return;
-    await checkRevisions(session, { queue });
+    const pendingRequest = requestedAt ?? await revisionRequests.fetch(queue);
+    const claimed = pendingRequest ? await revisionRequests.markRunning(queue, pendingRequest) : false;
+    const summary = await checkRevisions(session, { queue });
+    if (claimed) await revisionRequests.saveResult(queue, summary);
     daily.markDone();
     lastHeartbeat = Date.now(); // 剛剛才操作過系統，心跳時間重算
   };
@@ -228,6 +252,22 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   /** 目前是不是處在「掉線、等使用者回來登入」的狀態。 */
   let waitingForLogin = false;
   let lastReminder = 0;
+
+  /** 動手之前先確認還登入著；等不到就轉成「等重新登入」並回傳 false，免得整批被寫成失敗。 */
+  const confirmSignedIn = async () => {
+    const loginState = await ensureLogin(session, { timeoutMs: reloginWaitMs });
+    if (loginState === '等不到') {
+      waitingForLogin = true;
+      lastReminder = Date.now();
+      signedInSince = null;
+      return false;
+    }
+    if (loginState === '重新登入') {
+      signedInSince = Date.now();
+      await resetDevicesNow(false);
+    }
+    return true;
+  };
 
   while (!options.shouldStop()) {
     // 掉線時**不做任何解鎖動作**，只反覆等使用者回來登入。
@@ -266,18 +306,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
       if (options.dryRun) {
         log.warn('　試跑模式：不處理這幾筆，它們會留在「待處理」。');
       } else {
-        // 動手之前先確認還登入著，免得整批被寫成失敗。
-        const loginState = await ensureLogin(session, { timeoutMs: reloginWaitMs });
-        if (loginState === '等不到') {
-          waitingForLogin = true;
-          lastReminder = Date.now();
-          signedInSince = null;
-          continue;
-        }
-        if (loginState === '重新登入') {
-          signedInSince = Date.now();
-          await resetDevicesNow(false);
-        }
+        if (!(await confirmSignedIn())) continue;
         const result = await runBatch(session, queue, requests);
         handled += result.done;
         lastHeartbeat = Date.now(); // 剛剛才操作過系統，心跳時間重算
@@ -305,6 +334,16 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
 
     // 跨日了：再確認一輪結案（掉線期間不做，等重新登入後的下一輪）。
     if (daily.isDue()) await checkRevisionsNow();
+
+    // 管理員在網頁按了「立即比對」（v1.55）：先確認還登入著再做（掉線期間不做，等重新登入後的下一輪）。
+    if (!options.dryRun) {
+      const requestedAt = await revisionRequests.fetch(queue);
+      if (requestedAt) {
+        log.step(`[${clock()}] 管理員在網頁上要求立即比對`);
+        if (!(await confirmSignedIn())) continue;
+        await checkRevisionsNow(requestedAt);
+      }
+    }
 
     if (Date.now() - lastStatus >= statusEveryMs) {
       lastStatus = Date.now();

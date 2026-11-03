@@ -10,6 +10,7 @@
  *   6. 跨夜之後查詢期間要跟著往前走（不然當天的案件會全變成「查無案件」）
  *   7. 每次剛登入後都要重置一輪卡住的裝置（開啟時、掉線重新登入後）
  *   8. 開啟時與跨日時要確認解鎖過的案件結案了沒（試跑不做）
+ *   9. 管理員在網頁按「立即比對」時要做一輪並回寫結果（試跑、掉線時不做）
  *
  * 執行：npm run tool:ems:test
  */
@@ -35,7 +36,10 @@ function stopAfter(rounds) {
 
 /** 收集替身被呼叫的情形。 */
 function createSpies(overrides = {}) {
-  const calls = { fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [], revisions: 0 };
+  const calls = {
+    fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [], revisions: 0,
+    requestFetch: 0, claimed: [], savedSummaries: [],
+  };
   return {
     calls,
     deps: {
@@ -61,6 +65,21 @@ function createSpies(overrides = {}) {
         return { checked: 0, compared: 0 };
       },
       dailyTrigger: overrides.dailyTrigger ?? { isDue: () => false, markDone: () => {} },
+      // 「立即比對」請求：預設沒人按；`revisionRequest(第幾次讀)` 回傳請求時間就代表有人按了。
+      revisionRequests: {
+        fetch: async () => {
+          calls.requestFetch += 1;
+          return overrides.revisionRequest?.(calls.requestFetch) ?? null;
+        },
+        markRunning: async (_queue, requestedAt) => {
+          calls.claimed.push(requestedAt);
+          return true;
+        },
+        saveResult: async (_queue, summary) => {
+          calls.savedSummaries.push(summary);
+          return true;
+        },
+      },
       resetDevices: async (_session, options) => {
         calls.reset.push(options.dryRun);
         // 模擬「做完一台」：讓監看有機會穿插處理解鎖申請。
@@ -313,4 +332,47 @@ test('跨日之後要再確認一輪結案，做完就不再重複', async () =>
   await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
     runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(4) }, spies.deps));
   assert.equal(spies.calls.revisions, 2, '開啟時一次＋跨日一次');
+});
+
+test('管理員按了立即比對：下一輪就比對一次，並把結果寫回網頁', async () => {
+  // 第 1 次讀是開啟時（還沒人按），第 2 次是第一輪迴圈（剛按下去）。
+  const spies = createSpies({ revisionRequest: (read) => (read === 2 ? 'T-按下' : null) });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
+  assert.equal(spies.calls.revisions, 2, '開啟時一次＋按下後一次');
+  assert.deepEqual(spies.calls.claimed, ['T-按下'], '要認領那一次請求，網頁才會顯示比對中');
+  assert.deepEqual(spies.calls.savedSummaries, [{ checked: 0, compared: 0 }], '做完要寫回確認了幾件');
+});
+
+test('開啟時就有人按過：開啟那一輪順便認領，不會再多做一次', async () => {
+  let claimedYet = false;
+  const spies = createSpies({ revisionRequest: () => (claimedYet ? null : 'T-早就按了') });
+  const markRunning = spies.deps.revisionRequests.markRunning;
+  spies.deps.revisionRequests.markRunning = async (queue, requestedAt) => {
+    claimedYet = true;
+    return markRunning(queue, requestedAt);
+  };
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
+  assert.equal(spies.calls.revisions, 1);
+  assert.equal(spies.calls.savedSummaries.length, 1);
+});
+
+test('試跑模式不理會立即比對', async () => {
+  const spies = createSpies({ revisionRequest: () => 'T-按下' });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(2) }, spies.deps));
+  assert.equal(spies.calls.requestFetch, 0, '試跑連讀都不讀');
+  assert.equal(spies.calls.revisions, 0);
+});
+
+test('立即比對時發現掉線：等重新登入，不在沒登入的狀態下比對', async () => {
+  const spies = createSpies({
+    revisionRequest: (read) => (read === 2 ? 'T-按下' : null),
+    loginResult: () => '等不到',
+  });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
+  assert.equal(spies.calls.revisions, 1, '只有開啟時那一次');
+  assert.deepEqual(spies.calls.claimed, [], '沒登入就不認領，請求留著等重新登入後再做');
 });

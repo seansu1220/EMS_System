@@ -582,6 +582,75 @@ await check(
   assertFails(getDocs(collection(emsManager, 'triageTagIssues'))),
 );
 
+// ── 5.2 「立即比對」請求（v1.37，只有管理員按得了）──
+
+/** 管理員按「立即比對」時要寫的內容。 */
+function revisionCheckRequest(uid) {
+  return { requestedAt: serverTimestamp(), requestedBy: uid, requestedByName: '測試' };
+}
+const revisionCheckDoc = (db) => doc(db, 'unlockControl/revisionCheck');
+
+await check(
+  '一般使用者不可送出立即比對',
+  assertFails(setDoc(revisionCheckDoc(member), revisionCheckRequest('member-uid'), { merge: true })),
+);
+await check(
+  '救護科管理者不可送出立即比對',
+  assertFails(setDoc(revisionCheckDoc(emsManager), revisionCheckRequest('ems-manager-uid'), { merge: true })),
+);
+await check(
+  '立即比對不可冒用別人當送出者',
+  assertFails(setDoc(revisionCheckDoc(admin), revisionCheckRequest('member-uid'), { merge: true })),
+);
+await check(
+  '立即比對不可夾帶其他欄位',
+  assertFails(setDoc(revisionCheckDoc(admin), { ...revisionCheckRequest('admin-uid'), status: 'done' }, { merge: true })),
+);
+await check(
+  '管理員可送出立即比對',
+  assertSucceeds(setDoc(revisionCheckDoc(admin), revisionCheckRequest('admin-uid'), { merge: true })),
+);
+await check('本機監看（一般使用者）讀得到立即比對請求', assertSucceeds(getDoc(revisionCheckDoc(member))));
+await check('解鎖專用帳號讀不到立即比對請求', assertFails(getDoc(revisionCheckDoc(unlocker))));
+await check('救護科管理者讀不到立即比對請求', assertFails(getDoc(revisionCheckDoc(emsManager))));
+
+const firstRequestAt = (await getDoc(revisionCheckDoc(member))).data().requestedAt;
+await check(
+  '本機監看可認領請求（比對中）',
+  assertSucceeds(updateDoc(revisionCheckDoc(member), {
+    status: 'running',
+    handledRequestAt: firstRequestAt,
+    handledByName: '程式帳號',
+    startedAt: serverTimestamp(),
+    finishedAt: null,
+    checkedCount: null,
+    comparedCount: null,
+  })),
+);
+await check(
+  '本機監看不可自己改請求時間',
+  assertFails(updateDoc(revisionCheckDoc(member), { requestedAt: serverTimestamp() })),
+);
+await check(
+  '本機監看不可寫不認得的狀態',
+  assertFails(updateDoc(revisionCheckDoc(member), { status: 'whatever' })),
+);
+await check(
+  '本機監看可寫回比對完成與筆數',
+  assertSucceeds(updateDoc(revisionCheckDoc(member), {
+    status: 'done', finishedAt: serverTimestamp(), checkedCount: 3, comparedCount: 1,
+  })),
+);
+await check(
+  '解鎖專用帳號不可回寫立即比對狀態',
+  assertFails(updateDoc(revisionCheckDoc(unlocker), { status: 'running' })),
+);
+await check(
+  '管理員再按一次：只更新請求，監看寫的結果留著',
+  assertSucceeds(setDoc(revisionCheckDoc(admin), revisionCheckRequest('admin-uid'), { merge: true })),
+);
+await check('立即比對請求連管理員也不可刪除', assertFails(deleteDoc(revisionCheckDoc(admin))));
+
 // ── 6. 測試用傷票（計數器 + 領取紀錄 + 單位週用量必須一起寫、互相對得上）──
 
 /** 與 src/lib/triageTagNumber.ts 的 triageTagWeekIndex() 同算法（台灣時間、週一起算）。 */

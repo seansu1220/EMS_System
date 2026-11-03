@@ -42,7 +42,15 @@ export const COLLECTIONS = {
   pdfToolUsage: 'pdfToolUsage',
   /** 解鎖工單的鎖定時段設定（只有一份文件 `main`，見 types/unlockPolicy）。 */
   unlockPolicy: 'unlockPolicy',
+  /** 給本機監看的控制訊號（目前只有「立即比對」一份文件 `revisionCheck`，見 types/revisionCheck）。 */
+  unlockControl: 'unlockControl',
 } as const;
+
+/**
+ * 本機監看多久看一次雲端（秒），只用來在畫面上說「大約多久會開始」。
+ * ⚠️ 須與 tools/ems-report/config.mjs 的 `UNLOCK.watch.pollMs` 一致。
+ */
+export const UNLOCK_WATCH_POLL_SECONDS = 20;
 
 /** UI 色調鍵（對應 ui.tsx 的 Badge tone / 文字顏色樣式）。 */
 export type Tone = 'slate' | 'green' | 'amber' | 'red' | 'blue';
