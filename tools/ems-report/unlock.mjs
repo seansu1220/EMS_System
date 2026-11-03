@@ -39,7 +39,7 @@ import {
 } from './pageFinder.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
-import { addTrackedEntry, createEntry, pickSheetButton, toCloudRevision } from './revisionTrack.mjs';
+import { addTrackedEntry, createEntry, describeCutoff, pickSheetButton, toCloudRevision } from './revisionTrack.mjs';
 import { backupBeforeUnlock, TRACKER_FILE } from './sheetBackup.mjs';
 import {
   extractLabeledCode,
@@ -696,8 +696,8 @@ async function applyOnlineUsageFallback(context, page, temsis, outcome, options)
 async function prepareBackupBeforeUnlock(context, page, outcome, caseInfo, reenterCase, options) {
   if (!UNLOCK.backup.enabled) return !options.dryRun;
   if (options.skipBackup) {
-    // 11/3 以前送出的線上工單不追溯（使用者 2026-11-03 指定），照舊直接解鎖。
-    outcome.detail = `${outcome.detail}；${UNLOCK.backup.trackRequestsFrom} 以前送出的申請，不備份、不做結案後比對`;
+    // 功能上線（13:40）以前送出的線上工單不追溯（使用者 2026-11-03 指定），照舊直接解鎖。
+    outcome.detail = `${outcome.detail}；${describeCutoff(UNLOCK.backup.trackRequestsFrom)} 以前送出的申請，不備份、不做結案後比對`;
     return !options.dryRun;
   }
   const result = await backupBeforeUnlock(context, page, {

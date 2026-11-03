@@ -232,7 +232,7 @@ export function withEntry(tracker, entry) {
  *
  * @param {Tracker} tracker
  * @param {Date} now
- * @param {{maxWaitDays: number, maxFailures: number}} config
+ * @param {{maxWaitDays: number|null, maxFailures: number|null}} config null＝不設限（一直追）
  * @returns {{toCheck: RevisionEntry[], toExpire: RevisionEntry[], toCompareOffline: {entry: RevisionEntry, next: RevisionEntry}[]}}
  *   `toCheck`＝回系統查結案沒；`toExpire`＝等太久，不再追；
  *   `toCompareOffline`＝已被下一版取代，直接拿兩份本機備份比
@@ -251,8 +251,8 @@ export function planRevisionWork(tracker, now, config) {
     }
     if (entry.state !== 'waiting') continue;
     const waitedDays = (now.getTime() - new Date(entry.unlockedAt).getTime()) / 86400000;
-    if (waitedDays > config.maxWaitDays) toExpire.push(entry);
-    else if (entry.failCount >= config.maxFailures) continue;
+    if (Number.isFinite(config.maxWaitDays) && waitedDays > config.maxWaitDays) toExpire.push(entry);
+    else if (Number.isFinite(config.maxFailures) && entry.failCount >= config.maxFailures) continue;
     else toCheck.push(entry);
   }
   return { toCheck, toExpire, toCompareOffline };
@@ -263,7 +263,7 @@ export function planRevisionWork(tracker, now, config) {
  *
  * @param {Tracker} tracker
  * @param {Date} now
- * @param {{maxWaitDays: number, maxFailures: number}} config
+ * @param {{maxWaitDays: number|null, maxFailures: number|null}} config
  * @returns {number} 今天還沒查過的件數
  */
 export function countDueToday(tracker, now, config) {
@@ -275,17 +275,25 @@ export function countDueToday(tracker, now, config) {
 }
 
 /**
- * 這張線上工單要不要備份、追蹤：送出日期（本地）在 `trackFrom`（含）之後才要。
+ * 這張線上工單要不要備份、追蹤：送出時間在 `trackFrom`（含）之後才要。
  * 申請時間讀不到的一律要——寧可多備份一份，也不要漏掉該追的案件。
  *
  * @param {string} requestedAt ISO 字串（可能是空字串）
- * @param {string} trackFrom `YYYY-MM-DD`
+ * @param {string} trackFrom ISO 時間（帶時區），例如 `2026-11-03T13:40:00+08:00`
  * @returns {boolean}
  */
 export function shouldBackupRequest(requestedAt, trackFrom) {
   const date = new Date(requestedAt ?? '');
   if (!requestedAt || Number.isNaN(date.getTime())) return true;
-  return localDateKey(date) >= trackFrom;
+  return date.getTime() >= new Date(trackFrom).getTime();
+}
+
+/** 起算時間寫成人看的樣子：`2026-11-03 13:40`（本地時間）。 */
+export function describeCutoff(trackFrom) {
+  const date = new Date(trackFrom);
+  if (Number.isNaN(date.getTime())) return String(trackFrom);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${localDateKey(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /**

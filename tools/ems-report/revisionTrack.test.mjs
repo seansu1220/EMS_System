@@ -156,10 +156,19 @@ test('追蹤清單：不存在時是空的；新增、更新後讀得回來；�
   }
 });
 
-test('11/3 以前送出的工單不備份；當天（台灣時間）以後的才備份；時間讀不到的照樣備份', () => {
-  // 2026-11-02T16:30Z ＝ 台灣 11/3 00:30（測試機時區不同時，以本地日期判斷，這裡只驗前後兩端）
-  assert.equal(shouldBackupRequest('2026-10-30T02:00:00.000Z', '2026-11-03'), false);
-  assert.equal(shouldBackupRequest('2026-11-05T02:00:00.000Z', '2026-11-03'), true);
-  assert.equal(shouldBackupRequest('', '2026-11-03'), true);
-  assert.equal(shouldBackupRequest('亂寫', '2026-11-03'), true);
+test('上線時間（11/3 13:40）以前送出的工單不備份；之後（含）的才備份；時間讀不到的照樣備份', () => {
+  const cutoff = '2026-11-03T13:40:00+08:00';
+  assert.equal(shouldBackupRequest('2026-11-03T05:39:59.000Z', cutoff), false, '台灣 13:39:59');
+  assert.equal(shouldBackupRequest('2026-11-03T05:40:00.000Z', cutoff), true, '台灣 13:40 整');
+  assert.equal(shouldBackupRequest('2026-11-03T01:00:00.000Z', cutoff), false, '同一天早上也不追');
+  assert.equal(shouldBackupRequest('', cutoff), true);
+  assert.equal(shouldBackupRequest('亂寫', cutoff), true);
+});
+
+test('不設停止期限（null）時，等再久、失敗再多次都照樣追', () => {
+  const old = makeEntry({ failCount: 99 }, new Date('2026-01-01T00:00:00Z'));
+  const work = planRevisionWork({ formatVersion: 1, entries: [old] }, new Date('2026-11-03T03:00:00Z'),
+    { maxWaitDays: null, maxFailures: null });
+  assert.equal(work.toExpire.length, 0);
+  assert.equal(work.toCheck.length, 1);
 });

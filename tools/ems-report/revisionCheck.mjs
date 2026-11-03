@@ -212,15 +212,21 @@ async function compareOffline(entry, next) {
   return compareAndReport(entry, { beforeItems, afterItems, closedFile: next.backupFile });
 }
 
-/** 失敗一次：累計次數，太多次就不再追（要人來看）。 */
+/**
+ * 失敗一次：累計次數。設了 `maxFailures` 才會放棄；目前不設（使用者 2026-11-03：一直追到結案），
+ * 連續失敗太多次只提醒，請人看一下原因。
+ */
 function failurePatch(entry, error) {
   const reason = error instanceof Error ? error.message : String(error);
   const failCount = (entry.failCount ?? 0) + 1;
-  const gaveUp = failCount >= UNLOCK.revision.maxFailures;
-  log.warn(
-    `　TEMSIS ${maskCode(entry.temsis)}：這次沒比成（${reason}）`
-      + (gaveUp ? `。已連續失敗 ${failCount} 次，先不追了，請自行到系統比對` : '，下次再試'),
-  );
+  const { maxFailures, warnAfterFailures } = UNLOCK.revision;
+  const gaveUp = Number.isFinite(maxFailures) && failCount >= maxFailures;
+  const tail = gaveUp
+    ? `。已連續失敗 ${failCount} 次，先不追了，請自行到系統比對`
+    : failCount >= warnAfterFailures
+      ? `。已連續失敗 ${failCount} 次（仍會繼續追），請看一下原因`
+      : '，下次再試';
+  log.warn(`　TEMSIS ${maskCode(entry.temsis)}：這次沒比成（${reason}）${tail}`);
   return {
     lastCheckedAt: new Date().toISOString(),
     failCount,

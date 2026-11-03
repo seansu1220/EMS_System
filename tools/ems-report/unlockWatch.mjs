@@ -123,7 +123,7 @@ export async function processBatch(session, queue, requests) {
     temsisList: requests.map((request) => request.temsis),
     // 結案後比對的結果要寫回同一張工單，所以把工單編號一起帶進去。
     requestIds: requests.map((request) => request.id),
-    // 11/3 以前送出的申請不備份、不追蹤（使用者 2026-11-03 指定）。
+    // 功能上線（2026-11-03 13:40）以前送出的申請不備份、不追蹤（使用者指定）。
     skipBackup: requests.map((request) => !shouldBackupRequest(request.requestedAt, UNLOCK.backup.trackRequestsFrom)),
     // 現算而不是沿用開視窗時的快照，跨夜之後才不會漏掉當天的案件。
     range: refreshQueryRange(session),

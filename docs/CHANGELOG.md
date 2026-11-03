@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-11-03　小工具 v1.54.3 追蹤起算改成 13:40、不設停止追蹤期限
+
+### 問題描述
+使用者要求：從現在開始的案件都必須追蹤。進一步說明：
+1. 13:40 以前送出的案件都不適用新的追蹤邏輯（功能剛上線）。
+2. 不設停止追蹤期限。
+3. 解除線上佔用的案件不必追蹤（佔用只是把使用者放開，不是讓他修改紀錄表）。
+
+### 根本原因
+起算點原本是「11/3 整天」，13:40 上線前送出的單也會被追；另外原本解鎖後 60 天沒結案、或連續失敗 5 次就不再追。
+
+### 修改的檔案與內容
+- `tools/ems-report/config.mjs`：`UNLOCK.backup.trackRequestsFrom` 改成 `2026-11-03T13:40:00+08:00`；
+  `UNLOCK.revision.maxWaitDays`、`maxFailures` 改成 null（不設限），新增 `warnAfterFailures: 5`。
+- `tools/ems-report/revisionTrack.mjs`：`shouldBackupRequest` 改比時間；新增 `describeCutoff`；`planRevisionWork` 遇到 null 不逾期、不放棄。
+- `tools/ems-report/revisionCheck.mjs`：一直失敗只提醒、不放棄。
+- `tools/ems-report/unlock.mjs`、`unlockWatch.mjs`、`index.mjs`：說明文字。
+- 測試：`revisionTrack.test.mjs` 改寫起算點測試（13:39:59 不追、13:40 整要追）、新增不設期限測試；ems-report 559 項、duty-watch 20 項全過。
+- 規格書：`docs/TOOLS_SPEC.md` v1.54.3（2.13）、`docs/SPEC.md` v1.35.3（2.8）。
+
+---
+
 ## 2026-11-03　小工具 v1.54.2 依實際紀錄表改寫結案後比對（座標比對）
 
 ### 問題描述

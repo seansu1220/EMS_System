@@ -1453,7 +1453,7 @@ async function processUnlockQueue(queue, options) {
         temsisList: requests.map((request) => request.temsis),
         // 結案後比對的結果要寫回同一張工單。
         requestIds: requests.map((request) => request.id),
-        // 11/3 以前送出的申請不備份、不追蹤（使用者 2026-11-03 指定）。
+        // 功能上線（2026-11-03 13:40）以前送出的申請不備份、不追蹤（使用者指定）。
         skipBackup: requests.map((request) => !shouldBackupRequest(request.requestedAt, UNLOCK.backup.trackRequestsFrom)),
         range,
         dryRun: false,
