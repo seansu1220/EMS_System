@@ -35,7 +35,7 @@ export function Layout() {
           <span className="text-lg font-bold text-slate-800">{APP_NAME}</span>
           <nav className="flex flex-1 flex-wrap items-center gap-1">
             {/*
-              業務管理的入口對「解鎖專用」帳號一律不顯示——那種帳號連資料都讀不到，
+              業務管理的入口對「解鎖專用」「救護科管理者」帳號一律不顯示——那種帳號連資料都讀不到，
               放著只會讓人點進去看到一頁空的（權限最終防線仍在 Firestore 規則）。
             */}
             {canUseTasks && (

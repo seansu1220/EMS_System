@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-11-03　網頁 v1.34.0 救護科管理者只能用解鎖工單、測試用傷票、小工具
+
+### 問題描述
+使用者要求：救護科管理者只能看解鎖工單、測試用傷票領取跟小工具，其他頁面都不能看。
+
+### 根本原因
+v1.32 把救護科管理者設計成「一般使用者＋鎖定時段」，業務管理的頁面與資料都看得到。
+導覽列、路由守衛與 Firestore 規則全都依 `canUseTaskSystem()`／`isStaff()` 判斷能不能進業務系統，原本只排除解鎖專用。
+
+### 修改的檔案與內容
+- `src/lib/permissions.ts`：
+  - `canUseTaskSystem()` 也排除 `emsManager`，導覽列只剩三個項目，進其他頁會被導回解鎖工單。
+  - `canSeeAllUnlockRequests()` 改成「業務人員或 `canManageUnlockLock()`」，救護科管理者仍看得到所有人的工單。
+  - 傷票紀錄維持只看自己領的。
+- `firebase/firestore.rules`：
+  - `isStaff()` 排除 `unlocker` 與 `emsManager`，救護科管理者讀不到業務、屬性、公版、假日，也不能回寫解鎖結果。
+  - `unlockRequests` 讀取另加 `isLockManager()`。
+- 說明文字：`src/types/user.ts`、`src/config/constants.ts`（角色提示）、`src/pages/UsersPage.tsx`（頁首說明）、`src/components/Layout.tsx`（註解）。
+- 測試 `scripts/rules.test.mjs`：
+  - 原「救護科管理者讀得到業務」改為讀不到。
+  - 新增讀不到屬性／公版／假日、不可新增業務、看得到所有工單、不可回寫結果、傷票只看自己的。
+  - 共 130 項全過。
+- 規格書 `docs/SPEC.md` v1.34.0：2.1.1 權限表與角色說明、2.7 路由、2.8 工單清單、3 安全規則。
+- `package.json`：版本 1.27.0。
+
+---
+
 ## 2026-11-03　網頁 v1.33.0／小工具 v1.53.0 管理者送單不受鎖定時段限制、鎖定面板簡化
 
 ### 問題描述

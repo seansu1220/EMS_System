@@ -60,11 +60,16 @@ export function canManageUsers(user: AppUser | null): boolean {
  *
  * 「解鎖專用」帳號一律不行——那是給各分隊申請解鎖用的最低權限帳號，
  * 不需要也不應該看到科內業務（使用者 2026-08-06 指定）。
+ * 「救護科管理者」也不行（v1.34，使用者 2026-11-03 指定）：只進得去解鎖工單、
+ * 測試用傷票領取與小工具三頁，差別在看得到所有人的工單、可以設定鎖定時段。
+ *
+ * ⚠️ 須與 `firebase/firestore.rules` 的 `isStaff()` 一致。
  */
 export function canUseTaskSystem(user: AppUser | null): boolean {
   // 管理員一律放行：管理員身分來自 email 白名單，萬一文件的 role 欄位被改壞
   // （或誤設成 unlocker），也不能把唯一能改回來的人鎖在外面。
-  return isAdmin(user) || (isApproved(user) && user?.role !== 'unlocker');
+  return isAdmin(user)
+    || (isApproved(user) && user?.role !== 'unlocker' && user?.role !== 'emsManager');
 }
 
 /** 是否可使用解鎖工單（所有角色只要已核准都可以）。 */
@@ -85,10 +90,11 @@ export function isUnlockOnly(user: AppUser | null): boolean {
  * 是否看得到**所有人**的解鎖工單。
  *
  * 管理員與一般使用者要看得到全部（他們才是實際去跑解鎖的人）；
+ * 救護科管理者也看得到全部（要管鎖定時段，得知道大家在申請什麼）；
  * 解鎖專用帳號只看得到自己送出的那幾筆。
  */
 export function canSeeAllUnlockRequests(user: AppUser | null): boolean {
-  return canUseTaskSystem(user);
+  return canUseTaskSystem(user) || canManageUnlockLock(user);
 }
 
 /**
@@ -101,9 +107,10 @@ export function canManageUnlockLock(user: AppUser | null): boolean {
 }
 
 /**
- * 是否看得到**所有人**的測試用傷票領取紀錄（規則同解鎖工單）。
+ * 是否看得到**所有人**的測試用傷票領取紀錄。
  *
- * 領傷票三種角色都可以；解鎖專用帳號只看得到自己領的那幾批。
+ * 領傷票所有角色都可以；解鎖專用與救護科管理者只看得到自己領的那幾批
+ * （救護科管理者看得到全部工單是為了管鎖定時段，傷票沒有這個需要）。
  */
 export function canSeeAllTriageTagIssues(user: AppUser | null): boolean {
   return canUseTaskSystem(user);

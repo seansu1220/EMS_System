@@ -559,12 +559,27 @@ await check(
 );
 await check('鎖定時段連管理員也不可刪除', assertFails(deleteDoc(doc(admin, 'unlockPolicy/main'))));
 await check(
-  '救護科管理者讀得到業務（權限同一般使用者）',
-  assertSucceeds(getDoc(doc(emsManager, 'tasks/task-1'))),
+  '救護科管理者讀不到業務',
+  assertFails(getDoc(doc(emsManager, 'tasks/task-1'))),
+);
+await check('救護科管理者讀不到屬性', assertFails(getDocs(collection(emsManager, 'categories'))));
+await check('救護科管理者讀不到待辦公版', assertFails(getDocs(collection(emsManager, 'checklistTemplates'))));
+await check('救護科管理者讀不到假日清單', assertFails(getDoc(doc(emsManager, 'holidays/2027'))));
+await check(
+  '救護科管理者不可新增業務',
+  assertFails(addDoc(collection(emsManager, 'tasks'), { title: '偷加的', ownerUid: 'ems-manager-uid' })),
 );
 await check(
-  '救護科管理者不可刪除業務',
-  assertFails(deleteDoc(doc(emsManager, 'tasks/task-1'))),
+  '救護科管理者看得到所有人的解鎖工單',
+  assertSucceeds(getDocs(collection(emsManager, 'unlockRequests'))),
+);
+await check(
+  '救護科管理者不可回寫解鎖結果（那是救護科電腦的事）',
+  assertFails(updateDoc(doc(emsManager, 'unlockRequests/req-mine'), { status: 'unlocked' })),
+);
+await check(
+  '救護科管理者只看得到自己領的傷票紀錄（不帶條件查全部會被擋）',
+  assertFails(getDocs(collection(emsManager, 'triageTagIssues'))),
 );
 
 // ── 6. 測試用傷票（計數器 + 領取紀錄 + 單位週用量必須一起寫、互相對得上）──

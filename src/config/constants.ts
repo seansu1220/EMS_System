@@ -103,7 +103,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
  */
 export const ASSIGNABLE_ROLES: readonly { value: string; label: string; hint: string }[] = [
   { value: 'member', label: '一般使用者', hint: '可用業務管理與解鎖工單' },
-  { value: 'emsManager', label: '救護科管理者', hint: '一般使用者的權限，另外可以鎖定／解鎖申請解鎖的時段' },
+  { value: 'emsManager', label: '救護科管理者', hint: '只能用解鎖工單、測試用傷票、小工具；看得到所有工單，可鎖定／解鎖時段' },
   { value: 'unlocker', label: '解鎖專用', hint: '只能提出解鎖工單，看不到業務資料' },
 ];
 

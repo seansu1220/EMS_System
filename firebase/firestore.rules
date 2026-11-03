@@ -10,8 +10,8 @@ rules_version = '2';
 // - **解鎖專用（role == 'unlocker'，v1.17 起）**：權限最低。只能建立解鎖工單、
 //   讀取**自己送出的**工單；業務/屬性/公版/假日一律讀不到也寫不了。
 //   給各分隊申請解鎖用，不需要也不應該看到科內業務。
-// - **救護科管理者（role == 'emsManager'，v1.32 起）**：權限同一般使用者，
-//   另外可以改解鎖工單的「鎖定時段」（unlockPolicy/main）。
+// - **救護科管理者（role == 'emsManager'，v1.32 起）**：v1.34 起與解鎖專用一樣**讀不到業務資料**，
+//   但看得到所有人的解鎖工單、可以改「鎖定時段」（unlockPolicy/main），送工單也不受鎖定限制。
 // - 待審核 / 未通過的帳號：完全不能存取業務資料，只能讀寫自己的 users 文件。
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -37,12 +37,13 @@ service cloud.firestore {
       return isAdmin() || (isSignedIn() && myUser().status == 'approved');
     }
 
-    // 可使用**業務管理系統**的人＝已核准，且不是「解鎖專用」帳號。
+    // 可使用**業務管理系統**的人＝已核准，且不是「解鎖專用」或「救護科管理者」帳號
+    // （救護科管理者 v1.34 起也排除，只進得去解鎖工單、傷票、小工具）。
     // 管理員一律放行：管理員身分來自 email 白名單，即使文件的 role 被改壞
     // 也不能把唯一改得回來的人鎖在外面。
     // ⚠️ 須與 src/lib/permissions.ts 的 canUseTaskSystem() 一致。
     function isStaff() {
-      return isAdmin() || (isApproved() && myUser().role != 'unlocker');
+      return isAdmin() || (isApproved() && !(myUser().role in ['unlocker', 'emsManager']));
     }
 
     // 可設定解鎖工單「鎖定時段」的人＝管理員，或角色為「救護科管理者」的已核准帳號（v1.32 起）。
@@ -166,7 +167,9 @@ service cloud.firestore {
     }
 
     match /unlockRequests/{requestId} {
-      allow read: if isStaff()
+      // 救護科管理者不是業務人員，但要管鎖定時段，所以也看得到全部（v1.34）。
+      // ⚠️ 須與 src/lib/permissions.ts 的 canSeeAllUnlockRequests() 一致。
+      allow read: if isStaff() || isLockManager()
         || (isApproved() && resource.data.requestedBy == request.auth.uid);
 
       // 新工單一律從 pending 開始，且申請人必須是自己——
