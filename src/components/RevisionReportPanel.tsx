@@ -4,7 +4,9 @@
  * 選期間（預設上個月，可調到日）按「匯出」→ 救護科電腦的監看程式下一輪就在**那台電腦上**產出 Excel：
  * 未結案的案件、已結案每一件的修改內容（原內容 → 修改後）與申請事由。
  * 報表含病患資料，**只存在救護科電腦、不上雲**（使用者選定只做電腦端完整版），所以網頁沒有下載，
- * 只顯示檔名與件數。階段判斷與期間計算在 `lib/revisionCheckLogic`，這裡只負責顯示與按鈕。
+ * 只顯示檔名與件數。v1.39 起每個期間一個資料夾：總表＋「未結案」「已結案」原表資料夾，
+ * 總表的編號點下去就開那一件的原表（使用者 2026-11-03：要分資料夾，看總表時才好對照原表）。
+ * 階段判斷與期間計算在 `lib/revisionCheckLogic`，這裡只負責顯示與按鈕。
  */
 import { useEffect, useState } from 'react';
 import { requestRevisionReport, subscribeRevisionReport } from '../services/revisionCheckService';
@@ -20,8 +22,8 @@ import type { AppUser } from '../types/user';
 import type { DateRange, RevisionReportControl } from '../types/revisionCheck';
 import { Button, Card, ErrorBanner, INPUT_CLASS } from './ui';
 
-/** 報表在救護科電腦上的位置（給人找檔案用）。 */
-const REPORT_FOLDER = 'tools\\ems-report\\out\\internal\\解鎖修改紀錄\\';
+/** 報表在救護科電腦上的位置（給人找檔案用；底下每個期間一個資料夾）。 */
+const REPORT_FOLDER = 'tools\\ems-report\\out\\internal\\解鎖修改紀錄\\{起日}至{迄日}\\';
 
 /** 目前狀態的一句話。 */
 function describeReport(control: RevisionReportControl | null): string {
@@ -84,6 +86,7 @@ export function RevisionReportPanel({ user }: { user: AppUser }) {
         <h2 className="text-base font-semibold text-slate-800">匯出解鎖修改紀錄</h2>
         <p className="mt-1 text-xs text-slate-500">
           依解鎖時間挑出期間內的案件，列出：未結案的是哪幾件、已結案的每一件改了哪裡（原內容 → 修改後）、申請事由。
+          每個期間一個資料夾，裡面有總表和「未結案」「已結案」原表資料夾，總表點「編號」就開那一件的解鎖前／結案後原表。
           檔案含病患資料，只會產生在救護科電腦的 {REPORT_FOLDER}，網頁不提供下載。
         </p>
       </div>

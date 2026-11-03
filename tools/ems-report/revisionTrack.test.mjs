@@ -24,6 +24,8 @@ import {
   parseBackupVersion,
   pickSheetButton,
   planRevisionWork,
+  folderedRevisionPath,
+  revisionCaseFolder,
   revisionFileNames,
   temsisCaseDate,
   toCloudRevision,
@@ -62,11 +64,23 @@ test('清單裡有沒有這一版（重試時避免傳兩份）', () => {
   assert.equal(hasRemark(['救護紀錄表內容-v10'], '救護紀錄表內容-v1'), false);
 });
 
-test('檔名：上傳用純英數，本機用中文寫清楚', () => {
+test('檔名：上傳用純英數，本機用中文寫清楚，放進「案件年月/TEMSIS」資料夾', () => {
   const names = revisionFileNames(TEMSIS, 2);
   assert.equal(names.upload, `${TEMSIS}_v2.pdf`);
-  assert.equal(names.backup, `${TEMSIS}-v2-解鎖前.pdf`);
-  assert.equal(names.report, `${TEMSIS}-v2-差異.txt`);
+  assert.equal(names.backup, `2026-09/${TEMSIS}/${TEMSIS}-v2-解鎖前.pdf`);
+  assert.equal(names.closed, `2026-09/${TEMSIS}/${TEMSIS}-v2-結案後.pdf`);
+  assert.equal(names.report, `2026-09/${TEMSIS}/${TEMSIS}-v2-差異.txt`);
+});
+
+test('資料夾依案件日期分月（跨月再解鎖也在同一個資料夾）；看不出日期放「案件日期不明」', () => {
+  assert.equal(revisionCaseFolder(TEMSIS), `2026-09/${TEMSIS}`);
+  assert.equal(revisionCaseFolder('ABC-123'), '案件日期不明/ABC123');
+});
+
+test('舊版平放的檔案：算出搬進資料夾後的路徑；已在資料夾裡、空值就不搬', () => {
+  assert.equal(folderedRevisionPath(`${TEMSIS}-v1-解鎖前.pdf`, TEMSIS), `2026-09/${TEMSIS}/${TEMSIS}-v1-解鎖前.pdf`);
+  assert.equal(folderedRevisionPath(`2026-09/${TEMSIS}/${TEMSIS}-v1-解鎖前.pdf`, TEMSIS), null);
+  assert.equal(folderedRevisionPath(null, TEMSIS), null);
 });
 
 test('救護狀態：已結案才算，未結案不會被誤認', () => {

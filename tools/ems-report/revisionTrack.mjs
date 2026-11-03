@@ -27,7 +27,7 @@ import { padRange } from './dateRange.mjs';
  * @property {string} temsis 完整 TEMSIS
  * @property {number} version 第幾版（檔案說明的 `-v{N}`）
  * @property {string} remark 上傳時填的檔案說明，例如 `救護紀錄表內容-v1`
- * @property {string} backupFile 解鎖前那份 PDF 的檔名（放在 `PATHS.revisionDir`）
+ * @property {string} backupFile 解鎖前那份 PDF（相對 `PATHS.revisionDir` 的路徑，例如 `2026-11/{TEMSIS}/{TEMSIS}-v1-解鎖前.pdf`）
  * @property {string} unlockedAt 解鎖時間（ISO）
  * @property {string|null} requestId 線上工單的文件 ID；本機手動解鎖為 null
  * @property {string|null} caseDate
@@ -106,24 +106,63 @@ export function hasRemark(remarks, remark) {
   return remarks.some((item) => compact(item) === wanted);
 }
 
+/** TEMSIS 只留英數（當檔名、資料夾名用）。 */
+function safeTemsis(temsis) {
+  return String(temsis).replace(/[^0-9A-Za-z]/g, '');
+}
+
+/** 看不出案件日期時放的月份資料夾。 */
+export const UNKNOWN_MONTH_FOLDER = '案件日期不明';
+
+/**
+ * 這一件在 `解鎖前後比對/` 底下的資料夾（v1.57.0，使用者 2026-11-03：檔案要分資料夾，不然很雜）：
+ * `{案件年月}/{TEMSIS}`，同一件的每一版（解鎖前、結案後、差異）都在同一個資料夾。
+ *
+ * 用**案件日期**（TEMSIS 前 8 碼）分月而不是解鎖日期：同一件跨月再解鎖時才不會拆成兩個資料夾。
+ * 一律用 `/` 分隔（追蹤清單裡存的是相對路徑，換電腦也讀得到）。
+ *
+ * @param {string} temsis
+ * @returns {string}
+ */
+export function revisionCaseFolder(temsis) {
+  const caseDate = temsisCaseDate(temsis);
+  return `${caseDate ? caseDate.slice(0, 7) : UNKNOWN_MONTH_FOLDER}/${safeTemsis(temsis)}`;
+}
+
 /**
  * 這一版用到的各個檔名。
  *
  * 上傳到系統的那份用**純英數**（`{TEMSIS}_v1.pdf`）：系統對中文檔名的處理沒驗證過，
- * 先前清單裡看到的檔名也都是英數。本機的檔案則用中文寫清楚是哪一份。
+ * 先前清單裡看到的檔名也都是英數。本機的檔案則用中文寫清楚是哪一份，
+ * 並放進這一件的資料夾（`backup`／`closed`／`report` 是相對 `PATHS.revisionDir` 的路徑）。
+ * 檔名仍保留 TEMSIS：單獨把 PDF 拿出來看時還認得是哪一件。
  *
  * @param {string} temsis
  * @param {number} version
  * @returns {{upload: string, backup: string, closed: string, report: string}}
  */
 export function revisionFileNames(temsis, version) {
-  const safe = String(temsis).replace(/[^0-9A-Za-z]/g, '');
+  const safe = safeTemsis(temsis);
+  const folder = revisionCaseFolder(temsis);
   return {
     upload: `${safe}_v${version}.pdf`,
-    backup: `${safe}-v${version}-解鎖前.pdf`,
-    closed: `${safe}-v${version}-結案後.pdf`,
-    report: `${safe}-v${version}-差異.txt`,
+    backup: `${folder}/${safe}-v${version}-解鎖前.pdf`,
+    closed: `${folder}/${safe}-v${version}-結案後.pdf`,
+    report: `${folder}/${safe}-v${version}-差異.txt`,
   };
+}
+
+/**
+ * 舊版（v1.56.0 以前）檔案全部平放在 `解鎖前後比對/`：算出搬進資料夾後的相對路徑（純函式）。
+ * 已經在資料夾裡的（含 `/`）或空值回傳 null＝不必搬。
+ *
+ * @param {string|null} fileName 追蹤清單記的檔名
+ * @param {string} temsis
+ * @returns {string|null}
+ */
+export function folderedRevisionPath(fileName, temsis) {
+  if (!fileName || fileName.includes('/')) return null;
+  return `${revisionCaseFolder(temsis)}/${fileName}`;
 }
 
 /** 救護狀態是不是「已結案」（去空白後開頭相符；`未結案` 不會被誤認）。 */

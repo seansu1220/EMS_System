@@ -15,7 +15,6 @@
  * `checkRevisionsSafely` **絕不丟例外**：它是「順便做」的事，不能拖垮解鎖或監看。
  */
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import {
   applyDateRange,
   applyTextCondition,
@@ -24,7 +23,7 @@ import {
   pickFirstValue,
   submitQuery,
 } from './caseFlow.mjs';
-import { PATHS, UNLOCK } from './config.mjs';
+import { UNLOCK } from './config.mjs';
 import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
@@ -41,7 +40,7 @@ import {
   toCloudRevision,
   updateTrackedEntry,
 } from './revisionTrack.mjs';
-import { TRACKER_FILE } from './sheetBackup.mjs';
+import { TRACKER_FILE, organizeRevisionFiles, revisionFilePath, writeRevisionFile } from './revisionFiles.mjs';
 import { describeChanges, formatLocalReport, toCloudItems } from './sheetDiff.mjs';
 import { extractLabeledCode, isSameCode, maskCode } from './sheetFields.mjs';
 import { saveRevision } from './unlockQueue.mjs';
@@ -54,7 +53,7 @@ const keyOf = (entry) => ({ temsis: entry.temsis, version: entry.version });
  * @returns {Promise<import('./pdfText.mjs').PdfTextItem[]>}
  */
 export async function readLocalSheetItems(fileName) {
-  const filePath = path.join(PATHS.revisionDir, fileName);
+  const filePath = revisionFilePath(fileName);
   let bytes;
   try {
     bytes = await fs.readFile(filePath);
@@ -93,10 +92,9 @@ async function compareAndReport(entry, sheets) {
     config,
   );
   try {
-    await fs.mkdir(PATHS.revisionDir, { recursive: true });
-    await fs.writeFile(path.join(PATHS.revisionDir, names.report), report, 'utf8');
+    await writeRevisionFile(names.report, report);
   } catch (error) {
-    throw new Error(`差異報告寫不進本機（${names.report}）：${error instanceof Error ? error.message : error}`);
+    throw new Error(`差異報告寫不進本機：${error instanceof Error ? error.message : error}`);
   }
   const cloud = toCloudItems(changes, config);
   printComparison(entry, cloud, names.report);
@@ -188,10 +186,9 @@ async function checkOne(session, entry) {
 
   const closedFile = revisionFileNames(entry.temsis, entry.version).closed;
   try {
-    await fs.mkdir(PATHS.revisionDir, { recursive: true });
-    await fs.writeFile(path.join(PATHS.revisionDir, closedFile), sheet.bytes);
+    await writeRevisionFile(closedFile, sheet.bytes);
   } catch (error) {
-    throw new Error(`結案後的紀錄表存不進本機（${closedFile}）：${error instanceof Error ? error.message : error}`);
+    throw new Error(`結案後的紀錄表存不進本機：${error instanceof Error ? error.message : error}`);
   }
   const beforeItems = await readLocalSheetItems(entry.backupFile);
   const afterItems = await extractPdfItems(sheet.bytes, { maxPages: UNLOCK.revision.maxPdfPages });
@@ -262,6 +259,7 @@ async function syncCloud(queue) {
 export async function checkRevisionsSafely(session, options = {}) {
   const summary = { checked: 0, compared: 0 };
   try {
+    await organizeRevisionFiles();
     const now = new Date();
     const work = planRevisionWork(await loadTracker(TRACKER_FILE), now, UNLOCK.revision);
     const total = work.toCheck.length + work.toCompareOffline.length + work.toExpire.length;

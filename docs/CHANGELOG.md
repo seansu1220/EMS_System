@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-11-03　網頁 v1.39／小工具 v1.57.0 比對檔與解鎖修改紀錄分資料夾
+
+### 問題描述
+使用者反映：比對結果的檔案要用資料夾分類，不然整個會很雜；而且看總表的時候，不好去對照原表。
+
+### 根本原因
+`out/internal/解鎖前後比對/` 所有案件的解鎖前、結案後、差異檔全部平放在同一層，件數一多就難找；
+解鎖修改紀錄只產出一份 Excel，表格上看到某一件，要自己回到那堆平放的檔案裡用 TEMSIS 找原表。
+
+### 修改的檔案與內容
+- 本機工具：
+  - `tools/ems-report/revisionTrack.mjs`：新增 `revisionCaseFolder`（依案件日期分月：`{案件年月}/{TEMSIS}`，同一件每一版在一起）、
+    `folderedRevisionPath`（舊檔搬家後的路徑）；`revisionFileNames` 的本機檔名改成含資料夾的相對路徑（上傳到系統的檔名不變）。
+  - `tools/ems-report/revisionFiles.mjs`（新增）：`TRACKER_FILE`（從 sheetBackup 移來，原處照舊匯出）、`revisionFilePath`、
+    `writeRevisionFile`（順手建資料夾）、`organizeRevisionFiles`（把舊的平放檔搬進資料夾並更新追蹤清單，絕不丟例外）。
+  - `tools/ems-report/sheetBackup.mjs`、`revisionCheck.mjs`：寫檔改走 `writeRevisionFile`；結案後比對開始前先整理舊檔。
+  - `tools/ems-report/revisionMonthly.mjs`：每個期間一個資料夾 `解鎖修改紀錄/{起日}至{迄日}/`，裡面是總表＋
+    「未結案」「已結案」原表資料夾（`{編號}_{TEMSIS}/解鎖前.pdf、結案後.pdf、差異說明.txt`，從比對檔複製）；
+    各分頁第一欄新增「編號」並做成超連結，點下去開同一件的原表資料夾（相對路徑）；摘要分頁補一行說明。
+    先寫總表再重建原表資料夾，總表被 Excel 開著時不會先把舊的原表清掉。
+  - `tools/ems-report/config.mjs`：`UNLOCK.revision.monthlyReport.caseFolders`、`caseFiles`。
+  - 測試：`revisionTrack.test.mjs`、`revisionMonthly.test.mjs` 更新與新增（資料夾規則、舊檔路徑、編號補零、要複製的原表、超連結指向）；ems-report 584 項全過。
+  - 本機實跑：6 個舊檔已搬進各案件資料夾，期間資料夾正確產出；用 Excel 開總表確認每個編號連結都解析得到對應資料夾。
+- 網頁：`src/components/RevisionReportPanel.tsx` 說明改成期間資料夾與「點編號開原表」。
+- 規格書：`docs/SPEC.md` v1.39（2.8 匯出面板）、`docs/TOOLS_SPEC.md` v1.57.0（2.13 檔案位置與舊檔搬家、2.14 原表資料夾）。
+
+---
+
 ## 2026-11-03　網頁 v1.38／小工具 v1.56.0 匯出解鎖修改紀錄、解鎖工單頁分頁
 
 ### 問題描述

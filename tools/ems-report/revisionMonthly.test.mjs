@@ -6,6 +6,7 @@
  *   2. 未結案、已結案分得對；已結案的每一件在修改內容分頁至少一列
  *   3. 原內容 → 修改後：判斷得出欄位時一欄一列，判斷不出時整段照列
  *   4. 申請事由：線上工單從雲端補讀，手動解鎖、讀不到時寫明
+ *   5. 編號與原表資料夾對得起來：總表第一欄點下去開的，就是複製原表的那個資料夾
  *
  * 執行：npm run tool:ems:test
  */
@@ -19,6 +20,9 @@ import {
   buildOpenRows,
   buildReasonRows,
   buildRevisionReportWorkbook,
+  caseFilesToCopy,
+  caseFolderPath,
+  caseNumber,
   classifyEntries,
   selectEntriesInRange,
   toChangeRows,
@@ -125,10 +129,10 @@ test('每一件已結案在修改內容分頁至少一列：沒改動、讀不�
     { entry: entry({ temsis: 'B' }), rows: [], error: null },
     { entry: entry({ temsis: 'C' }), rows: null, error: '找不到 after.pdf' },
   ]);
-  assert.deepEqual(rows.map((row) => row[0]), ['A', 'B', 'C']);
-  assert.deepEqual(rows[0].slice(3), [1, '血壓', '120/80', '130/85']);
-  assert.equal(rows[1][4], '（解鎖後沒有改動任何內容）');
-  assert.equal(rows[2][4], '（讀不到本機的紀錄表檔案，無法列出）');
+  assert.deepEqual(rows.map((row) => row.slice(0, 2)), [['01', 'A'], ['02', 'B'], ['03', 'C']]);
+  assert.deepEqual(rows[0].slice(4), [1, '血壓', '120/80', '130/85']);
+  assert.equal(rows[1][5], '（解鎖後沒有改動任何內容）');
+  assert.equal(rows[2][5], '（讀不到本機的紀錄表檔案，無法列出）');
 });
 
 test('申請事由：線上工單從雲端補讀；手動解鎖、沒連上、讀不到都寫明', () => {
@@ -138,9 +142,9 @@ test('申請事由：線上工單從雲端補讀；手動解鎖、沒連上、�
     { entry: entry({ requestId: null }), rows: [], error: null },
     { entry: entry({ requestId: 'req-gone' }), rows: [], error: null },
   ];
-  const reasons = buildReasonRows(closed, details).map((row) => row[5]);
+  const reasons = buildReasonRows(closed, details).map((row) => row[6]);
   assert.deepEqual(reasons, ['補登生命徵象', '（本機手動解鎖，沒有線上申請事由）', '（雲端讀不到這張工單）']);
-  assert.equal(buildOpenRows([entry({ state: 'waiting' })], null)[0][8], '（沒連上雲端，讀不到事由）');
+  assert.equal(buildOpenRows([entry({ state: 'waiting' })], null)[0][9], '（沒連上雲端，讀不到事由）');
 });
 
 test('活頁簿有摘要、未結案、已結案-申請事由、已結案-修改內容四個分頁', () => {
@@ -149,4 +153,35 @@ test('活頁簿有摘要、未結案、已結案-申請事由、已結案-修改
     closed: [{ entry: entry(), rows: [{ field: '血壓', before: '120/80', after: '130/85' }], error: null }],
   }, null);
   assert.deepEqual(workbook.worksheets.map((sheet) => sheet.name), ['摘要', '未結案', '已結案-申請事由', '已結案-修改內容']);
+});
+
+test('編號補零到至少 2 位，件數破百補到 3 位；資料夾名稱是「編號_TEMSIS」', () => {
+  assert.equal(caseNumber(0, 5), '01');
+  assert.equal(caseNumber(9, 120), '010');
+  assert.equal(caseFolderPath('已結案', '03', '2026-1012 10100'), '已結案/03_2026101210100');
+});
+
+test('要複製的原表：未結案只有解鎖前；已結案再加結案後與差異說明，沒有的檔不列', () => {
+  const closedEntry = entry({ backupFile: 'x/before.pdf', closedFile: 'x/after.pdf', reportFile: null });
+  assert.deepEqual(caseFilesToCopy(entry({ state: 'waiting', backupFile: 'x/before.pdf' }), false), [
+    { source: 'x/before.pdf', name: '解鎖前.pdf' },
+  ]);
+  assert.deepEqual(caseFilesToCopy(closedEntry, true), [
+    { source: 'x/before.pdf', name: '解鎖前.pdf' },
+    { source: 'x/after.pdf', name: '結案後.pdf' },
+  ]);
+});
+
+test('總表各分頁的編號是超連結，指向同一件的原表資料夾', () => {
+  const workbook = buildRevisionReportWorkbook(OCTOBER, {
+    open: [entry({ state: 'waiting', temsis: 'OPEN1' })],
+    closed: [
+      { entry: entry({ temsis: 'DONE1' }), rows: [{ field: '血壓', before: '120/80', after: '130/85' }], error: null },
+      { entry: entry({ temsis: 'DONE2' }), rows: [], error: null },
+    ],
+  }, null);
+  const linkAt = (sheetName, rowNumber) => workbook.getWorksheet(sheetName).getRow(rowNumber).getCell(1).value;
+  assert.deepEqual(linkAt('未結案', 3), { text: '01', hyperlink: '未結案/01_OPEN1' });
+  assert.deepEqual(linkAt('已結案-申請事由', 4), { text: '02', hyperlink: '已結案/02_DONE2' });
+  assert.deepEqual(linkAt('已結案-修改內容', 3), { text: '01', hyperlink: '已結案/01_DONE1' });
 });

@@ -200,6 +200,7 @@ export const PATHS = {
   /**
    * 解鎖前備份與結案後比對（v1.54.0）：備份的 PDF、結案後的 PDF、差異報告、追蹤清單。
    * 全部含病患資料，所以放在 `internal/` 底下（不上雲、不給分隊）。
+   * v1.57.0 起每件一個資料夾：`{案件年月}/{TEMSIS}/`（追蹤清單仍在最上層，見 `revisionFiles.mjs`）。
    */
   revisionDir: path.join(TOOL_DIR, 'out', 'internal', '解鎖前後比對'),
 };
@@ -848,6 +849,13 @@ export const UNLOCK = {
       fileNamePrefix: '解鎖修改紀錄',
       /** Excel 一格最多放幾個字（Excel 上限 32767，PDF 有時整頁擠在一行）。 */
       maxCellLength: 2000,
+      /**
+       * 期間資料夾底下放原表的子資料夾（v1.57.0，使用者 2026-11-03：要分資料夾，看總表才好對照原表）。
+       * 每件一個資料夾 `{編號}_{TEMSIS}`，總表的「編號」點下去就開這裡。
+       */
+      caseFolders: { open: '未結案', closed: '已結案' },
+      /** 複製進每件資料夾時的檔名（資料夾名已經有編號與 TEMSIS，檔名只寫是哪一份）。 */
+      caseFiles: { backup: '解鎖前.pdf', closed: '結案後.pdf', report: '差異說明.txt' },
     },
   },
 

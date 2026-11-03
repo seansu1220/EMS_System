@@ -13,6 +13,13 @@
  * 修改內容是拿本機存著的「解鎖前備份」與「結案後」兩份 PDF 重新比對出來的（同 `revisionCheck.mjs`），
  * 所以**不必登入救護系統**；申請事由不在追蹤清單裡，從雲端工單補讀（讀不到就註明）。
  *
+ * 輸出（v1.57.0，使用者 2026-11-03：要用資料夾分類，看總表時才好對照原表）：每個期間一個資料夾
+ *   `out/internal/解鎖修改紀錄/{起日}至{迄日}/`
+ *     解鎖修改紀錄_{起日}至{迄日}.xlsx   ← 總表；第一欄「編號」點下去就開那一件的原表資料夾
+ *     未結案/{編號}_{TEMSIS}/解鎖前.pdf
+ *     已結案/{編號}_{TEMSIS}/解鎖前.pdf、結案後.pdf、差異說明.txt
+ * 原表是從 `解鎖前後比對/` 複製過來的，整個期間資料夾搬走或交給別人看時，連結照樣點得開。
+ *
  * ⚠ 個資：修改內容含病患姓名、身分證等**完整內容**，因此只寫在 `out/internal/解鎖修改紀錄/`，
  *   **不上雲**（使用者選定只做電腦端完整版）；終端機一律只印末 4 碼與件數，
  *   回寫網頁的也只有檔名（只含日期）與件數。
@@ -26,7 +33,7 @@ import { buildListSheet } from './ekgLists.mjs';
 import { log } from './logger.mjs';
 import { readLocalSheetItems } from './revisionCheck.mjs';
 import { loadTracker, localDateKey } from './revisionTrack.mjs';
-import { TRACKER_FILE } from './sheetBackup.mjs';
+import { TRACKER_FILE, organizeRevisionFiles, revisionFilePath } from './revisionFiles.mjs';
 import { describeChanges } from './sheetDiff.mjs';
 import { maskCode } from './sheetFields.mjs';
 import {
@@ -38,12 +45,15 @@ import {
 
 /** 各分頁的欄位（順序即輸出順序）。 */
 export const OPEN_COLUMNS = [
-  'TEMSIS', '案件日期', '出勤車輛', '分隊', '解鎖時間', '最近確認時間', '最近看到的救護狀態', '申請人', '申請事由', '備註',
+  '編號', 'TEMSIS', '案件日期', '出勤車輛', '分隊', '解鎖時間', '最近確認時間', '最近看到的救護狀態', '申請人', '申請事由', '備註',
 ];
 export const REASON_COLUMNS = [
-  'TEMSIS', '案件日期', '出勤車輛', '分隊', '申請人', '申請事由', '解鎖時間', '比對時間', '修改處數',
+  '編號', 'TEMSIS', '案件日期', '出勤車輛', '分隊', '申請人', '申請事由', '解鎖時間', '比對時間', '修改處數',
 ];
-export const CHANGE_COLUMNS = ['TEMSIS', '案件日期', '出勤車輛', '項次', '欄位', '原內容', '修改後內容'];
+export const CHANGE_COLUMNS = ['編號', 'TEMSIS', '案件日期', '出勤車輛', '項次', '欄位', '原內容', '修改後內容'];
+
+/** 編號欄的超連結樣式（跟 Excel 內建的超連結一樣藍色底線）。 */
+const LINK_FONT = { color: { argb: 'FF0563C1' }, underline: true };
 
 /** 算未結案的追蹤狀態（`expired`、`gaveUp` 目前不會出現，見 TOOLS_SPEC 2.13，出現時照樣要列出來）。 */
 const OPEN_STATES = ['waiting', 'expired', 'gaveUp'];
@@ -70,8 +80,8 @@ const OPEN_STATES = ['waiting', 'expired', 'gaveUp'];
 
 /**
  * @typedef {Object} ReportResult 回寫網頁用（**不含病患資料**）
- * @property {string} fileName 檔名（只含期間）
- * @property {string} filePath 完整路徑（只在本機用）
+ * @property {string} fileName 總表檔名（只含期間；放在同名期間資料夾裡）
+ * @property {string} filePath 總表完整路徑（只在本機用）
  * @property {number} openCount 未結案件數
  * @property {number} closedCount 已結案件數
  * @property {number} changedCount 已結案而且有改動的件數
@@ -113,6 +123,27 @@ export function classifyEntries(entries) {
     open: entries.filter((entry) => OPEN_STATES.includes(entry.state)),
     closed: entries.filter((entry) => entry.state === 'compared'),
   };
+}
+
+/**
+ * 第幾件的編號（純函式）：補零到至少 2 位，件數破百就補到 3 位，資料夾才排得整齊。
+ * @param {number} index 從 0 起算
+ * @param {number} total 這一組總件數
+ * @returns {string}
+ */
+export function caseNumber(index, total) {
+  return String(index + 1).padStart(Math.max(2, String(total).length), '0');
+}
+
+/**
+ * 這一件的原表資料夾，相對於總表所在的期間資料夾（純函式）：`已結案/01_{TEMSIS}`。
+ * @param {string} group `UNLOCK.revision.monthlyReport.caseFolders` 的 open 或 closed
+ * @param {string} number
+ * @param {string} temsis
+ * @returns {string}
+ */
+export function caseFolderPath(group, number, temsis) {
+  return `${group}/${number}_${String(temsis).replace(/[^0-9A-Za-z]/g, '')}`;
 }
 
 /** 一格太長就截斷（Excel 一格有上限，PDF 有時整頁擠在一行）。 */
@@ -168,10 +199,10 @@ function openNote(entry) {
  * @param {Map<string, RequestDetail>|null} details
  */
 export function buildOpenRows(open, details) {
-  return open.map((entry) => {
+  return open.map((entry, index) => {
     const request = describeRequest(entry, details);
     return [
-      entry.temsis, entry.caseDate ?? '', entry.vehicle ?? '', entry.squad ?? '',
+      caseNumber(index, open.length), entry.temsis, entry.caseDate ?? '', entry.vehicle ?? '', entry.squad ?? '',
       formatLocalDateTime(entry.unlockedAt), formatLocalDateTime(entry.lastCheckedAt), entry.lastStatus ?? '',
       request.requestedByName, request.reason, openNote(entry),
     ];
@@ -184,11 +215,11 @@ export function buildOpenRows(open, details) {
  * @param {Map<string, RequestDetail>|null} details
  */
 export function buildReasonRows(closed, details) {
-  return closed.map(({ entry, rows }) => {
+  return closed.map(({ entry, rows }, index) => {
     const request = describeRequest(entry, details);
     const count = rows ? rows.length : entry.changeCount;
     return [
-      entry.temsis, entry.caseDate ?? '', entry.vehicle ?? '', entry.squad ?? '',
+      caseNumber(index, closed.length), entry.temsis, entry.caseDate ?? '', entry.vehicle ?? '', entry.squad ?? '',
       request.requestedByName, request.reason,
       formatLocalDateTime(entry.unlockedAt), formatLocalDateTime(entry.comparedAt), count ?? '',
     ];
@@ -200,8 +231,8 @@ export function buildReasonRows(closed, details) {
  * @param {ClosedCase[]} closed
  */
 export function buildChangeRows(closed) {
-  return closed.flatMap(({ entry, rows, error }) => {
-    const head = [entry.temsis, entry.caseDate ?? '', entry.vehicle ?? ''];
+  return closed.flatMap(({ entry, rows, error }, index) => {
+    const head = [caseNumber(index, closed.length), entry.temsis, entry.caseDate ?? '', entry.vehicle ?? ''];
     if (!rows) return [[...head, '', '（讀不到本機的紀錄表檔案，無法列出）', error ?? '', '']];
     if (rows.length === 0) return [[...head, '', '（解鎖後沒有改動任何內容）', '', '']];
     return rows.map((row, index) => [...head, index + 1, row.field, row.before, row.after]);
@@ -217,6 +248,7 @@ export function buildSummaryRows(range, open, closed) {
     ['未結案', `${open.length} 件`],
     ['已結案', `${closed.length} 件（有改動 ${changed} 件、沒有改動 ${closed.length - changed} 件）`],
     ['說明', '結案前又解鎖一次的，以最後一次解鎖為準；11/3 13:40 以前送出的申請不追蹤，不會出現在這裡'],
+    ['原表', '每一件的原表放在這份總表旁邊的「未結案」「已結案」資料夾，資料夾名稱開頭就是編號；各分頁點「編號」可直接開啟'],
     ['⚠ 個資', '本檔含病患資料，只供救護科內部核對，請勿外傳'],
   ];
 }
@@ -244,6 +276,25 @@ async function loadClosedCase(entry) {
 }
 
 /**
+ * 把第一欄的編號變成超連結，點下去開這一件的原表資料夾（相對路徑，整個期間資料夾搬走也點得開）。
+ * 第二欄是 TEMSIS（各分頁的欄位順序都是「編號、TEMSIS、…」）。
+ *
+ * @param {ExcelJS.Worksheet} sheet
+ * @param {string} group
+ */
+function linkCaseNumbers(sheet, group) {
+  // 第 1 列是大標、第 2 列是欄名，資料從第 3 列開始。
+  for (let rowNumber = 3; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    const number = String(row.getCell(1).value ?? '');
+    const temsis = String(row.getCell(2).value ?? '');
+    if (!number || !temsis) continue;
+    row.getCell(1).value = { text: number, hyperlink: caseFolderPath(group, number, temsis) };
+    row.getCell(1).font = LINK_FONT;
+  }
+}
+
+/**
  * 組出報表活頁簿（不寫檔）。
  * @param {{start: string, end: string}} range
  * @param {{open: import('./revisionTrack.mjs').RevisionEntry[], closed: ClosedCase[]}} cases
@@ -253,14 +304,18 @@ async function loadClosedCase(entry) {
 export function buildRevisionReportWorkbook(range, cases, details) {
   const workbook = new ExcelJS.Workbook();
   const period = `${range.start} ~ ${range.end}`;
+  const { caseFolders } = UNLOCK.revision.monthlyReport;
   buildListSheet(workbook, '摘要', `解鎖修改紀錄（${period}）`, ['項目', '內容'], buildSummaryRows(range, cases.open, cases.closed));
-  buildListSheet(workbook, '未結案', `解鎖後未結案（${cases.open.length} 件）`, OPEN_COLUMNS, buildOpenRows(cases.open, details), {
-    wideColumns: ['申請事由', '備註'],
-  });
-  buildListSheet(
+  const openSheet = buildListSheet(
+    workbook, '未結案', `解鎖後未結案（${cases.open.length} 件）`, OPEN_COLUMNS, buildOpenRows(cases.open, details),
+    { wideColumns: ['申請事由', '備註'] },
+  );
+  linkCaseNumbers(openSheet, caseFolders.open);
+  const reasonSheet = buildListSheet(
     workbook, '已結案-申請事由', `已結案的申請事由（${cases.closed.length} 件）`,
     REASON_COLUMNS, buildReasonRows(cases.closed, details), { wideColumns: ['申請事由'] },
   );
+  linkCaseNumbers(reasonSheet, caseFolders.closed);
   const changeSheet = buildListSheet(
     workbook, '已結案-修改內容', '已結案的修改內容（原內容 → 修改後的內容）',
     CHANGE_COLUMNS, buildChangeRows(cases.closed), { wideColumns: ['原內容', '修改後內容'] },
@@ -270,11 +325,61 @@ export function buildRevisionReportWorkbook(range, cases, details) {
     changeSheet.getColumn(CHANGE_COLUMNS.indexOf(column) + 1).alignment = { wrapText: true, vertical: 'top' };
   }
   changeSheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: CHANGE_COLUMNS.length } };
+  linkCaseNumbers(changeSheet, caseFolders.closed);
   return workbook;
 }
 
 /**
- * 產出解鎖修改紀錄並寫檔。
+ * 這一件要複製哪些原表（純函式）：未結案只有解鎖前，已結案再加結案後與差異說明。
+ * @param {import('./revisionTrack.mjs').RevisionEntry} entry
+ * @param {boolean} closed
+ * @returns {{source: string, name: string}[]} source＝相對 `解鎖前後比對/` 的路徑
+ */
+export function caseFilesToCopy(entry, closed) {
+  const { caseFiles } = UNLOCK.revision.monthlyReport;
+  const files = [{ source: entry.backupFile, name: caseFiles.backup }];
+  if (closed) {
+    files.push({ source: entry.closedFile, name: caseFiles.closed }, { source: entry.reportFile, name: caseFiles.report });
+  }
+  return files.filter((file) => file.source);
+}
+
+/**
+ * 把原表複製到期間資料夾的「未結案」「已結案」底下（每件一個資料夾，開頭是編號）。
+ *
+ * 先清掉上次匯出同一期間留下的這兩個資料夾：案件可能從未結案變成已結案，舊的留著會兩邊都有。
+ * 某個檔複製不了（例如本機已被刪掉）只記件數，不擋整份報表。
+ *
+ * @param {string} outputDir 期間資料夾
+ * @param {import('./revisionTrack.mjs').RevisionEntry[]} open
+ * @param {import('./revisionTrack.mjs').RevisionEntry[]} closed
+ * @returns {Promise<number>} 複製不了的檔數
+ */
+async function exportCaseFiles(outputDir, open, closed) {
+  const { caseFolders } = UNLOCK.revision.monthlyReport;
+  const groups = [
+    { folder: caseFolders.open, entries: open, closed: false },
+    { folder: caseFolders.closed, entries: closed, closed: true },
+  ];
+  let missing = 0;
+  for (const group of groups) {
+    await fs.rm(path.join(outputDir, group.folder), { recursive: true, force: true });
+    for (const [index, entry] of group.entries.entries()) {
+      const relative = caseFolderPath(group.folder, caseNumber(index, group.entries.length), entry.temsis);
+      const caseDir = path.join(outputDir, ...relative.split('/'));
+      await fs.mkdir(caseDir, { recursive: true });
+      for (const file of caseFilesToCopy(entry, group.closed)) {
+        await fs.copyFile(revisionFilePath(file.source), path.join(caseDir, file.name)).catch(() => {
+          missing += 1;
+        });
+      }
+    }
+  }
+  return missing;
+}
+
+/**
+ * 產出解鎖修改紀錄並寫檔（總表＋原表資料夾）。
  *
  * @param {{start: string, end: string}} range
  * @param {{queue?: import('./unlockQueue.mjs').QueueSession|null}} [options] 連得上雲端才補得到申請事由
@@ -283,6 +388,7 @@ export function buildRevisionReportWorkbook(range, cases, details) {
  */
 export async function writeRevisionReport(range, options = {}) {
   const config = UNLOCK.revision.monthlyReport;
+  await organizeRevisionFiles();
   const tracker = await loadTracker(TRACKER_FILE);
   const { open, closed } = classifyEntries(selectEntriesInRange(tracker.entries, range));
   log.step(`解鎖修改紀錄：${range.start} ~ ${range.end}（未結案 ${open.length} 件、已結案 ${closed.length} 件）`);
@@ -293,11 +399,13 @@ export async function writeRevisionReport(range, options = {}) {
   const closedCases = [];
   for (const entry of closed) closedCases.push(await loadClosedCase(entry));
 
-  const fileName = `${config.fileNamePrefix}_${range.start}至${range.end}.xlsx`;
-  const outputDir = path.join(PATHS.internalDir, config.dirName);
+  const periodName = `${range.start}至${range.end}`;
+  const fileName = `${config.fileNamePrefix}_${periodName}.xlsx`;
+  const outputDir = path.join(PATHS.internalDir, config.dirName, periodName);
   const filePath = path.join(outputDir, fileName);
-  await fs.mkdir(outputDir, { recursive: true });
   try {
+    await fs.mkdir(outputDir, { recursive: true });
+    // 先寫總表：被 Excel 開著時在這裡就停，不會先把上次的原表資料夾清掉。
     await buildRevisionReportWorkbook(range, { open, closed: closedCases }, details).xlsx.writeFile(filePath);
   } catch (error) {
     if (error?.code === 'EBUSY' || error?.code === 'EPERM') {
@@ -305,7 +413,11 @@ export async function writeRevisionReport(range, options = {}) {
     }
     throw new Error(`解鎖修改紀錄寫不進本機（revisionMonthly.writeRevisionReport）：${error instanceof Error ? error.message : error}`);
   }
-  log.ok(`已產出：${path.relative(process.cwd(), filePath)}`);
+  const missing = await exportCaseFiles(outputDir, open, closed).catch((error) => {
+    throw new Error(`原表資料夾整理失敗（revisionMonthly.exportCaseFiles）：${error instanceof Error ? error.message : error}`);
+  });
+  log.ok(`已產出：${path.relative(process.cwd(), outputDir)}（總表＋未結案／已結案原表資料夾）`);
+  if (missing > 0) log.warn(`有 ${missing} 個原表檔在本機找不到，沒有複製到資料夾`);
   log.info('（含病患資料，只供救護科內部核對，請勿外傳）');
   const changedCount = closedCases.filter((item) => item.rows === null || item.rows.length > 0).length;
   return { fileName, filePath, openCount: open.length, closedCount: closed.length, changedCount };

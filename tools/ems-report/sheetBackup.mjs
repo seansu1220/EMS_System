@@ -3,7 +3,7 @@
  *
  * 按下「調整為未結案」之前：
  *   1. 查詢結果那一列的「救護紀錄PDF(桃)」原檔（解鎖流程本來就會開它讀案號，順手留下位元組）
- *      存一份到本機 `out/internal/解鎖前後比對/`
+ *      存一份到本機 `out/internal/解鎖前後比對/{案件年月}/{TEMSIS}/`（v1.57.0 起每件一個資料夾）
  *   2. 案件內部**那一張紀錄表同一列**的「上傳」→ 檔案類型選「其他」→ 選這份 PDF
  *      → 檔案說明填 `救護紀錄表內容-v1`（已經備份過幾次就往上加）→ 確定上傳
  *   3. 回讀上傳清單，**真的多出那一列**才算成功
@@ -18,8 +18,6 @@
  *   終端機與紀錄檔只印 TEMSIS 末 4 碼與檔案說明。上傳時直接把記憶體裡的位元組交給檔案欄，
  *   不經過暫存檔。
  */
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { content } from './caseFlow.mjs';
 import { PATHS, UNLOCK } from './config.mjs';
 import { selectField } from './formFill.mjs';
@@ -34,10 +32,11 @@ import {
   nextBackupVersion,
   revisionFileNames,
 } from './revisionTrack.mjs';
+import { TRACKER_FILE, writeRevisionFile } from './revisionFiles.mjs';
 import { maskCode } from './sheetFields.mjs';
 
-/** 追蹤清單的位置（與備份檔放在一起）。 */
-export const TRACKER_FILE = path.join(PATHS.revisionDir, '追蹤清單.json');
+// 追蹤清單位置原本定義在這裡，v1.57.0 移到 revisionFiles.mjs；照舊從這裡也拿得到。
+export { TRACKER_FILE };
 
 /**
  * @typedef {Object} BackupResult
@@ -208,15 +207,12 @@ async function waitForRemark(page, remark, waitMs) {
   }
 }
 
-/** 把備份 PDF 寫進本機（同名就覆蓋：同一版重試時內容一樣）。 */
-async function saveLocalBackup(fileName, bytes) {
+/** 把備份 PDF 寫進本機這一件的資料夾（同名就覆蓋：同一版重試時內容一樣）。 */
+async function saveLocalBackup(relativePath, bytes) {
   try {
-    await fs.mkdir(PATHS.revisionDir, { recursive: true });
-    await fs.writeFile(path.join(PATHS.revisionDir, fileName), bytes);
+    await writeRevisionFile(relativePath, bytes);
   } catch (error) {
-    throw new Error(
-      `解鎖前的紀錄表存不進本機（${PATHS.revisionDir}）：${error instanceof Error ? error.message : error}`,
-    );
+    throw new Error(`解鎖前的紀錄表存不進本機（${PATHS.revisionDir}）：${error instanceof Error ? error.message : error}`);
   }
 }
 
