@@ -90,6 +90,8 @@ export async function extractPdfText(bytes, options = {}) {
  * @property {number} height
  * @property {string} str 文字
  * @property {boolean} hasEOL 這段後面換行
+ * @property {number} dirX 文字前進方向（單位向量 x）：一般橫書為 1
+ * @property {number} dirY 文字前進方向（單位向量 y）：整頁轉 90 度的表格為 1（救護紀錄表就是這樣）
  */
 
 /**
@@ -129,6 +131,7 @@ export async function extractPdfItems(bytes, options = {}) {
           height: Math.round((item.height ?? 0) * 10) / 10,
           str: item.str,
           hasEOL: Boolean(item.hasEOL),
+          ...textDirection(item.transform),
         });
       }
       page.cleanup();
@@ -137,4 +140,12 @@ export async function extractPdfItems(bytes, options = {}) {
   } finally {
     await loadingTask.destroy().catch(() => {});
   }
+}
+
+/** 由文字矩陣取出前進方向（單位向量）；讀不出來當成一般橫書。 */
+function textDirection(transform) {
+  const [a, b] = transform;
+  const length = Math.hypot(a, b);
+  if (!length) return { dirX: 1, dirY: 0 };
+  return { dirX: Math.round((a / length) * 1000) / 1000, dirY: Math.round((b / length) * 1000) / 1000 };
 }

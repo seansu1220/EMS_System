@@ -24,12 +24,13 @@ import { groupByRow } from './pageFinder.mjs';
 import { extractPdfItems } from './pdfText.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import { localDateKey, pickSheetButton } from './revisionTrack.mjs';
+import { extractLabeledCode } from './sheetFields.mjs';
 
 /** 兩段文字算「同一個位置」的容許誤差（pt）。 */
 const POSITION_TOLERANCE = 3;
 
-/** 兩份樣本有多少比例的文字一模一樣，就當成同一件案子（遮蔽不了，不產出）。 */
-const SAME_CASE_RATIO = 0.95;
+/** 最多往下看幾列來湊滿不同案件的樣本。 */
+const MAX_ROWS_TO_SCAN = 12;
 
 /** 把一段值換成形狀符號：中文 `〇`、數字 `9`、英文 `a`，空白與標點照留（看得出格式）。 */
 export function toShape(text) {
@@ -121,7 +122,10 @@ export function maskSample(target, others) {
 }
 
 /**
- * 兩份樣本一模一樣的文字佔多少（判斷是不是同一件案子：那樣就遮不掉個資）。
+ * 兩份樣本一模一樣的文字佔多少（只印出來參考）。
+ *
+ * ⚠ **不能拿來判斷是不是同一件案子**（2026-11-03 第一次取樣踩到）：紀錄表大部分是印好的標籤，
+ *   不同案件也有 95% 以上一樣。判斷同一件改看指派案號（見 `collectSamples`）。
  * @returns {number} 0 ~ 1
  */
 export function sameTextRatio(left, right) {
@@ -194,19 +198,34 @@ async function collectSamples(session, options) {
     return groupByRow(await findClickablesWithRetry(page, UNLOCK.buttonTexts.openRecordSheet));
   };
 
+  // ⚠ 同一件案子出動兩台車就有兩張紀錄表，**病患姓名會一樣**，逐段比對會把它當成標籤留下來。
+  //   因此一件案子只取一張：以紀錄表上的指派案號判斷，重複的跳過、往下一列找。
   const samples = [];
-  for (let position = 0; position < options.count; position += 1) {
+  const seenCases = new Set();
+  for (let position = 0; position < MAX_ROWS_TO_SCAN && samples.length < options.count; position += 1) {
     const rows = await queryRows();
-    if (rows.length < 2) throw new Error(`查詢期間內只有 ${rows.length} 張紀錄表，至少要 2 張才遮蔽得了`);
     if (position >= rows.length) break;
     const button = pickSheetButton(rows[position], UNLOCK.backup.sheetButtonMarker);
-    log.info(`開第 ${samples.length + 1} 張（「${button.text}」）`);
     const sheet = await openRecordSheet(context, content(page), UNLOCK.buttonTexts.openRecordSheet, button.index, {
       keepBytes: true,
       maxPages: UNLOCK.revision.maxPdfPages,
     });
     if (!sheet.bytes) throw new Error('紀錄表不是 PDF 檔（讀到的是網頁），取不了版面');
+    const caseNo = extractLabeledCode(sheet.text, UNLOCK.sheetLabels.dispatchNo)?.value ?? null;
+    if (!caseNo) {
+      log.info(`第 ${position + 1} 列讀不到指派案號，分不出是不是同一件案子，跳過`);
+      continue;
+    }
+    if (seenCases.has(caseNo)) {
+      log.info(`第 ${position + 1} 列跟前面的是同一件案子（另一台車），跳過`);
+      continue;
+    }
+    seenCases.add(caseNo);
+    log.info(`取第 ${samples.length + 1} 張（查詢結果第 ${position + 1} 列）`);
     samples.push(await extractPdfItems(sheet.bytes, { maxPages: UNLOCK.revision.maxPdfPages }));
+  }
+  if (samples.length < 2) {
+    throw new Error(`前 ${MAX_ROWS_TO_SCAN} 列只湊到 ${samples.length} 件不同案件，至少要 2 件才遮蔽得了`);
   }
   return samples;
 }
@@ -221,13 +240,7 @@ async function collectSamples(session, options) {
 export async function runSheetSample(session, options = {}) {
   const samples = await collectSamples(session, { count: options.count ?? 3, days: options.days ?? 7 });
   for (let index = 1; index < samples.length; index += 1) {
-    const ratio = sameTextRatio(samples[0], samples[index]);
-    if (ratio >= SAME_CASE_RATIO) {
-      throw new Error(
-        `第 1 張與第 ${index + 1} 張有 ${Math.round(ratio * 100)}% 的文字一模一樣，可能是同一件案子，`
-          + '這樣遮不掉個資，已停止（請換一段日期再試：--days=14）',
-      );
-    }
+    log.info(`第 1 張與第 ${index + 1} 張有 ${Math.round(sameTextRatio(samples[0], samples[index]) * 100)}% 的文字一樣（參考）`);
   }
   const sections = samples.map((items, index) => formatSample(
     maskSample(items, samples.filter((_other, otherIndex) => otherIndex !== index)),

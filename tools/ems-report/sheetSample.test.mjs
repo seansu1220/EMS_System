@@ -46,7 +46,7 @@ test('要跟每一份都相同才保留：三份中有一份不同就遮', () =>
   assert.equal(masked[0].str, '〇〇〇');
 });
 
-test('兩份幾乎一樣（同一件案子）時比例很高，呼叫端據此停手', () => {
+test('兩份一樣的文字比例（只供參考）', () => {
   const sheet = [item('姓名', 10, 700), item('王小明', 60, 700)];
   assert.equal(sameTextRatio(sheet, sheet), 1);
 });

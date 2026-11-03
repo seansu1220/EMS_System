@@ -29,7 +29,7 @@ import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import { groupByRow, readRowFields } from './pageFinder.mjs';
-import { extractPdfText } from './pdfText.mjs';
+import { extractPdfItems } from './pdfText.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
 import {
   buildRevisionQueryRange,
@@ -49,8 +49,11 @@ import { saveRevision } from './unlockQueue.mjs';
 /** 一件的鍵（追蹤清單以 TEMSIS＋版號認一筆）。 */
 const keyOf = (entry) => ({ temsis: entry.temsis, version: entry.version });
 
-/** 讀本機的備份 PDF 並轉成文字。 */
-async function readLocalSheetText(fileName) {
+/**
+ * 讀本機的 PDF 並取出「文字＋座標」（比對依座標，見 `sheetDiff.mjs`）。
+ * @returns {Promise<import('./pdfText.mjs').PdfTextItem[]>}
+ */
+async function readLocalSheetItems(fileName) {
   const filePath = path.join(PATHS.revisionDir, fileName);
   let bytes;
   try {
@@ -58,19 +61,20 @@ async function readLocalSheetText(fileName) {
   } catch (error) {
     throw new Error(`讀不到本機的備份檔（${fileName}）：${error instanceof Error ? error.message : error}`);
   }
-  return extractPdfText(bytes, { maxPages: UNLOCK.revision.maxPdfPages });
+  return extractPdfItems(bytes, { maxPages: UNLOCK.revision.maxPdfPages });
 }
 
 /**
  * 比對兩份文字，寫本機報告，回傳要更新進追蹤清單的欄位。
  *
  * @param {import('./revisionTrack.mjs').RevisionEntry} entry
- * @param {{beforeText: string, afterText: string, closedFile: string}} sheets
+ * @param {{beforeItems: import('./pdfText.mjs').PdfTextItem[],
+ *   afterItems: import('./pdfText.mjs').PdfTextItem[], closedFile: string}} sheets
  * @returns {Promise<Partial<import('./revisionTrack.mjs').RevisionEntry>>}
  */
 async function compareAndReport(entry, sheets) {
   const config = UNLOCK.revision;
-  const changes = describeChanges(sheets.beforeText, sheets.afterText, config);
+  const changes = describeChanges(sheets.beforeItems, sheets.afterItems, config);
   const comparedAt = new Date().toISOString();
   const names = revisionFileNames(entry.temsis, entry.version);
   const report = formatLocalReport(
@@ -189,8 +193,9 @@ async function checkOne(session, entry) {
   } catch (error) {
     throw new Error(`結案後的紀錄表存不進本機（${closedFile}）：${error instanceof Error ? error.message : error}`);
   }
-  const beforeText = await readLocalSheetText(entry.backupFile);
-  return { ...checked, ...(await compareAndReport(entry, { beforeText, afterText: sheet.text, closedFile })) };
+  const beforeItems = await readLocalSheetItems(entry.backupFile);
+  const afterItems = await extractPdfItems(sheet.bytes, { maxPages: UNLOCK.revision.maxPdfPages });
+  return { ...checked, ...(await compareAndReport(entry, { beforeItems, afterItems, closedFile })) };
 }
 
 /**
@@ -202,9 +207,9 @@ async function compareOffline(entry, next) {
     `　TEMSIS ${maskCode(entry.temsis)}：${entry.remark} 之後又被解鎖過（${next.remark}），`
       + '直接拿兩份備份比對',
   );
-  const beforeText = await readLocalSheetText(entry.backupFile);
-  const afterText = await readLocalSheetText(next.backupFile);
-  return compareAndReport(entry, { beforeText, afterText, closedFile: next.backupFile });
+  const beforeItems = await readLocalSheetItems(entry.backupFile);
+  const afterItems = await readLocalSheetItems(next.backupFile);
+  return compareAndReport(entry, { beforeItems, afterItems, closedFile: next.backupFile });
 }
 
 /** 失敗一次：累計次數，太多次就不再追（要人來看）。 */
