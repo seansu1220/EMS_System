@@ -836,6 +836,19 @@ export const UNLOCK = {
     cloudMaxValueLength: 30,
     /** 本機報告裡一行最多印幾個字（PDF 有時整頁擠在一行）。 */
     reportMaxLineLength: 300,
+    /**
+     * **解鎖修改紀錄**（v1.56.0，使用者 2026-11-03 指定）：每月初匯出上個月（可調到日）的
+     * 未結案件、已結案件的修改內容（原內容 → 修改後）與申請事由。
+     * **含病患資料，只寫在本機 `out/internal/解鎖修改紀錄/`，不上雲**（使用者選定只做電腦端完整版）。
+     */
+    monthlyReport: {
+      /** 輸出資料夾名稱（放在 `PATHS.internalDir` 底下）。 */
+      dirName: '解鎖修改紀錄',
+      /** 檔名開頭；後面接期間，例如 `解鎖修改紀錄_2026-10-01至2026-10-31.xlsx`。 */
+      fileNamePrefix: '解鎖修改紀錄',
+      /** Excel 一格最多放幾個字（Excel 上限 32767，PDF 有時整頁擠在一行）。 */
+      maxCellLength: 2000,
+    },
   },
 
   /**

@@ -27,6 +27,8 @@
  *   npm run tool:ems -- device-reset         試跑：看裝置管理裡有哪些卡在「持續取得資料」
  *   npm run tool:ems -- device-reset --execute   真的把那些裝置先鎖定再啟用
  *   npm run tool:ems -- revision-check       解鎖過的案件結案了沒？結案就比對解鎖前後的紀錄表
+ *   npm run tool:ems -- revision-report      解鎖修改紀錄：上個月解鎖過的案件（未結案、修改內容、申請事由）
+ *   npm run tool:ems -- revision-report --from=2026-10-01 --to=2026-10-15   指定日期範圍（依解鎖時間）
  *   npm run tool:ems -- sheet-sample         取 3 張最近的紀錄表，寫出遮蔽過個資的版面結構（規劃比對用）
  *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
  *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
@@ -39,11 +41,12 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runAutoProbe, runInteractiveProbe } from './probe.mjs';
 import { startSession } from './session.mjs';
-import { resolveMonthRange, getRecentRange, buildCustomRange, countRangeDays } from './dateRange.mjs';
+import { resolveMonthRange, getRecentRange, getPreviousMonthRange, buildCustomRange, countRangeDays } from './dateRange.mjs';
 import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mjs';
 import { runUnlockWatch } from './unlockWatch.mjs';
 import { resetStuckDevicesSafely } from './deviceReset.mjs';
 import { checkRevisionsSafely } from './revisionCheck.mjs';
+import { writeRevisionReport } from './revisionMonthly.mjs';
 import { countDueToday, loadTracker, shouldBackupRequest } from './revisionTrack.mjs';
 import { TRACKER_FILE } from './sheetBackup.mjs';
 import { runSheetSample } from './sheetSample.mjs';
@@ -156,14 +159,16 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
   'check-sheet', 'check-ekg-sheet',
-  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'revision-check', 'sheet-sample', 'open-cases', 'guides',
+  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'revision-check', 'revision-report', 'sheet-sample',
+  'open-cases', 'guides',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
  *   |'check-ekg-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'|'device-reset'|'revision-check'|'sheet-sample'|'open-cases'|'guides'} command
+ *   |'unlock-online'|'unlock-watch'|'device-reset'|'revision-check'|'revision-report'|'sheet-sample'|'open-cases'
+ *   |'guides'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -1384,6 +1389,42 @@ async function runRevisionCheckCommand(options) {
 }
 
 /**
+ * 解鎖修改紀錄的期間：`--from`/`--to` 優先（可調到日），其次 `--month`，都沒有就是上個月。
+ * @param {CliOptions} options
+ * @returns {import('./dateRange.mjs').MonthRange}
+ */
+function resolveRevisionReportRange(options) {
+  if (options.from || options.to) {
+    if (!options.from || !options.to) throw new Error('--from 與 --to 要一起給（起日與迄日）');
+    return buildCustomRange(options.from, options.to);
+  }
+  if (options.month) return resolveMonthRange(options.month);
+  return getPreviousMonthRange();
+}
+
+/**
+ * 解鎖修改紀錄（`revision-report`，v1.56.0）：匯出一段期間內解鎖過的案件——
+ * 未結案的有哪幾件、已結案的每一件改了什麼（原內容 → 修改後）、申請事由。
+ *
+ * 只讀本機的追蹤清單與 PDF，**不必登入救護系統**；連得上雲端才補得到申請事由。
+ * 平常也可以在網頁「比對與匯出」分頁按匯出，由監看程式產出（見 `revisionMonthly.mjs`）。
+ */
+async function runRevisionReportCommand(options) {
+  const range = resolveRevisionReportRange(options);
+  let queue = null;
+  try {
+    queue = await connectQueue();
+  } catch (error) {
+    log.warn(`連不上網頁的工單（報表照樣產出，只是申請事由讀不到）：${error instanceof Error ? error.message : error}`);
+  }
+  try {
+    await writeRevisionReport(range, { queue });
+  } finally {
+    if (queue) await closeQueue(queue);
+  }
+}
+
+/**
  * 線上解鎖工單：把網頁上待處理的申請跑完，結果回寫網頁。
  *
  * 與 `unlock` 的差別只在「TEMSIS 從哪來、結果往哪去」——
@@ -1630,6 +1671,10 @@ async function main() {
   }
   if (options.command === 'revision-check') {
     await runRevisionCheckCommand(options);
+    return;
+  }
+  if (options.command === 'revision-report') {
+    await runRevisionReportCommand(options);
     return;
   }
   if (options.command === 'sheet-sample') {

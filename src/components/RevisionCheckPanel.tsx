@@ -1,5 +1,5 @@
 /**
- * 解鎖工單頁的「立即比對」面板（v1.37 起，**只有管理員看得到**，使用者 2026-11-03 指定）。
+ * 「比對與匯出」分頁的「立即比對」面板（v1.37 起，**只有管理員看得到**，使用者 2026-11-03 指定）。
  *
  * 平常救護科電腦的監看程式只在開啟時與每天半夜確認一次「解鎖過的案件結案了沒」；
  * 按這裡就叫它下一輪（約 20 秒內）馬上做一次。階段判斷在 `lib/revisionCheckLogic`，
@@ -7,23 +7,15 @@
  */
 import { useEffect, useState } from 'react';
 import { requestRevisionCheck, subscribeRevisionCheck } from '../services/revisionCheckService';
-import { revisionCheckPhase } from '../lib/revisionCheckLogic';
+import { controlPhase, formatMoment, isControlBusy } from '../lib/revisionCheckLogic';
 import { UNLOCK_WATCH_POLL_SECONDS } from '../config/constants';
 import type { AppUser } from '../types/user';
 import type { RevisionCheckControl } from '../types/revisionCheck';
 import { Button, Card, ErrorBanner } from './ui';
 
-/** 把 ISO 時間字串轉成「MM/DD HH:mm」；空字串回傳空字串。 */
-function formatMoment(iso: string): string {
-  const date = new Date(iso);
-  if (!iso || Number.isNaN(date.getTime())) return '';
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 /** 目前狀態的一句話。 */
 function describeControl(control: RevisionCheckControl | null): string {
-  const phase = revisionCheckPhase(control);
+  const phase = controlPhase(control);
   if (phase === 'idle' || !control) return '還沒按過。';
   if (phase === 'waiting') {
     return `已送出（${formatMoment(control.requestedAt)}），等救護科電腦的監看程式接手；`
@@ -55,8 +47,6 @@ export function RevisionCheckPanel({ user }: { user: AppUser }) {
     [],
   );
 
-  const phase = revisionCheckPhase(control);
-
   async function handleRequest() {
     setBusy(true);
     setError(null);
@@ -79,7 +69,7 @@ export function RevisionCheckPanel({ user }: { user: AppUser }) {
           </p>
           <p className="mt-2 text-sm text-slate-700">{loaded ? describeControl(control) : '讀取中…'}</p>
         </div>
-        <Button disabled={!loaded || busy || phase === 'waiting' || phase === 'running'} onClick={handleRequest}>
+        <Button disabled={!loaded || busy || isControlBusy(control)} onClick={handleRequest}>
           {busy ? '送出中…' : '立即比對'}
         </Button>
       </div>

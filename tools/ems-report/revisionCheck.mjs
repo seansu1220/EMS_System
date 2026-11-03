@@ -53,7 +53,7 @@ const keyOf = (entry) => ({ temsis: entry.temsis, version: entry.version });
  * 讀本機的 PDF 並取出「文字＋座標」（比對依座標，見 `sheetDiff.mjs`）。
  * @returns {Promise<import('./pdfText.mjs').PdfTextItem[]>}
  */
-async function readLocalSheetItems(fileName) {
+export async function readLocalSheetItems(fileName) {
   const filePath = path.join(PATHS.revisionDir, fileName);
   let bytes;
   try {

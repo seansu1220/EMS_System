@@ -44,6 +44,7 @@ import {
 import { heartbeat as emsHeartbeat, processBatch } from '../ems-report/unlockWatch.mjs';
 import { resetStuckDevicesSafely } from '../ems-report/deviceReset.mjs';
 import { checkRevisionsSafely } from '../ems-report/revisionCheck.mjs';
+import { handleRevisionReportRequest } from '../ems-report/revisionMonthly.mjs';
 import { createDailyTrigger } from '../ems-report/revisionTrack.mjs';
 
 import { enableLiveLog as enableMciLiveLog } from '../mci-perm/logger.mjs';
@@ -205,6 +206,7 @@ function buildMciSide(mci) {
  * 確認解鎖過的案件結案了沒、結案就比對（見 `ems-report/revisionCheck.mjs`）。
  * 開啟時做一次，之後**跨日才再做**；管理員在網頁按「立即比對」（v1.55）時也做，
  * 並把結果寫回網頁（每天那一輪剛好碰上就一併認領）。試跑不做。
+ * 管理員按「匯出修改紀錄」（v1.56）也在這裡產出（只讀本機檔案，見 `revisionMonthly.mjs`）。
  *
  * @returns {() => Promise<void>} 每一輪都可以呼叫，沒到時間、也沒人按就什麼都不做
  */
@@ -212,6 +214,7 @@ function makeRevisionChores(unlock, dryRun) {
   const daily = createDailyTrigger();
   return async () => {
     if (!unlock || dryRun) return;
+    await handleRevisionReportRequest(unlock.queue);
     const requestedAt = await fetchRevisionCheckRequest(unlock.queue);
     if (!requestedAt && !daily.isDue()) return;
     if (requestedAt) log.step('管理員在網頁上要求立即比對');

@@ -18,6 +18,7 @@ import { getRecentRange } from './dateRange.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
 import { checkRevisionsSafely } from './revisionCheck.mjs';
+import { handleRevisionReportRequest } from './revisionMonthly.mjs';
 import { createDailyTrigger, shouldBackupRequest } from './revisionTrack.mjs';
 import { ensureSignedIn, isSignedIn } from './session.mjs';
 import { runUnlockFlow, printUnlockSummary } from './unlock.mjs';
@@ -167,7 +168,8 @@ export async function processBatch(session, queue, requests) {
  * @param {{fetchPending?: Function, processBatch?: Function, heartbeat?: Function,
  *   ensureSignedIn?: Function, resetDevices?: Function, checkRevisions?: Function,
  *   dailyTrigger?: {isDue: () => boolean, markDone: () => void},
- *   revisionRequests?: {fetch: Function, markRunning: Function, saveResult: Function}}} [deps]
+ *   revisionRequests?: {fetch: Function, markRunning: Function, saveResult: Function},
+ *   handleReportRequest?: Function}} [deps]
  *   碰外部世界的事都可以換成替身，測試才跑得起來
  *   （比照 `locateUnlockTarget` 的既有作法）；`dailyTrigger` 換掉就能測「跨日」，
  *   `revisionRequests` 換掉就能測「管理員按了立即比對」。
@@ -175,6 +177,7 @@ export async function processBatch(session, queue, requests) {
  * **開啟時與每天一次**（跨日後的第一輪）會確認解鎖過的案件結案了沒，結案就比對
  * 解鎖前後的紀錄表（見 `revisionCheck.mjs`，使用者 2026-11-03 指定）。試跑模式不做。
  * 管理員在網頁按「立即比對」（v1.55）時，下一輪（最慢 `pollMs`）就做一次，結果寫回網頁。
+ * 管理員在網頁按「匯出修改紀錄」（v1.56）時，下一輪就在本機產出 Excel（不必登入救護系統，掉線時也做）。
  *
  * **每次剛登入後**（監看開啟時、掉線重新登入後）會先重置裝置管理裡
  * 卡在「持續取得資料」的裝置（見 `deviceReset.mjs`，使用者 2026-10-29 指定）。
@@ -193,6 +196,7 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
     markRunning: markRevisionCheckRunning,
     saveResult: saveRevisionCheckResult,
   };
+  const handleReport = deps.handleReportRequest ?? handleRevisionReportRequest;
   const { pollMs, heartbeatMs, statusEveryMs, reloginWaitMs, reloginRemindEveryMs } = UNLOCK.watch;
   const startedAt = Date.now();
   /** 最近一次登入成功的時間；掉線期間為 null。這才是「連續登入多久」的基準。 */
@@ -270,6 +274,9 @@ export async function runUnlockWatch(session, queue, options, deps = {}) {
   };
 
   while (!options.shouldStop()) {
+    // 管理員在網頁按了「匯出修改紀錄」（v1.56）：只讀本機檔案與雲端工單，不必登入，掉線時照樣做。
+    if (!options.dryRun) await handleReport(queue);
+
     // 掉線時**不做任何解鎖動作**，只反覆等使用者回來登入。
     // 等不到不是失敗，跑下一輪再等——監看永遠不會因為沒人在而自己結束。
     if (waitingForLogin) {

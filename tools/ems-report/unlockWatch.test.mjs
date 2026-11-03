@@ -11,6 +11,7 @@
  *   7. 每次剛登入後都要重置一輪卡住的裝置（開啟時、掉線重新登入後）
  *   8. 開啟時與跨日時要確認解鎖過的案件結案了沒（試跑不做）
  *   9. 管理員在網頁按「立即比對」時要做一輪並回寫結果（試跑、掉線時不做）
+ *  10. 管理員按「匯出修改紀錄」每一輪都要看，掉線時也照做（不必登入）；試跑不做
  *
  * 執行：npm run tool:ems:test
  */
@@ -38,7 +39,7 @@ function stopAfter(rounds) {
 function createSpies(overrides = {}) {
   const calls = {
     fetch: 0, batch: 0, heartbeat: 0, ensure: 0, reset: [], revisions: 0,
-    requestFetch: 0, claimed: [], savedSummaries: [],
+    requestFetch: 0, claimed: [], savedSummaries: [], reportChecks: 0,
   };
   return {
     calls,
@@ -66,6 +67,10 @@ function createSpies(overrides = {}) {
       },
       dailyTrigger: overrides.dailyTrigger ?? { isDue: () => false, markDone: () => {} },
       // 「立即比對」請求：預設沒人按；`revisionRequest(第幾次讀)` 回傳請求時間就代表有人按了。
+      handleReportRequest: async () => {
+        calls.reportChecks += 1;
+        return false;
+      },
       revisionRequests: {
         fetch: async () => {
           calls.requestFetch += 1;
@@ -375,4 +380,28 @@ test('立即比對時發現掉線：等重新登入，不在沒登入的狀態�
     runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
   assert.equal(spies.calls.revisions, 1, '只有開啟時那一次');
   assert.deepEqual(spies.calls.claimed, [], '沒登入就不認領，請求留著等重新登入後再做');
+});
+
+test('匯出修改紀錄：每一輪都看一次有沒有人按', async () => {
+  const spies = createSpies();
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
+  assert.equal(spies.calls.reportChecks, 3);
+});
+
+test('匯出修改紀錄：掉線等重新登入時也照做（不必登入）', async () => {
+  const spies = createSpies({
+    requests: () => [{ id: 'r1', temsis: 'T115070100001', reason: '補登', requestedByName: '蘆竹分隊' }],
+    loginResult: () => '等不到',
+  });
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: false, shouldStop: stopAfter(3) }, spies.deps));
+  assert.equal(spies.calls.reportChecks, 3, '第一輪掉線之後，後面兩輪等登入時也要看');
+});
+
+test('匯出修改紀錄：試跑模式不做', async () => {
+  const spies = createSpies();
+  await withWatchTiming({ pollMs: 0, heartbeatMs: 60 * 60 * 1000 }, () =>
+    runUnlockWatch(createSession(), {}, { dryRun: true, shouldStop: stopAfter(2) }, spies.deps));
+  assert.equal(spies.calls.reportChecks, 0);
 });

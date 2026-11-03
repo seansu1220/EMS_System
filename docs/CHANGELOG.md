@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-11-03　網頁 v1.38／小工具 v1.56.0 匯出解鎖修改紀錄、解鎖工單頁分頁
+
+### 問題描述
+使用者要求：
+1. 每月初匯出上個月的修改資料：未結案的是哪幾件、已結案每一件改了哪裡（原內容 → 修改後）、已結案的申請事由。
+   使用者選定：只做電腦端完整版；手動觸發，預設上個月，可調到日。
+2. 解鎖工單頁太長：進去一樣只看到鎖定時段、輸入解鎖與工單清單；另開分頁放匯出與立即比對。
+
+### 根本原因
+雲端只存遮蔽過的比對摘要（姓名、身分證只寫欄位名），完整前後內容只在救護科電腦；也沒有彙整一段期間的報表。
+立即比對面板直接疊在解鎖工單頁上，版面越來越長。
+
+### 修改的檔案與內容
+- 本機工具：
+  - `tools/ems-report/revisionMonthly.mjs`（新增）：挑期間（依解鎖時間）、分未結案／已結案、從本機兩份 PDF 重新比對出原內容 → 修改後、
+    雲端補讀事由，產出四個分頁的 Excel 到 `out/internal/解鎖修改紀錄/`；`handleRevisionReportRequest` 處理網頁請求（絕不丟例外，只回寫檔名與件數）。
+  - `tools/ems-report/unlockQueue.mjs`：控制文件讀寫共用化（`readPendingControl`／`writeControl`），新增
+    `fetchRevisionReportRequest`、`markRevisionReportRunning`、`saveRevisionReportResult`、`fetchRequestDetails`。
+  - `tools/ems-report/revisionCheck.mjs`：匯出 `readLocalSheetItems`。
+  - `tools/ems-report/unlockWatch.mjs`：每一輪先處理匯出請求（不必登入，掉線時也做）；`tools/duty-watch/index.mjs` 的例行事同樣支援。
+  - `tools/ems-report/index.mjs`：新指令 `revision-report`（`--from`/`--to`/`--month`，預設上個月）。
+  - `tools/ems-report/config.mjs`：`UNLOCK.revision.monthlyReport`。
+  - `捷徑/不常用/解鎖修改紀錄.bat`（新增）：連按兩次 Enter＝上個月，或輸入起訖日。
+  - 測試：`revisionMonthly.test.mjs` 新增 10 項、`unlockWatch.test.mjs` 新增 3 項；ems-report 579 項、duty-watch 20 項全過；本機實跑產出成功。
+- 安全規則：`firebase/firestore.rules` 的 `unlockControl` 新增 `revisionReport`（只有管理員能送，必須帶合法區間、起日不晚於迄日；
+  監看可回寫 failed 與檔名、件數）；`scripts/rules.test.mjs` 新增 12 項，共 157 項全過。
+- 網頁：
+  - `src/pages/UnlockPage.tsx`：管理員多一列分頁「解鎖工單／比對與匯出」（`#revision`），兩頁保持掛載只切換顯示。
+  - `src/components/RevisionReportPanel.tsx`（新增）：選期間（預設上個月）＋匯出，顯示產出狀態、檔名與件數，不提供下載。
+  - `src/components/RevisionCheckPanel.tsx`：移到「比對與匯出」分頁，改用共用判斷。
+  - `src/lib/revisionCheckLogic.ts`：`controlPhase`（含 failed）、`isControlBusy`、`formatMoment`、`previousMonthRange`、`validateDateRange`。
+  - `src/services/revisionCheckService.ts`：兩種請求共用訂閱與送出，新增 `subscribeRevisionReport`、`requestRevisionReport`。
+  - `src/types/revisionCheck.ts`：`ControlBase`、`RevisionReportControl`、`DateRange`、`ControlPhase`。
+- 規格書：`docs/SPEC.md` v1.38（2.1.1、2.7、2.8、3、安全規則、目錄結構）、`docs/TOOLS_SPEC.md` v1.56.0（新增 2.14、2.3、指令表、個資例外）。
+
+---
+
 ## 2026-11-03　網頁 v1.37／小工具 v1.55.0 管理員可按「立即比對」
 
 ### 問題描述

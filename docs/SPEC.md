@@ -1,6 +1,7 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.37　建立日期：2026-07-22　最後更新：2026-11-03
+> 版本：v1.38　建立日期：2026-07-22　最後更新：2026-11-03
+> v1.38：解鎖工單頁分成兩個分頁（管理員才有第二頁）：「解鎖工單」只放鎖定時段、申請表單與工單清單；「比對與匯出」（`#revision`）放立即比對與新的**匯出解鎖修改紀錄**（選期間、預設上個月，可調到日；由救護科電腦產出含修改前後內容的 Excel，**不上雲、網頁不提供下載**）；新增 `unlockControl/revisionReport`（見 2.8、3）
 > v1.37：解鎖工單頁新增**「立即比對」面板（只有管理員看得到）**：按下去，救護科電腦的監看程式下一輪（約 20 秒）就確認解鎖過的案件結案了沒、結案就比對，不必等到半夜；新增 `unlockControl/revisionCheck` 與安全規則（見 2.8、3）
 > v1.36：使用者管理頁改成上方分頁「目前使用者／停用／待審核」，「目前使用者」再依角色分組（見 2.6）
 > v1.35.3：不追溯的起算點改成功能上線的 **11/3 13:40**；本機工具改成不設停止期限，`expired`／`gaveUp` 目前不會出現（見 2.8）
@@ -148,7 +149,7 @@
 | **回寫解鎖結果**（本機工具用這個身分） | ✅ | ✅ | ❌（v1.34 起） | ❌ | ❌ |
 | **看得到所有人的傷票領取紀錄** | ✅ | ✅ | ❌（只看自己領的） | ❌（只看自己領的） | ❌ |
 | **設定解鎖工單的鎖定時段**（v1.32 起） | ✅ | ❌ | ✅ | ❌ | ❌ |
-| **按「立即比對」**（v1.37 起） | ✅ | ❌（本機工具只能回寫處理狀態） | ❌ | ❌ | ❌ |
+| **按「立即比對」**（v1.37 起）、**匯出解鎖修改紀錄**（v1.38 起） | ✅ | ❌（本機工具只能回寫處理狀態） | ❌ | ❌ | ❌ |
 
 **「解鎖專用」角色**（v1.17 起，使用者 2026-08-06 指定）：權限最低，給各分隊申請解鎖用。
 用這種帳號登入只進得去 `/unlock`，導覽列不顯示業務管理的任何入口，
@@ -326,7 +327,7 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 | `/categories` | 屬性管理（左）＋ 假日設定（右） | 需登入且已核准（假日匯入/刪除僅管理員） |
 | `/templates` | 待辦公版管理 | 需登入且已核准 |
 | `/holidays` | （v1.12.2 起併入屬性管理）自動導向 `/categories` | 同上 |
-| `/unlock` | **解鎖工單**（提出申請、查看結果） | 需登入且已核准（**三種角色都可以**） |
+| `/unlock` | **解鎖工單**（提出申請、查看結果）；管理員多「比對與匯出」分頁（`#revision` 直接開，v1.38） | 需登入且已核准（**三種角色都可以**） |
 | `/triage-tags` | **測試用傷票領取**（v1.21，輸入張數 → 下載 PDF） | 需登入且已核准（**三種角色都可以**） |
 | `/tools` | **小工具**：PDF 工作區（所有人）＋電腦端工具說明、使用紀錄（**僅管理員**，`#local`、`#usage` 直接開）；版面寬度與其他頁相同（1024px，v1.30.2 起） | 需登入且已核准（**三種角色都可以進**，v1.27 起） |
 | `/pdf-tools` | （v1.26 的獨立 PDF 工具頁，v1.27 起併入小工具）自動導向 `/tools` | 同上 |
@@ -391,7 +392,14 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 版面刻意簡單，只有這兩顆按鈕（v1.33，使用者指定）；要整個開放就選最早的月份按解鎖。兩個動作按下前都會再確認一次。判斷邏輯集中在 `src/lib/unlockLockLogic.ts`（純函式：`planLock`／`planUnlock`／
 `isTemsisLocked`／`formatRocMonth`），讀寫在 `src/services/unlockPolicyService.ts`。
 
-**立即比對面板**（v1.37，**只有管理員看得到**，使用者 2026-11-03 指定，在鎖定時段面板下方，`RevisionCheckPanel`）：
+**分頁**（v1.38，使用者 2026-11-03 指定：版面太長）：管理員在頁首下方多一列分頁切換（比照小工具頁），其他角色沒有這列、只看得到解鎖工單（直接打 `#revision` 也一樣）。兩個分頁都保持掛載、只切換顯示，切去比對再回來，打到一半的 TEMSIS 不會消失。
+
+| 分頁 | 內容 |
+| --- | --- |
+| **解鎖工單**（預設） | 鎖定時段面板（管理員、救護科管理者）＋申請表單＋工單清單 |
+| **比對與匯出**（`#revision`，只有管理員） | 立即比對面板＋匯出解鎖修改紀錄面板 |
+
+**立即比對面板**（v1.37，**只有管理員看得到**，使用者 2026-11-03 指定，v1.38 起在「比對與匯出」分頁，`RevisionCheckPanel`）：
 平常救護科電腦的監看程式只在**開啟時**與**每天跨日後的第一輪**確認解鎖過的案件結案了沒（見下方「備份／比對」）；
 按「立即比對」就寫一筆請求到 `unlockControl/revisionCheck`，監看程式（`unlock-watch` 與值班監看都支援）下一輪（約 `UNLOCK_WATCH_POLL_SECONDS`＝20 秒）看到就做一輪，並把進度寫回來。面板顯示四種狀態：
 
@@ -403,7 +411,19 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 | 完成 | 上次比對 MM/DD HH:mm 完成：確認 N 件，其中 M 件已結案並比對完成 | 可再按 |
 
 比對結果仍寫在各工單的「備份／比對」那一塊，面板只顯示筆數。監看掉線時不做，等重新登入後的下一輪；試跑模式不理會。
-階段判斷在 `src/lib/revisionCheckLogic.ts`（純函式），讀寫在 `src/services/revisionCheckService.ts`。
+階段判斷在 `src/lib/revisionCheckLogic.ts`（純函式 `controlPhase`），讀寫在 `src/services/revisionCheckService.ts`。
+
+**匯出解鎖修改紀錄面板**（v1.38，**只有管理員看得到**，使用者 2026-11-03 指定，「比對與匯出」分頁，`RevisionReportPanel`）：
+每月初匯出上個月的修改資料。選起日與迄日（`type=date`，預設**上個月 1 日～月底**，「上個月」鈕一鍵帶回；可調到日），按「匯出」就寫一筆請求到 `unlockControl/revisionReport`（含 `rangeStart`、`rangeEnd`），監看程式下一輪在**救護科電腦上**產出 Excel（`tools\ems-report\out\internal\解鎖修改紀錄\解鎖修改紀錄_{起日}至{迄日}.xlsx`）：
+
+| 分頁 | 內容 |
+| --- | --- |
+| 摘要 | 期間、解鎖件數、未結案／已結案（有改動／沒有改動）件數 |
+| 未結案 | 哪幾件解鎖後還沒結案：TEMSIS、案件日期、車輛、分隊、解鎖時間、最近確認時間與救護狀態、申請人、申請事由 |
+| 已結案-申請事由 | 已結案的每一件：申請人輸入的事由、解鎖與比對時間、修改處數 |
+| 已結案-修改內容 | 已結案的每一件改了哪裡：**欄位、原內容 → 修改後的內容**（一處一列；沒改動、讀不到檔案也各寫一列） |
+
+期間依**解鎖時間**判斷（起訖日都含）；結案前又解鎖一次的以最後一次為準。**報表含病患資料（姓名、身分證的完整前後內容），只存在救護科電腦，不上雲，網頁不提供下載**（使用者選定只做電腦端完整版）；面板只顯示狀態：已送出／產出中／「MM/DD HH:mm 已在救護科電腦產出『檔名』：未結案 N 件、已結案 M 件（有改動 K 件）」／失敗原因（固定說法，例如同期間的檔案正被 Excel 開著）。起日不能晚於迄日（網頁與安全規則都擋）。電腦端也可以直接跑捷徑 `不常用/解鎖修改紀錄.bat`（見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 2.14）。
 
 **下半：工單清單。** 即時更新，新的排前面。管理員、一般使用者與救護科管理者看得到全部（多一欄「申請人」），
 解鎖專用帳號只看得到自己送的。每一筆顯示狀態、TEMSIS、事由與結果：
@@ -643,7 +663,9 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
   ——解鎖工單的鎖定時段，全系統只有這一份。`lockedThroughMonth` 是「鎖到哪個月（含）」，null＝沒有鎖定；
   文件不存在時視為 `2026-09`（見 2.8）。
 - `unlockControl/revisionCheck`（v1.37 新增）：{ requestedAt（伺服器時間）, requestedBy, requestedByName（以上管理員按「立即比對」時寫）, status（running/done）, handledRequestAt（監看認領的是哪一次請求）, handledByName, startedAt, finishedAt, checkedCount, comparedCount（以上本機監看回寫）}
-  ——全系統只有這一份。`requestedAt` 比 `handledRequestAt` 新＝還沒接手（網頁 `revisionCheckPhase`、本機 `isRevisionCheckPending` 判斷法相同，見 2.8）。
+- `unlockControl/revisionReport`（v1.38 新增）：{ requestedAt, requestedBy, requestedByName, rangeStart, rangeEnd（`YYYY-MM-DD`）（以上管理員按「匯出」時寫）, status（running/done/failed）, handledRequestAt, handledByName, startedAt, finishedAt, fileName（只含期間）, openCount, closedCount, changedCount, errorMessage（固定說法）（以上本機監看回寫）}
+  ——**沒有任何病患資料**，報表本身只在救護科電腦。
+  ——兩份各只有一份。`requestedAt` 比 `handledRequestAt` 新＝還沒接手（網頁 `controlPhase`、本機 `isRevisionCheckPending` 判斷法相同，見 2.8）。
 - `triageTagCounter/main`（v1.21 新增）：{ nextSerial（下一個要發的流水號，0 ~ 100000）, updatedAt }
   ——全系統只有這一份，測試用傷票的號碼從這裡接續往下發（見 2.9）。
 - `triageTagIssues/{起始流水號}`（v1.21 新增）：{ startSerial, count, **unit**, **weekIndex**, requestedBy, requestedByName, requestedAt }
@@ -680,9 +702,9 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
 - `unlockPolicy`（v1.32 起）：已核准帳號都可讀；**只有 `isLockManager()`（管理員或 `role == 'emsManager'`）可寫**，
   且文件 ID 必須是 `main`、欄位只能是那四個、`lockedThroughMonth` 為 null 或合法的 `YYYY-MM`、
   `updatedBy == 自己`、`updatedAt == request.time`。**不可刪除**（刪掉會悄悄退回預設值）。
-- `unlockControl`（v1.37 起）：讀 `isStaff()`（本機監看用一般使用者身分讀）；文件 ID 必須是 `revisionCheck`。
-  **只有管理員**能寫請求欄位（`requestedAt == request.time`、`requestedBy == 自己`，不能夾帶其他欄位）；
-  `isStaff()` 只能回寫處理狀態那幾個欄位（動不了請求欄位），`status` 只能是 running/done，`handledRequestAt` 不能比目前的請求還新。**不可刪除**。
+- `unlockControl`（v1.37 起）：讀 `isStaff()`（本機監看用一般使用者身分讀）；文件 ID 必須是 `revisionCheck` 或 `revisionReport`（v1.38）。
+  **只有管理員**能寫請求欄位（`requestedAt == request.time`、`requestedBy == 自己`，不能夾帶其他欄位；`revisionReport` 另外必須帶合法的 `rangeStart`／`rangeEnd`、起日不晚於迄日，`revisionCheck` 不能帶區間）；
+  `isStaff()` 只能回寫處理狀態那幾個欄位（動不了請求欄位與區間），`status` 只能是 running/done/failed，`handledRequestAt` 不能比目前的請求還新。**不可刪除**。
 - `triageTagCounter` / `triageTagIssues` / `triageTagUnitWeeks`（v1.21 起；單位週用量 v1.22 起）：
   - 讀：計數器任何已核准帳號可讀；領取紀錄 `isStaff()` 看全部，其他已核准帳號只讀得到自己的
     （同解鎖工單，查詢須帶 `where('requestedBy','==',uid)`）。
@@ -760,14 +782,14 @@ EMS_System/
 │  │                pdfPageLogic.ts（頁碼與檔名）、pdfEngine.ts（讀檔、圖片轉 PDF、打包）、pdfRender.ts（繪圖）、
 │  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）、pdfUsageLogic.ts（使用紀錄彙總）、
 │  │                unlockLockLogic.ts（解鎖工單鎖定時段的月份換算與判斷，純函式，v1.32）、
-│  │                userGrouping.ts（使用者管理的分頁與角色分組，v1.36）、revisionCheckLogic.ts（立即比對的階段判斷，v1.37）
+│  │                userGrouping.ts（使用者管理的分頁與角色分組，v1.36）、revisionCheckLogic.ts（立即比對／匯出的階段判斷與期間計算，v1.37、v1.38）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
 │  │                userService、holidayService、unlockRequestService、unlockPolicyService（v1.32）、revisionCheckService（v1.37）、triageTagService、pdfToolUsageService
 │  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、usePdfWorkspace、usePdfToolUsage
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
-│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、UnlockLockPanel（v1.32）、RevisionCheckPanel（v1.37）、ui；
+│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、UnlockLockPanel（v1.32）、RevisionCheckPanel（v1.37）、RevisionReportPanel（v1.38）、ui；
 │  │                pdf/（PdfToolbox 工作區與檔案列、工具列、頁面清單、側邊預覽面板、大圖、下載區、共用元件）
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
 │                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、

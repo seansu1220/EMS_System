@@ -6,8 +6,12 @@
  * 「提出申請」與「查結果」，實際動手的是救護科電腦上的本機工具。
  *
  * 三種角色都能用；「解鎖專用」帳號只看得到自己送出的工單（安全規則同步限制）。
+ *
+ * 管理員多一個「比對與匯出」分頁（v1.38，使用者 2026-11-03 指定，版面才不會太長）：
+ * 立即比對與匯出解鎖修改紀錄。網址 `#revision` 直接開該分頁；非管理員一律只看到解鎖工單。
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
   createUnlockRequests,
@@ -35,6 +39,7 @@ import type { UnlockRequest, UnlockRequestRevision } from '../types/unlockReques
 import type { UnlockPolicy } from '../types/unlockPolicy';
 import { UnlockLockPanel } from '../components/UnlockLockPanel';
 import { RevisionCheckPanel } from '../components/RevisionCheckPanel';
+import { RevisionReportPanel } from '../components/RevisionReportPanel';
 import {
   Badge,
   Button,
@@ -141,13 +146,58 @@ function ResultCell({
   );
 }
 
+type UnlockSection = 'requests' | 'revision';
+
+/** 分頁定義：requests 所有人都看得到；revision 只有管理員。hash 可直接開該分頁。 */
+const SECTIONS: readonly { key: UnlockSection; label: string; hash: string }[] = [
+  { key: 'requests', label: '解鎖工單', hash: '' },
+  { key: 'revision', label: '比對與匯出', hash: '#revision' },
+];
+
+/** 網址 hash → 分頁；不認得的一律是解鎖工單。 */
+const sectionFromHash = (hash: string): UnlockSection =>
+  SECTIONS.find((item) => item.hash && item.hash === hash)?.key ?? 'requests';
+
+/** 管理員才看得到的分頁切換列（比照小工具頁）。 */
+function SectionTabs({ shown, onSelect }: { shown: UnlockSection; onSelect: (key: UnlockSection) => void }) {
+  return (
+    <div className="flex flex-wrap rounded-lg border border-slate-300 bg-white p-0.5" role="tablist" aria-label="解鎖工單分頁">
+      {SECTIONS.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={shown === key}
+          onClick={() => onSelect(key)}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            shown === key ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function UnlockPage() {
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const seesAll = canSeeAllUnlockRequests(user);
   /** 管理員才看得到執行細節，也才動得了別人的工單（重新送單／刪除）。 */
   const canManage = isAdmin(user);
   /** 管理員與救護科管理者可以設定鎖定時段（v1.32）。 */
   const canManageLock = canManageUnlockLock(user);
+  const [section, setSection] = useState<UnlockSection>(() => sectionFromHash(location.hash));
+  useEffect(() => setSection(sectionFromHash(location.hash)), [location.hash]);
+  // 非管理員永遠只看到解鎖工單（直接打 #revision 也一樣）。
+  const shown: UnlockSection = canManage ? section : 'requests';
+
+  function selectSection(key: UnlockSection) {
+    setSection(key);
+    navigate({ hash: SECTIONS.find((item) => item.key === key)?.hash ?? '' }, { replace: true });
+  }
 
   const [requests, setRequests] = useState<UnlockRequest[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -263,190 +313,201 @@ export function UnlockPage() {
         )}
       </div>
 
-      <ErrorBanner message={policyError} />
-      {user && canManageLock && policy && <UnlockLockPanel user={user} policy={policy} />}
-      {/* 只有管理員看得到（v1.37，使用者 2026-11-03 指定）；安全規則也只讓管理員送出。 */}
-      {user && canManage && <RevisionCheckPanel user={user} />}
+      {canManage && <SectionTabs shown={shown} onSelect={selectSection} />}
 
-      <Card>
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          <div>
-            <FieldLabel required>TEMSIS 編號</FieldLabel>
-            <textarea
-              className={TEXTAREA_CLASS}
-              rows={4}
-              value={rawTemsis}
-              onChange={(event) => setRawTemsis(event.target.value)}
-              placeholder={'一行一個，也可以從 Excel 整欄複製貼上\n2026071210100310384101'}
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              {parsed.length > 0
-                ? `這次會建立 ${parsed.length} 筆工單（重複的編號只留一筆）`
-                : `TEMSIS 碼固定 ${TEMSIS_CODE_LENGTH} 碼，一次最多 ${UNLOCK_REQUEST_MAX_BATCH} 筆`}
-            </p>
-            {lengthErrors.length > 0 && (
-              <div className="mt-2 space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-                {lengthErrors.map((item) => (
-                  <p key={item.temsis}>{describeTemsisLengthError(item)}</p>
-                ))}
-              </div>
-            )}
-            {lockedErrors.length > 0 && (
-              <div className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-                {canManageLock && (
-                  <p className="font-medium">
-                    以下 {lockedErrors.length} 筆在鎖定時段內；你有管理權限，仍可送出，救護科電腦會照常解鎖。
-                  </p>
-                )}
-                {lockedErrors.map((item) => (
-                  <p key={item.temsis}>
-                    {canManageLock
-                      ? `${item.temsis}：${formatRocMonth(item.lockedThroughMonth)}（含）以前的案件`
-                      : describeTemsisLockedError(item)}
-                  </p>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <FieldLabel required hint="（請填寫解鎖後欲修改內容）">申請事由</FieldLabel>
-            <input
-              className={INPUT_CLASS}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="例如：到院前處置漏填，需補登"
-            />
-          </div>
-
-          <ErrorBanner message={submitError} />
-          {notice && (
-            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-700">
-              {notice}
-            </div>
-          )}
-
-          <div className="flex items-center gap-3">
-            <Button
-              type="submit"
-              disabled={
-                submitting
-                || (policy === null && policyError === null)
-                || parsed.length === 0
-                || lengthErrors.length > 0
-                || (lockedErrors.length > 0 && !canManageLock)
-                || reason.trim() === ''
-              }
-            >
-              {submitting ? '送出中…' : '送出申請'}
-            </Button>
-            <span className="text-xs text-slate-400">
-              送出後不需要等待，救護科的電腦會統一處理。
-            </span>
-          </div>
-        </form>
-      </Card>
-
-      <div>
-        <div className="mb-2 flex flex-wrap items-baseline gap-2">
-          <h2 className="text-lg font-semibold text-slate-800">
-            {seesAll ? '所有工單' : '我送出的工單'}
-          </h2>
-          {pendingCount > 0 && (
-            <span className="text-sm text-amber-600">目前有 {pendingCount} 筆待處理</span>
-          )}
+      {/* 只有管理員看得到（v1.37／v1.38，使用者 2026-11-03 指定）；安全規則也只讓管理員送出。 */}
+      {user && canManage && (
+        <div hidden={shown !== 'revision'} className="space-y-6">
+          <RevisionCheckPanel user={user} />
+          <RevisionReportPanel user={user} />
         </div>
+      )}
 
-        <ErrorBanner message={loadError} />
-        <ErrorBanner message={actionError} />
-        {requests === null && !loadError && <CenteredSpinner />}
-        {requests !== null && requests.length === 0 && (
-          <Card>
-            <p className="text-sm text-slate-500">還沒有任何工單。</p>
-          </Card>
-        )}
+      {/* 兩個分頁都保持掛載、只切換顯示，切去比對再回來，打到一半的 TEMSIS 不會消失。 */}
+      <div hidden={shown !== 'requests'} className="space-y-6">
+        <ErrorBanner message={policyError} />
+        {user && canManageLock && policy && <UnlockLockPanel user={user} policy={policy} />}
 
-        {requests !== null && requests.length > 0 && (
-          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-            <table className={`w-full text-left text-sm ${canManage ? 'min-w-[54rem]' : 'min-w-[42rem]'}`}>
-              <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                <tr>
-                  <th className="px-4 py-2 font-medium">狀態</th>
-                  <th className="px-4 py-2 font-medium">TEMSIS</th>
-                  <th className="px-4 py-2 font-medium">事由</th>
-                  {seesAll && <th className="px-4 py-2 font-medium">申請人</th>}
-                  <th className="px-4 py-2 font-medium">結果</th>
-                  {canManage && <th className="px-4 py-2 font-medium">管理</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {requests.map((request) => {
-                  const status = UNLOCK_STATUS_LABELS[request.status] ?? {
-                    label: request.status,
-                    tone: 'slate' as const,
-                  };
-                  return (
-                    <tr key={request.id} className="align-top">
-                      <td className="whitespace-nowrap px-4 py-3">
-                        <Badge tone={status.tone}>{status.label}</Badge>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {formatMoment(request.requestedAt)}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
-                        {request.temsis}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{request.reason}</td>
-                      {seesAll && (
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                          {request.requestedByName}
-                        </td>
-                      )}
-                      <td className="px-4 py-3">
-                        <ResultCell request={request} showDetail={canManage} showRevision={seesAll} />
-                      </td>
-                      {canManage && (
+        <Card>
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div>
+              <FieldLabel required>TEMSIS 編號</FieldLabel>
+              <textarea
+                className={TEXTAREA_CLASS}
+                rows={4}
+                value={rawTemsis}
+                onChange={(event) => setRawTemsis(event.target.value)}
+                placeholder={'一行一個，也可以從 Excel 整欄複製貼上\n2026071210100310384101'}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                {parsed.length > 0
+                  ? `這次會建立 ${parsed.length} 筆工單（重複的編號只留一筆）`
+                  : `TEMSIS 碼固定 ${TEMSIS_CODE_LENGTH} 碼，一次最多 ${UNLOCK_REQUEST_MAX_BATCH} 筆`}
+              </p>
+              {lengthErrors.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+                  {lengthErrors.map((item) => (
+                    <p key={item.temsis}>{describeTemsisLengthError(item)}</p>
+                  ))}
+                </div>
+              )}
+              {lockedErrors.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                  {canManageLock && (
+                    <p className="font-medium">
+                      以下 {lockedErrors.length} 筆在鎖定時段內；你有管理權限，仍可送出，救護科電腦會照常解鎖。
+                    </p>
+                  )}
+                  {lockedErrors.map((item) => (
+                    <p key={item.temsis}>
+                      {canManageLock
+                        ? `${item.temsis}：${formatRocMonth(item.lockedThroughMonth)}（含）以前的案件`
+                        : describeTemsisLockedError(item)}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <FieldLabel required hint="（請填寫解鎖後欲修改內容）">申請事由</FieldLabel>
+              <input
+                className={INPUT_CLASS}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="例如：到院前處置漏填，需補登"
+              />
+            </div>
+
+            <ErrorBanner message={submitError} />
+            {notice && (
+              <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-700">
+                {notice}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3">
+              <Button
+                type="submit"
+                disabled={
+                  submitting
+                  || (policy === null && policyError === null)
+                  || parsed.length === 0
+                  || lengthErrors.length > 0
+                  || (lockedErrors.length > 0 && !canManageLock)
+                  || reason.trim() === ''
+                }
+              >
+                {submitting ? '送出中…' : '送出申請'}
+              </Button>
+              <span className="text-xs text-slate-400">
+                送出後不需要等待，救護科的電腦會統一處理。
+              </span>
+            </div>
+          </form>
+        </Card>
+
+        <div>
+          <div className="mb-2 flex flex-wrap items-baseline gap-2">
+            <h2 className="text-lg font-semibold text-slate-800">
+              {seesAll ? '所有工單' : '我送出的工單'}
+            </h2>
+            {pendingCount > 0 && (
+              <span className="text-sm text-amber-600">目前有 {pendingCount} 筆待處理</span>
+            )}
+          </div>
+
+          <ErrorBanner message={loadError} />
+          <ErrorBanner message={actionError} />
+          {requests === null && !loadError && <CenteredSpinner />}
+          {requests !== null && requests.length === 0 && (
+            <Card>
+              <p className="text-sm text-slate-500">還沒有任何工單。</p>
+            </Card>
+          )}
+
+          {requests !== null && requests.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+              <table className={`w-full text-left text-sm ${canManage ? 'min-w-[54rem]' : 'min-w-[42rem]'}`}>
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">狀態</th>
+                    <th className="px-4 py-2 font-medium">TEMSIS</th>
+                    <th className="px-4 py-2 font-medium">事由</th>
+                    {seesAll && <th className="px-4 py-2 font-medium">申請人</th>}
+                    <th className="px-4 py-2 font-medium">結果</th>
+                    {canManage && <th className="px-4 py-2 font-medium">管理</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {requests.map((request) => {
+                    const status = UNLOCK_STATUS_LABELS[request.status] ?? {
+                      label: request.status,
+                      tone: 'slate' as const,
+                    };
+                    return (
+                      <tr key={request.id} className="align-top">
                         <td className="whitespace-nowrap px-4 py-3">
-                          <div className="flex gap-2">
-                            <Button
-                              variant="secondary"
-                              className="px-2 py-1 text-xs"
-                              disabled={busyId === request.id || request.status === 'pending'}
-                              onClick={() =>
-                                runRowAction(
-                                  request,
-                                  `確定把 ${request.temsis} 退回「待處理」重跑一次？`
-                                    + '上一次的結果會清掉，救護科電腦下一輪就會再處理。',
-                                  requeueUnlockRequest,
-                                )
-                              }
-                            >
-                              重新送單
-                            </Button>
-                            <Button
-                              variant="danger"
-                              className="px-2 py-1 text-xs"
-                              disabled={busyId === request.id}
-                              onClick={() =>
-                                runRowAction(
-                                  request,
-                                  `確定刪除 ${request.temsis} 這張工單？此動作無法復原。`,
-                                  deleteUnlockRequest,
-                                )
-                              }
-                            >
-                              刪除
-                            </Button>
+                          <Badge tone={status.tone}>{status.label}</Badge>
+                          <div className="mt-1 text-xs text-slate-400">
+                            {formatMoment(request.requestedAt)}
                           </div>
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                          {request.temsis}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{request.reason}</td>
+                        {seesAll && (
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                            {request.requestedByName}
+                          </td>
+                        )}
+                        <td className="px-4 py-3">
+                          <ResultCell request={request} showDetail={canManage} showRevision={seesAll} />
+                        </td>
+                        {canManage && (
+                          <td className="whitespace-nowrap px-4 py-3">
+                            <div className="flex gap-2">
+                              <Button
+                                variant="secondary"
+                                className="px-2 py-1 text-xs"
+                                disabled={busyId === request.id || request.status === 'pending'}
+                                onClick={() =>
+                                  runRowAction(
+                                    request,
+                                    `確定把 ${request.temsis} 退回「待處理」重跑一次？`
+                                      + '上一次的結果會清掉，救護科電腦下一輪就會再處理。',
+                                    requeueUnlockRequest,
+                                  )
+                                }
+                              >
+                                重新送單
+                              </Button>
+                              <Button
+                                variant="danger"
+                                className="px-2 py-1 text-xs"
+                                disabled={busyId === request.id}
+                                onClick={() =>
+                                  runRowAction(
+                                    request,
+                                    `確定刪除 ${request.temsis} 這張工單？此動作無法復原。`,
+                                    deleteUnlockRequest,
+                                  )
+                                }
+                              >
+                                刪除
+                              </Button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

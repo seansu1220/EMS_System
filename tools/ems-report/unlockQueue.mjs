@@ -44,6 +44,8 @@ const POLICY_DOC_ID = 'main';
 /** 「立即比對」請求文件（與網頁端 `COLLECTIONS.unlockControl` + `revisionCheck` 一致）。 */
 const CONTROL_COLLECTION = 'unlockControl';
 const REVISION_CHECK_DOC_ID = 'revisionCheck';
+/** 「匯出解鎖修改紀錄」請求文件（與網頁端 `revisionReport` 一致）。 */
+const REVISION_REPORT_DOC_ID = 'revisionReport';
 
 /**
  * 這個 TEMSIS 的案件月份是否落在鎖定時段內（鎖定月份當月也算，純函式）。
@@ -460,10 +462,10 @@ function toMillis(value) {
 }
 
 /**
- * 管理員按了「立即比對」而還沒處理（純函式）。
+ * 管理員在網頁上的請求（立即比對、匯出修改紀錄）是不是還沒處理（純函式）。
  *
  * 請求時間比上次認領的請求時間新＝還沒處理；從沒按過＝沒有請求。
- * ⚠ 判斷法須與網頁 `src/lib/revisionCheckLogic.ts` 的 `revisionCheckPhase()` 一致。
+ * ⚠ 判斷法須與網頁 `src/lib/revisionCheckLogic.ts` 的 `controlPhase()` 一致。
  *
  * @param {{requestedAtMs: number|null, handledRequestAtMs: number|null}} control
  * @returns {boolean}
@@ -474,27 +476,65 @@ export function isRevisionCheckPending({ requestedAtMs, handledRequestAtMs }) {
 }
 
 /**
- * 讀管理員在網頁上按的「立即比對」（v1.55）。
+ * 讀一份控制文件，還沒處理的請求就回傳整份內容。
  *
  * 讀不到只警告、當作沒有請求：這是額外的觸發點，不值得因此讓監看停擺。
+ *
+ * @param {QueueSession} session
+ * @param {string} docId
+ * @param {string} what 給錯誤訊息用的名稱
+ * @returns {Promise<Record<string, any>|null>}
+ */
+async function readPendingControl(session, docId, what) {
+  try {
+    const snapshot = await getDoc(doc(session.db, CONTROL_COLLECTION, docId));
+    if (!snapshot.exists()) return null;
+    const stored = snapshot.data();
+    const pending = isRevisionCheckPending({
+      requestedAtMs: toMillis(stored.requestedAt),
+      handledRequestAtMs: toMillis(stored.handledRequestAt),
+    });
+    return pending ? stored : null;
+  } catch (error) {
+    log.warn(`讀取「${what}」請求失敗（下一輪再試，unlockQueue.readPendingControl）：${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * 回寫一份控制文件的處理狀態。失敗只警告。
+ * @returns {Promise<boolean>} 是否寫入成功
+ */
+async function writeControl(session, docId, fields, what) {
+  try {
+    await updateDoc(doc(session.db, CONTROL_COLLECTION, docId), fields);
+    return true;
+  } catch (error) {
+    log.warn(`「${what}」狀態寫回網頁失敗（unlockQueue.writeControl）：${error.message}`);
+    return false;
+  }
+}
+
+/** 認領請求時共同要寫的欄位（網頁會改顯示「處理中」）。 */
+function claimFields(session, requestedAt) {
+  return {
+    status: 'running',
+    handledRequestAt: requestedAt,
+    handledByName: session.displayName,
+    startedAt: serverTimestamp(),
+    finishedAt: null,
+  };
+}
+
+/**
+ * 讀管理員在網頁上按的「立即比對」（v1.55）。
  *
  * @param {QueueSession} session
  * @returns {Promise<import('firebase/firestore').Timestamp|null>} 待處理請求的請求時間；沒有則 null
  */
 export async function fetchRevisionCheckRequest(session) {
-  try {
-    const snapshot = await getDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID));
-    if (!snapshot.exists()) return null;
-    const { requestedAt, handledRequestAt } = snapshot.data();
-    const pending = isRevisionCheckPending({
-      requestedAtMs: toMillis(requestedAt),
-      handledRequestAtMs: toMillis(handledRequestAt),
-    });
-    return pending ? requestedAt : null;
-  } catch (error) {
-    log.warn(`讀取「立即比對」請求失敗（下一輪再試，unlockQueue.fetchRevisionCheckRequest）：${error.message}`);
-    return null;
-  }
+  const stored = await readPendingControl(session, REVISION_CHECK_DOC_ID, '立即比對');
+  return stored ? stored.requestedAt : null;
 }
 
 /**
@@ -504,22 +544,12 @@ export async function fetchRevisionCheckRequest(session) {
  * @param {import('firebase/firestore').Timestamp} requestedAt 認領的是哪一次請求
  * @returns {Promise<boolean>} 是否寫入成功（失敗照樣比對，只是網頁看不到進度）
  */
-export async function markRevisionCheckRunning(session, requestedAt) {
-  try {
-    await updateDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID), {
-      status: 'running',
-      handledRequestAt: requestedAt,
-      handledByName: session.displayName,
-      startedAt: serverTimestamp(),
-      finishedAt: null,
-      checkedCount: null,
-      comparedCount: null,
-    });
-    return true;
-  } catch (error) {
-    log.warn(`「立即比對」狀態寫回網頁失敗（unlockQueue.markRevisionCheckRunning）：${error.message}`);
-    return false;
-  }
+export function markRevisionCheckRunning(session, requestedAt) {
+  return writeControl(session, REVISION_CHECK_DOC_ID, {
+    ...claimFields(session, requestedAt),
+    checkedCount: null,
+    comparedCount: null,
+  }, '立即比對');
 }
 
 /**
@@ -529,17 +559,86 @@ export async function markRevisionCheckRunning(session, requestedAt) {
  * @param {{checked: number, compared: number}} summary `checkRevisionsSafely` 的回傳值
  * @returns {Promise<boolean>} 是否寫入成功
  */
-export async function saveRevisionCheckResult(session, summary) {
-  try {
-    await updateDoc(doc(session.db, CONTROL_COLLECTION, REVISION_CHECK_DOC_ID), {
-      status: 'done',
-      finishedAt: serverTimestamp(),
-      checkedCount: summary.checked,
-      comparedCount: summary.compared,
-    });
-    return true;
-  } catch (error) {
-    log.warn(`「立即比對」結果寫回網頁失敗（unlockQueue.saveRevisionCheckResult）：${error.message}`);
-    return false;
+export function saveRevisionCheckResult(session, summary) {
+  return writeControl(session, REVISION_CHECK_DOC_ID, {
+    status: 'done',
+    finishedAt: serverTimestamp(),
+    checkedCount: summary.checked,
+    comparedCount: summary.compared,
+  }, '立即比對');
+}
+
+/**
+ * 讀管理員在網頁上按的「匯出解鎖修改紀錄」（v1.56）。
+ *
+ * @param {QueueSession} session
+ * @returns {Promise<{requestedAt: import('firebase/firestore').Timestamp, rangeStart: string, rangeEnd: string}|null>}
+ */
+export async function fetchRevisionReportRequest(session) {
+  const stored = await readPendingControl(session, REVISION_REPORT_DOC_ID, '匯出修改紀錄');
+  if (!stored) return null;
+  return { requestedAt: stored.requestedAt, rangeStart: String(stored.rangeStart ?? ''), rangeEnd: String(stored.rangeEnd ?? '') };
+}
+
+/**
+ * 認領「匯出修改紀錄」請求：網頁會改顯示「產出中」。
+ * @returns {Promise<boolean>}
+ */
+export function markRevisionReportRunning(session, requestedAt) {
+  return writeControl(session, REVISION_REPORT_DOC_ID, {
+    ...claimFields(session, requestedAt),
+    fileName: null,
+    openCount: null,
+    closedCount: null,
+    changedCount: null,
+    errorMessage: null,
+  }, '匯出修改紀錄');
+}
+
+/**
+ * 「匯出修改紀錄」做完：只寫檔名（只含期間）與件數，**不寫任何病患資料**；
+ * 失敗時寫一句固定說法（呼叫端決定，錯誤原文不上雲）。
+ *
+ * @param {QueueSession} session
+ * @param {{ok: boolean, fileName?: string, openCount?: number, closedCount?: number,
+ *   changedCount?: number, errorMessage: string|null}} result
+ * @returns {Promise<boolean>}
+ */
+export function saveRevisionReportResult(session, result) {
+  return writeControl(session, REVISION_REPORT_DOC_ID, {
+    status: result.ok ? 'done' : 'failed',
+    finishedAt: serverTimestamp(),
+    fileName: result.fileName ?? null,
+    openCount: result.openCount ?? null,
+    closedCount: result.closedCount ?? null,
+    changedCount: result.changedCount ?? null,
+    errorMessage: result.errorMessage,
+  }, '匯出修改紀錄');
+}
+
+/**
+ * 補讀工單上的申請人與事由（解鎖修改紀錄用；追蹤清單沒有存事由）。
+ *
+ * 一張讀不到只略過那一張（報表上會寫「雲端讀不到這張工單」），不讓整份報表失敗。
+ *
+ * @param {QueueSession} session
+ * @param {string[]} requestIds
+ * @returns {Promise<Map<string, {reason: string, requestedByName: string}>>}
+ */
+export async function fetchRequestDetails(session, requestIds) {
+  const details = new Map();
+  for (const requestId of new Set(requestIds)) {
+    try {
+      const snapshot = await getDoc(doc(session.db, COLLECTION, requestId));
+      if (!snapshot.exists()) continue;
+      const stored = snapshot.data();
+      details.set(requestId, {
+        reason: String(stored.reason ?? '') || '（沒填事由）',
+        requestedByName: String(stored.requestedByName ?? ''),
+      });
+    } catch (error) {
+      log.warn(`補讀工單事由失敗（unlockQueue.fetchRequestDetails）：${error.message}`);
+    }
   }
+  return details;
 }

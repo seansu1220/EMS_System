@@ -651,6 +651,71 @@ await check(
 );
 await check('立即比對請求連管理員也不可刪除', assertFails(deleteDoc(revisionCheckDoc(admin))));
 
+// ── 5.3 「匯出解鎖修改紀錄」請求（v1.38，只有管理員按得了，多帶日期區間）──
+
+/** 管理員按「匯出」時要寫的內容。 */
+function revisionReportRequest(uid, rangeStart = '2026-10-01', rangeEnd = '2026-10-31') {
+  return { requestedAt: serverTimestamp(), requestedBy: uid, requestedByName: '測試', rangeStart, rangeEnd };
+}
+const revisionReportDoc = (db) => doc(db, 'unlockControl/revisionReport');
+
+await check(
+  '一般使用者不可送出匯出請求',
+  assertFails(setDoc(revisionReportDoc(member), revisionReportRequest('member-uid'), { merge: true })),
+);
+await check(
+  '救護科管理者不可送出匯出請求',
+  assertFails(setDoc(revisionReportDoc(emsManager), revisionReportRequest('ems-manager-uid'), { merge: true })),
+);
+await check(
+  '匯出請求的日期格式不對不收',
+  assertFails(setDoc(revisionReportDoc(admin), revisionReportRequest('admin-uid', '2026/10/01'), { merge: true })),
+);
+await check(
+  '匯出請求的起日晚於迄日不收',
+  assertFails(setDoc(revisionReportDoc(admin), revisionReportRequest('admin-uid', '2026-10-31', '2026-10-01'), { merge: true })),
+);
+await check(
+  '匯出請求一定要帶日期區間',
+  assertFails(setDoc(revisionReportDoc(admin), revisionCheckRequest('admin-uid'), { merge: true })),
+);
+await check(
+  '管理員可送出匯出請求（區間可調到日）',
+  assertSucceeds(setDoc(revisionReportDoc(admin), revisionReportRequest('admin-uid', '2026-10-05', '2026-10-20'), { merge: true })),
+);
+await check(
+  '立即比對的文件不可夾帶日期區間',
+  assertFails(setDoc(revisionCheckDoc(admin), revisionReportRequest('admin-uid'), { merge: true })),
+);
+await check(
+  '不認得的控制文件不能建',
+  assertFails(setDoc(doc(admin, 'unlockControl/somethingElse'), revisionCheckRequest('admin-uid'))),
+);
+
+const reportRequestAt = (await getDoc(revisionReportDoc(member))).data().requestedAt;
+await check(
+  '本機監看可認領匯出請求',
+  assertSucceeds(updateDoc(revisionReportDoc(member), {
+    status: 'running', handledRequestAt: reportRequestAt, handledByName: '程式帳號', startedAt: serverTimestamp(),
+    finishedAt: null, fileName: null, openCount: null, closedCount: null, changedCount: null, errorMessage: null,
+  })),
+);
+await check(
+  '本機監看可寫回匯出結果（檔名與件數）',
+  assertSucceeds(updateDoc(revisionReportDoc(member), {
+    status: 'done', finishedAt: serverTimestamp(), fileName: '解鎖修改紀錄_2026-10-05至2026-10-20.xlsx',
+    openCount: 1, closedCount: 2, changedCount: 1, errorMessage: null,
+  })),
+);
+await check(
+  '本機監看可寫回匯出失敗',
+  assertSucceeds(updateDoc(revisionReportDoc(member), { status: 'failed', errorMessage: '產出失敗' })),
+);
+await check(
+  '本機監看不可改匯出的日期區間',
+  assertFails(updateDoc(revisionReportDoc(member), { rangeStart: '2026-01-01' })),
+);
+
 // ── 6. 測試用傷票（計數器 + 領取紀錄 + 單位週用量必須一起寫、互相對得上）──
 
 /** 與 src/lib/triageTagNumber.ts 的 triageTagWeekIndex() 同算法（台灣時間、週一起算）。 */
