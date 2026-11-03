@@ -164,8 +164,9 @@ async function checkOne(session, entry) {
   const { status, row } = await readRescueStatus(page, entry.temsis);
   const checked = { lastCheckedAt: new Date().toISOString(), lastStatus: status, failCount: 0, lastError: null };
   if (!isClosedStatus(status, UNLOCK.revision.closedStatus)) {
-    log.info(`　TEMSIS ${maskCode(entry.temsis)}：救護狀態「${status}」，還沒結案，下次再看`);
-    return checked;
+    log.info(`　TEMSIS ${maskCode(entry.temsis)}：案件未結案（救護狀態「${status}」），下次再看`);
+    // 還沒結案也要寫回工單：網頁要顯示「案件未結案」與最後確認時間（使用者 2026-11-03 要求）。
+    return { ...checked, cloudSynced: !entry.requestId };
   }
 
   log.info(`　TEMSIS ${maskCode(entry.temsis)}：已結案，開「救護紀錄PDF(桃)」跟解鎖前的 ${entry.remark} 比對`);

@@ -27,6 +27,7 @@
  *   npm run tool:ems -- device-reset         試跑：看裝置管理裡有哪些卡在「持續取得資料」
  *   npm run tool:ems -- device-reset --execute   真的把那些裝置先鎖定再啟用
  *   npm run tool:ems -- revision-check       解鎖過的案件結案了沒？結案就比對解鎖前後的紀錄表
+ *   npm run tool:ems -- sheet-sample         取 3 張最近的紀錄表，寫出遮蔽過個資的版面結構（規劃比對用）
  *   npm run tool:ems -- open-cases           未結案案件統整（會問日期範圍）
  *   npm run tool:ems -- open-cases --from=2026-09-01 --to=2026-09-30   直接指定日期範圍
  *   npm run tool:ems -- guides               把篩選說明印成 PDF（放在 out/篩選說明/，不必登入）
@@ -43,8 +44,9 @@ import { runUnlockFlow, promptTemsisList, printUnlockSummary } from './unlock.mj
 import { runUnlockWatch } from './unlockWatch.mjs';
 import { resetStuckDevicesSafely } from './deviceReset.mjs';
 import { checkRevisionsSafely } from './revisionCheck.mjs';
-import { countDueToday, loadTracker } from './revisionTrack.mjs';
+import { countDueToday, loadTracker, shouldBackupRequest } from './revisionTrack.mjs';
 import { TRACKER_FILE } from './sheetBackup.mjs';
+import { runSheetSample } from './sheetSample.mjs';
 import { runOpenCaseFlow, removeProgress } from './openCasesFlow.mjs';
 import { printOpenCaseSummary, writeOpenCaseReport } from './openCasesReport.mjs';
 import {
@@ -154,14 +156,14 @@ const HOW_TO_FILE_NAME = '月度報表怎麼跑.md';
 const COMMANDS = [
   'run', 'ekg', 'ekg-diag', 'ekg-ohca', 'traffic', 'monthly', 'probe',
   'check-sheet', 'check-ekg-sheet',
-  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'revision-check', 'open-cases', 'guides',
+  'unlock', 'unlock-online', 'unlock-watch', 'device-reset', 'revision-check', 'sheet-sample', 'open-cases', 'guides',
 ];
 
 /**
  * @typedef {Object} CliOptions
  * @property {'probe'|'run'|'ekg'|'ekg-diag'|'ekg-ohca'|'traffic'|'monthly'|'check-sheet'
  *   |'check-ekg-sheet'|'unlock'
- *   |'unlock-online'|'unlock-watch'|'device-reset'|'revision-check'|'open-cases'|'guides'} command
+ *   |'unlock-online'|'unlock-watch'|'device-reset'|'revision-check'|'sheet-sample'|'open-cases'|'guides'} command
  * @property {string|undefined} month
  * @property {boolean} keepRaw
  * @property {boolean} manual
@@ -1451,6 +1453,8 @@ async function processUnlockQueue(queue, options) {
         temsisList: requests.map((request) => request.temsis),
         // 結案後比對的結果要寫回同一張工單。
         requestIds: requests.map((request) => request.id),
+        // 11/3 以前送出的申請不備份、不追蹤（使用者 2026-11-03 指定）。
+        skipBackup: requests.map((request) => !shouldBackupRequest(request.requestedAt, UNLOCK.backup.trackRequestsFrom)),
         range,
         dryRun: false,
         // 逐筆回寫，不等整批跑完：中途關掉視窗時，前面做完的幾筆在網頁上才不會停在「待處理」。
@@ -1626,6 +1630,11 @@ async function main() {
   }
   if (options.command === 'revision-check') {
     await runRevisionCheckCommand(options);
+    return;
+  }
+  if (options.command === 'sheet-sample') {
+    // 只讀不改：取最近 7 天的前 3 張紀錄表，寫出遮蔽後的版面結構（見 sheetSample.mjs）。
+    await withSession((session) => runSheetSample(session), { freshLogin: options.freshLogin });
     return;
   }
   if (options.command === 'unlock-watch') {

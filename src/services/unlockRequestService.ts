@@ -62,6 +62,7 @@ function mapRevision(value: unknown): UnlockRequestRevision | null {
     state,
     backedUpAt: toIso(raw.backedUpAt),
     lastCheckedAt: toIso(raw.lastCheckedAt) || null,
+    lastStatus: typeof raw.lastStatus === 'string' ? raw.lastStatus : null,
     comparedAt: toIso(raw.comparedAt) || null,
     changeCount: typeof raw.changeCount === 'number' ? raw.changeCount : null,
     items: Array.isArray(raw.items) ? raw.items.filter((item): item is string => typeof item === 'string') : [],

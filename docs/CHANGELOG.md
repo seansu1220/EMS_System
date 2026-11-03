@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-11-03　小工具 v1.54.1／網頁 v1.35.1 未結案也顯示、11/3 前申請不追溯、紀錄表取樣
+
+### 問題描述
+使用者回饋：
+1. 比對結果還沒變成已結案時，該案件後方也要顯示「案件未結案」。
+2. 11/3 之前的申請案件都不追溯，避免系統浪費時間（接受這些案件無法追蹤）。
+3. 建議先實際下載一件救護紀錄表來看，再規劃如何比對。
+
+### 根本原因
+1. 結案確認只在狀態「改變」時才寫回工單，還沒結案的那幾次確認不會寫，網頁只看得到「等結案後比對」。
+2. 原設計對所有工單一視同仁，舊的排隊工單也會備份與追蹤。
+3. 比對規則是照常見版面猜的，沒看過實際 PDF 抽出來的結構。
+
+### 修改的檔案與內容
+- `tools/ems-report/revisionCheck.mjs`：還沒結案也標成要同步，工單寫入 `lastStatus`、`lastCheckedAt`。
+- `tools/ems-report/revisionTrack.mjs`：`toCloudRevision` 加 `lastStatus`；新增 `shouldBackupRequest`。
+- `tools/ems-report/config.mjs`：`UNLOCK.backup.trackRequestsFrom = '2026-11-03'`。
+- `tools/ems-report/unlock.mjs`：`runUnlockFlow` 新增 `skipBackup`，舊工單照舊直接解鎖、不備份不追蹤。
+- `tools/ems-report/unlockWatch.mjs`、`index.mjs`：依工單申請時間算 `skipBackup`；新增 `sheet-sample` 指令。
+- **新增** `tools/ems-report/sheetSample.mjs`：取 3 張紀錄表的文字與座標，只留三張共同的字（標籤），其餘遮成 〇／9／a，
+  共同頭尾只留到分隔符號（不留姓氏），兩張太像就停手；每一張都重新查詢（第一次取樣第 2 張找不到按鈕）。
+- `tools/ems-report/pdfText.mjs`：新增 `extractPdfItems`（文字＋座標）。
+- 測試：新增 `sheetSample.test.mjs`，`revisionTrack.test.mjs` 加一項；ems-report 557 項、duty-watch 20 項全過。
+- 捷徑：新增 `捷徑/不常用/紀錄表取樣.bat`，`說明.txt` 補說明。
+- 網頁：`src/types/unlockRequest.ts`（`lastStatus`）、`unlockRequestService.ts`、`constants.ts`（`UNLOCK_REVISION_NOT_CLOSED`）、
+  `UnlockPage.tsx`（確認過還沒結案時顯示「案件未結案」與確認時間）。
+- 規格書：`docs/TOOLS_SPEC.md` v1.54.1（2.3、2.8、2.13）、`docs/SPEC.md` v1.35.1（2.8、資料模型）。
+- `package.json`：版本 1.28.1。
+
+### 尚未完成
+紀錄表取樣還沒跑成：第二次執行時沒人輸入驗證碼，10 分鐘逾時。要等使用者在電腦前執行，
+看過結構檔後才依實際版面修正比對規則。
+
+---
+
 ## 2026-11-03　小工具 v1.54.0／網頁 v1.35.0 解鎖前先備份紀錄表、結案後比對差異
 
 ### 問題描述

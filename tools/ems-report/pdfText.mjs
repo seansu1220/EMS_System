@@ -80,3 +80,61 @@ export async function extractPdfText(bytes, options = {}) {
     await loadingTask.destroy().catch(() => {});
   }
 }
+
+/**
+ * @typedef {Object} PdfTextItem PDF 上的一段文字與它的位置
+ * @property {number} page 第幾頁（1 起算）
+ * @property {number} x 左下角 x（PDF 座標，單位 pt）
+ * @property {number} y 左下角 y（PDF 座標，**由下往上**增加）
+ * @property {number} width
+ * @property {number} height
+ * @property {string} str 文字
+ * @property {boolean} hasEOL 這段後面換行
+ */
+
+/**
+ * 把 PDF 位元組轉成「文字＋位置」的清單（紀錄表取樣用，看版面結構）。
+ *
+ * ⚠ 個資：回傳的仍是原文，呼叫端負責遮蔽後才可寫檔（見 `sheetSample.mjs`）。
+ *
+ * @param {Uint8Array|Buffer} bytes
+ * @param {{maxPages?: number}} [options]
+ * @returns {Promise<PdfTextItem[]>}
+ */
+export async function extractPdfItems(bytes, options = {}) {
+  const { pdfjs, cMapUrl, standardFontDataUrl } = await loadPdfjs();
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(bytes),
+    cMapUrl,
+    cMapPacked: true,
+    standardFontDataUrl,
+    isEvalSupported: false,
+    useSystemFonts: false,
+    verbosity: 0,
+  });
+  const document = await loadingTask.promise;
+  try {
+    const pageCount = Math.min(document.numPages, options.maxPages ?? 5);
+    const items = [];
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      for (const item of content.items) {
+        if (typeof item.str !== 'string') continue;
+        items.push({
+          page: pageNumber,
+          x: Math.round(item.transform[4] * 10) / 10,
+          y: Math.round(item.transform[5] * 10) / 10,
+          width: Math.round((item.width ?? 0) * 10) / 10,
+          height: Math.round((item.height ?? 0) * 10) / 10,
+          str: item.str,
+          hasEOL: Boolean(item.hasEOL),
+        });
+      }
+      page.cleanup();
+    }
+    return items;
+  } finally {
+    await loadingTask.destroy().catch(() => {});
+  }
+}

@@ -275,11 +275,29 @@ export function countDueToday(tracker, now, config) {
 }
 
 /**
+ * 這張線上工單要不要備份、追蹤：送出日期（本地）在 `trackFrom`（含）之後才要。
+ * 申請時間讀不到的一律要——寧可多備份一份，也不要漏掉該追的案件。
+ *
+ * @param {string} requestedAt ISO 字串（可能是空字串）
+ * @param {string} trackFrom `YYYY-MM-DD`
+ * @returns {boolean}
+ */
+export function shouldBackupRequest(requestedAt, trackFrom) {
+  const date = new Date(requestedAt ?? '');
+  if (!requestedAt || Number.isNaN(date.getTime())) return true;
+  return localDateKey(date) >= trackFrom;
+}
+
+/**
  * 工單上要寫的 `revision` 欄位（**不含病患資料**，見 `src/types/unlockRequest.ts`）。
  *
  * @param {RevisionEntry} entry
+ * `lastStatus`（最近一次看到的救護狀態）也寫上去：還沒結案時網頁才顯示得出「案件未結案」
+ * （使用者 2026-11-03 要求）。
+ *
  * @returns {{version: number, remark: string, state: RevisionState, backedUpAt: string,
- *   lastCheckedAt: string|null, comparedAt: string|null, changeCount: number|null, items: string[]}}
+ *   lastCheckedAt: string|null, lastStatus: string|null, comparedAt: string|null,
+ *   changeCount: number|null, items: string[]}}
  */
 export function toCloudRevision(entry) {
   return {
@@ -288,6 +306,7 @@ export function toCloudRevision(entry) {
     state: entry.state,
     backedUpAt: entry.unlockedAt,
     lastCheckedAt: entry.lastCheckedAt,
+    lastStatus: entry.lastStatus ?? null,
     comparedAt: entry.comparedAt,
     changeCount: entry.changeCount,
     items: entry.cloudItems,

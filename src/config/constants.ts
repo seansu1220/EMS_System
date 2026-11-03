@@ -159,6 +159,12 @@ export const UNLOCK_REVISION_LABELS: Record<string, { label: string; tone: Tone 
 };
 
 /**
+ * 已備份、而且救護科電腦**確認過還沒結案**時顯示的那一行（使用者 2026-11-03 要求顯示「案件未結案」）。
+ * 還沒確認過（剛解鎖）時用 `UNLOCK_REVISION_LABELS.waiting`。
+ */
+export const UNLOCK_REVISION_NOT_CLOSED = { label: '案件未結案', tone: 'amber' as Tone };
+
+/**
  * 一次最多能送出幾筆解鎖工單。
  * 純粹是防手殘（例如整欄幾百個編號誤貼進來），不是系統限制。
  */

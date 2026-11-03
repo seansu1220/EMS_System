@@ -11,6 +11,7 @@ import path from 'node:path';
 import { getRecentRange } from './dateRange.mjs';
 import {
   addTrackedEntry,
+  shouldBackupRequest,
   buildBackupRemark,
   buildRevisionQueryRange,
   countDueToday,
@@ -117,7 +118,7 @@ test('今天查過的不算到期（一次性工具不必為它登入）', () =>
 test('雲端版只有狀態與摘要，沒有本機檔名', () => {
   const cloud = toCloudRevision(makeEntry({ cloudItems: ['更正「姓名」'] }));
   assert.deepEqual(Object.keys(cloud).sort(), [
-    'backedUpAt', 'changeCount', 'comparedAt', 'items', 'lastCheckedAt', 'remark', 'state', 'version',
+    'backedUpAt', 'changeCount', 'comparedAt', 'items', 'lastCheckedAt', 'lastStatus', 'remark', 'state', 'version',
   ]);
   assert.equal(JSON.stringify(cloud).includes('.pdf'), false);
 });
@@ -153,4 +154,12 @@ test('追蹤清單：不存在時是空的；新增、更新後讀得回來；�
   } finally {
     await fs.rm(folder, { recursive: true, force: true });
   }
+});
+
+test('11/3 以前送出的工單不備份；當天（台灣時間）以後的才備份；時間讀不到的照樣備份', () => {
+  // 2026-11-02T16:30Z ＝ 台灣 11/3 00:30（測試機時區不同時，以本地日期判斷，這裡只驗前後兩端）
+  assert.equal(shouldBackupRequest('2026-10-30T02:00:00.000Z', '2026-11-03'), false);
+  assert.equal(shouldBackupRequest('2026-11-05T02:00:00.000Z', '2026-11-03'), true);
+  assert.equal(shouldBackupRequest('', '2026-11-03'), true);
+  assert.equal(shouldBackupRequest('亂寫', '2026-11-03'), true);
 });

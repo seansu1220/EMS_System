@@ -28,6 +28,7 @@ import {
   UNLOCK_REQUEST_MAX_BATCH,
   UNLOCK_RESULT_SUMMARY,
   UNLOCK_REVISION_LABELS,
+  UNLOCK_REVISION_NOT_CLOSED,
   UNLOCK_STATUS_LABELS,
 } from '../config/constants';
 import type { UnlockRequest, UnlockRequestRevision } from '../types/unlockRequest';
@@ -60,7 +61,11 @@ function formatMoment(iso: string): string {
  * `items` 本來就不含病患資料（姓名、身分證只寫欄位名），完整內容在救護科電腦上。
  */
 function RevisionNote({ revision }: { revision: UnlockRequestRevision }) {
-  const status = UNLOCK_REVISION_LABELS[revision.state] ?? { label: revision.state, tone: 'slate' as const };
+  // 等結案中、而且確認過了：直接講「案件未結案」，比「等結案後比對」更清楚現在卡在哪。
+  const checkedNotClosed = revision.state === 'waiting' && revision.lastCheckedAt !== null;
+  const status = checkedNotClosed
+    ? UNLOCK_REVISION_NOT_CLOSED
+    : UNLOCK_REVISION_LABELS[revision.state] ?? { label: revision.state, tone: 'slate' as const };
   const changeText = revision.state === 'compared' && revision.changeCount !== null
     ? revision.changeCount === 0 ? '：沒有改動' : `：${revision.changeCount} 處不同`
     : '';
@@ -74,6 +79,12 @@ function RevisionNote({ revision }: { revision: UnlockRequestRevision }) {
         <ul className="mt-1 list-disc space-y-0.5 pl-4">
           {revision.items.map((item) => <li key={item}>{item}</li>)}
         </ul>
+      )}
+      {checkedNotClosed && (
+        <div className="mt-1 text-slate-400">
+          {formatMoment(revision.lastCheckedAt ?? '')} 確認
+          {revision.lastStatus ? `，救護狀態「${revision.lastStatus}」` : ''}；結案後會自動比對
+        </div>
       )}
       {revision.state === 'compared' && (
         <div className="mt-1 text-slate-400">

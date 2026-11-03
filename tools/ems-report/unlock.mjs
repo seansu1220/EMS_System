@@ -695,6 +695,11 @@ async function applyOnlineUsageFallback(context, page, temsis, outcome, options)
  */
 async function prepareBackupBeforeUnlock(context, page, outcome, caseInfo, reenterCase, options) {
   if (!UNLOCK.backup.enabled) return !options.dryRun;
+  if (options.skipBackup) {
+    // 11/3 以前送出的線上工單不追溯（使用者 2026-11-03 指定），照舊直接解鎖。
+    outcome.detail = `${outcome.detail}；${UNLOCK.backup.trackRequestsFrom} 以前送出的申請，不備份、不做結案後比對`;
+    return !options.dryRun;
+  }
   const result = await backupBeforeUnlock(context, page, {
     temsis: outcome.temsis,
     recordIndex: outcome.recordIndex ?? 0,
@@ -767,8 +772,9 @@ async function trackForRevision(outcome, requestId) {
 
 /**
  * 處理一筆 TEMSIS。
- * @param {{dryRun: boolean, requestId?: string|null}} options dryRun＝true 時只定位，不按下解鎖；
- *   `requestId`＝線上工單的文件 ID（結案後比對的結果要寫回那張工單）
+ * @param {{dryRun: boolean, requestId?: string|null, skipBackup?: boolean}} options dryRun＝true 時只定位，不按下解鎖；
+ *   `requestId`＝線上工單的文件 ID（結案後比對的結果要寫回那張工單）；
+ *   `skipBackup`＝不備份、不追蹤（`UNLOCK.backup.trackRequestsFrom` 以前送出的工單）
  * @returns {Promise<UnlockOutcome>}
  */
 async function processTemsis(context, page, temsis, range, options) {
@@ -865,19 +871,20 @@ export async function promptTemsisList() {
  *
  * @param {import('./session.mjs').EmsSession} session
  * @param {{temsisList: string[], range: import('./dateRange.mjs').MonthRange,
- *   dryRun?: boolean, requestIds?: (string|null)[],
+ *   dryRun?: boolean, requestIds?: (string|null)[], skipBackup?: boolean[],
  *   onCaseStart?: (temsis: string, index: number) => Promise<void>|void,
  *   onCaseDone?: (outcome: UnlockOutcome, index: number) => Promise<void>|void}} options
  *   dryRun＝true 時只定位、不解鎖。
  *   `requestIds`：與 `temsisList` 一一對應的線上工單文件 ID（手動解鎖不給），
  *   結案後比對的結果才知道要寫回哪一張工單。
+ *   `skipBackup`：與 `temsisList` 一一對應，true＝這一筆不備份、不追蹤（舊的線上工單）。
  *   兩個回呼供**線上工單**逐筆回寫進度與結果用（見 `unlockQueue.mjs`）：
  *   跑完整批才一次回寫的話，中途關掉視窗前面做完的幾筆在網頁上仍會停在「待處理」。
  *   回呼丟出例外不會中斷解鎖流程——雲端寫不進去是它的事，案件已經解了。
  * @returns {Promise<UnlockOutcome[]>}
  */
 export async function runUnlockFlow(session, options) {
-  const { temsisList, range, dryRun = false, requestIds = [], onCaseStart, onCaseDone } = options;
+  const { temsisList, range, dryRun = false, requestIds = [], skipBackup = [], onCaseStart, onCaseDone } = options;
   // 開頭這幾行要把**兩條解鎖路徑**都講到（使用者 2026-09-13 指出）：
   // 只寫「會按下調整為未結案」的話，看的人不會知道它也可能去刪線上使用狀況的紀錄。
   const unlockButton = UNLOCK.buttonTexts.unlock[0];
@@ -913,6 +920,7 @@ export async function runUnlockFlow(session, options) {
     const outcome = await processTemsis(session.context, session.page, temsis, range, {
       dryRun,
       requestId: requestIds[position] ?? null,
+      skipBackup: skipBackup[position] === true,
     });
     outcomes.push(outcome);
     await notify(onCaseDone, outcome, position);

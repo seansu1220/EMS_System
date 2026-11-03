@@ -84,6 +84,8 @@ export interface UnlockRequestRevision {
   backedUpAt: string;
   /** 最近一次去系統確認結案的時間；還沒確認過為 null。 */
   lastCheckedAt: string | null;
+  /** 最近一次看到的救護狀態（例如「未結案」「已填寫」）；還沒確認過為 null。 */
+  lastStatus: string | null;
   /** 比對完成時間；還沒比對為 null。 */
   comparedAt: string | null;
   /** 幾處不同；還沒比對為 null。 */

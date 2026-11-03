@@ -1,6 +1,8 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.35.0　建立日期：2026-07-22　最後更新：2026-11-03
+> 版本：v1.35.1　建立日期：2026-07-22　最後更新：2026-11-03
+> v1.35.1：`revision` 多一個 `lastStatus`；救護科電腦確認過還沒結案時，備份／比對那一塊顯示**「案件未結案」**
+> 　　　　 ＋最後確認時間與救護狀態。11/3（含）以前送出的工單不備份、不追蹤，不會有這一塊（見 2.8）
 > v1.35.0：解鎖工單新欄位 **`revision`**（解鎖前備份 → 結案後比對，本機工具 v1.54.0）：救護科電腦解鎖前先把原本的
 > 　　　　 紀錄表備份上傳（檔案說明 `救護紀錄表內容-v1`），之後案件結案了就比對前後兩份；結果欄多一塊
 > 　　　　 「備份／比對」狀態與**改了哪些欄位**（只給看得到所有工單的人；姓名、身分證只寫欄位名、不寫內容）。
@@ -422,7 +424,8 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 
   | `revision.state` | 顯示 |
   | --- | --- |
-  | `waiting` | 已備份原紀錄表，等結案後比對 |
+  | `waiting`（還沒確認過） | 已備份原紀錄表，等結案後比對 |
+  | `waiting`（確認過，`lastCheckedAt` 有值） | **案件未結案**（v1.35.1），下一行「MM/DD HH:mm 確認，救護狀態「未結案」；結案後會自動比對」 |
   | `compared` | 結案後比對完成（N 處不同／沒有改動），下面條列**改了哪些地方** |
   | `superseded` | 結案前又解鎖一次，改用下一次的備份比對 |
   | `expired` | 解鎖後太久沒結案，不再比對（本機預設 60 天） |
@@ -432,6 +435,7 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
   只有時間、檢傷、生命徵象這類單看認不出是誰的欄位，而且值只是數字或分級時，才寫出改前改後
   （判斷在本機工具 `sheetDiff.toCloudItems`，見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 2.13）。
   完整的改前改後只存在救護科電腦的 `out/internal/解鎖前後比對/`。
+  **11/3（含）以前送出的工單不備份、不追蹤**（使用者 2026-11-03 指定），這些工單不會有這一塊。
   申請人自己看不到這一塊（這是救護科在核對分隊解鎖後改了什麼）；
   狀態文字集中在 `src/config/constants.ts` 的 `UNLOCK_REVISION_LABELS`。
 
@@ -606,7 +610,7 @@ pdf.js 讀檔需要的資源（`cmaps` 中文字型對照表、`standard_fonts`�
   status（pending/running/unlocked/**usageCleared**/noAction/failed/**locked**（v1.32））, result（{caseDate, vehicle, squad, detail,
   processedAt, processedBy} 或 null）, **lockBypass**（v1.33，不受鎖定時段限制；管理員／救護科管理者送的或管理員重新送單的為 true）,
   **revision**（v1.35，解鎖前備份 → 結案後比對：{version, remark, state（waiting/compared/superseded/expired/gaveUp）,
-  backedUpAt, lastCheckedAt, comparedAt, changeCount, items（改了哪些地方，**不含病患資料**）} 或 null；
+  backedUpAt, lastCheckedAt, lastStatus（v1.35.1）, comparedAt, changeCount, items（改了哪些地方，**不含病患資料**）} 或 null；
   由本機工具寫入，型別 `UnlockRequestRevision`）}
   ——**一個 TEMSIS 一張工單**。網頁只負責申請與查結果，實際解鎖由本機工具執行後回寫，
   原因與完整流程見 [TOOLS_SPEC.md](TOOLS_SPEC.md) 第 5 章。
