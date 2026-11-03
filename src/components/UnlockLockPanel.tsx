@@ -33,8 +33,8 @@ function formatUpdatedAt(iso: string): string {
 
 /** 目前鎖定狀態的一句話。 */
 function describePolicy(policy: UnlockPolicy): string {
-  if (policy.lockedThroughMonth === null) return '目前沒有鎖定任何時段，所有案件都可以申請解鎖。';
-  return `目前鎖定：${formatRocMonth(policy.lockedThroughMonth)}（含）以前的救護紀錄表，不受理解鎖申請。`;
+  if (policy.lockedThroughMonth === null) return '目前沒有鎖定。';
+  return `目前鎖定：${formatRocMonth(policy.lockedThroughMonth)}（含）以前。`;
 }
 
 export function UnlockLockPanel({ user, policy }: { user: AppUser; policy: UnlockPolicy }) {
@@ -93,27 +93,18 @@ export function UnlockLockPanel({ user, policy }: { user: AppUser; policy: Unloc
     );
   }
 
-  function handleClearAll() {
-    applyChange(
-      null,
-      '確定解除全部鎖定？解除後任何月份的案件都可以申請解鎖。',
-      '已解除全部鎖定。',
-    );
-  }
-
   const updatedAt = formatUpdatedAt(policy.updatedAt);
 
   return (
-    <Card className="space-y-4 border-amber-200 bg-amber-50/40">
+    <Card className="space-y-3 border-amber-200 bg-amber-50/40">
       <div>
-        <h2 className="text-base font-semibold text-slate-800">鎖定時段（救護科管理者）</h2>
-        <p className="mt-1 text-sm font-medium text-slate-700">{describePolicy(policy)}</p>
-        <p className="mt-1 text-xs text-slate-500">
-          {policy.isDefault
-            ? '目前沿用系統預設值，還沒有人改過。'
-            : `最後由 ${policy.updatedByName || '（未記錄）'} 於 ${updatedAt || '—'} 修改。`}
-          {' '}以月份為單位，鎖定某個月＝那個月（含）以前全部鎖住；解鎖某個月＝那個月以後全部開放。
-        </p>
+        <h2 className="text-base font-semibold text-slate-800">鎖定時段</h2>
+        <p className="mt-1 text-sm text-slate-700">{describePolicy(policy)}</p>
+        {!policy.isDefault && (
+          <p className="text-xs text-slate-400">
+            {policy.updatedByName || '（未記錄）'} {updatedAt} 修改
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -144,18 +135,10 @@ export function UnlockLockPanel({ user, policy }: { user: AppUser; policy: Unloc
           ))}
         </select>
         <Button disabled={busy} onClick={handleLock}>
-          鎖定到這個月（含）
+          鎖定
         </Button>
         <Button variant="secondary" disabled={busy || policy.lockedThroughMonth === null} onClick={handleUnlock}>
-          從這個月起解鎖
-        </Button>
-        <Button
-          variant="ghost"
-          className="text-xs"
-          disabled={busy || policy.lockedThroughMonth === null}
-          onClick={handleClearAll}
-        >
-          全部解除
+          解鎖
         </Button>
       </div>
 

@@ -82,7 +82,7 @@ export function planLock(
     return {
       ok: false,
       message: `${formatRocMonth(chosen)}已經在鎖定範圍內（目前鎖到 ${formatRocMonth(current)}）。`
-        + '要開放這個月請按「從這個月起解鎖」。',
+        + '要開放這個月請按「解鎖」。',
     };
   }
   return { ok: true, next: chosen };

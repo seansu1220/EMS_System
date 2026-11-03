@@ -25,6 +25,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { COLLECTIONS, TEMSIS_CODE_LENGTH, UNLOCK_REQUEST_MAX_BATCH } from '../config/constants';
+import { canManageUnlockLock } from '../lib/permissions';
 import { formatRocMonth, isTemsisLocked } from '../lib/unlockLockLogic';
 import type { AppUser } from '../types/user';
 import type { MonthKey } from '../types/unlockPolicy';
@@ -55,6 +56,7 @@ function mapRequest(snapshot: QueryDocumentSnapshot<DocumentData>): UnlockReques
     requestedByName: data.requestedByName ?? '',
     requestedAt: toIso(data.requestedAt),
     status: data.status ?? 'pending',
+    lockBypass: data.lockBypass === true,
     result: result
       ? {
           caseDate: result.caseDate ?? null,
@@ -132,10 +134,13 @@ export function describeTemsisLockedError({ temsis, lockedThroughMonth }: Temsis
 /**
  * 送出一批解鎖工單（一個 TEMSIS 一張工單，方便逐筆回報結果）。
  *
+ * 管理員與救護科管理者**不受鎖定時段限制**（使用者 2026-11-03 指定）：
+ * 他們送的工單一律帶 `lockBypass: true`，本機工具拿單時也不會把它標成「時段已鎖定」。
+ *
  * @param user 申請人（顯示名稱會一併存下，看清單時不必再查 users）
  * @param lockedThroughMonth 目前的鎖定時段（含）；null＝沒有鎖定
  * @returns 實際建立的工單數
- * @throws 清單為空、超過單次上限、有編號長度不對、落在鎖定時段、或寫入失敗時
+ * @throws 清單為空、超過單次上限、有編號長度不對、落在鎖定時段（非管理者）、或寫入失敗時
  */
 export async function createUnlockRequests(
   user: AppUser,
@@ -154,7 +159,8 @@ export async function createUnlockRequests(
   if (lengthErrors.length > 0) {
     throw new Error(lengthErrors.map(describeTemsisLengthError).join('\n'));
   }
-  const lockedErrors = findTemsisLockedErrors(temsisList, lockedThroughMonth);
+  const lockBypass = canManageUnlockLock(user);
+  const lockedErrors = lockBypass ? [] : findTemsisLockedErrors(temsisList, lockedThroughMonth);
   if (lockedErrors.length > 0) {
     throw new Error(lockedErrors.map(describeTemsisLockedError).join('\n'));
   }
@@ -168,6 +174,7 @@ export async function createUnlockRequests(
         requestedAt: serverTimestamp(),
         status: 'pending',
         result: null,
+        lockBypass,
       });
     }
     return temsisList.length;
@@ -187,6 +194,9 @@ export async function createUnlockRequests(
  * 狀態退回 `pending`、結果清空——**這兩件事必須一起做**，
  * 否則清單上會出現「待處理」卻掛著上次失敗說明的矛盾畫面。
  *
+ * 重新送單只有管理員做得到，因此同時設 `lockBypass: true`（v1.33）：
+ * 管理員親手重送＝要它真的跑，「時段已鎖定」的工單也照樣送去解鎖。
+ *
  * @throws 寫入失敗時（含權限不足）
  */
 export async function requeueUnlockRequest(requestId: string): Promise<void> {
@@ -194,6 +204,7 @@ export async function requeueUnlockRequest(requestId: string): Promise<void> {
     await updateDoc(doc(db, COLLECTIONS.unlockRequests, requestId), {
       status: 'pending',
       result: null,
+      lockBypass: true,
     });
   } catch (error) {
     throw new Error(

@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-11-03　網頁 v1.33.0／小工具 v1.53.0 管理者送單不受鎖定時段限制、鎖定面板簡化
+
+### 問題描述
+使用者要求：
+1. 救護科管理者或管理員需要解鎖時，不受鎖定時段限制。
+2. 鎖定面板簡單就好，按鍵只要「解鎖」跟「鎖定」。
+
+### 根本原因
+v1.32 的設計是鎖定時段內誰都不能送（含管理員）。另外救護科電腦拿單時也會把鎖定範圍內的工單一律標成「時段已鎖定」，
+所以光是網頁不擋還不夠，工單本身要帶一個「不受限制」的標記，工具端才分得出來。
+
+### 修改的檔案與內容
+- **工單新欄位 `lockBypass`**（`src/types/unlockRequest.ts`）：管理員／救護科管理者送的為 true，其他人為 false。
+- `src/services/unlockRequestService.ts`：
+  - `createUnlockRequests` 依 `canManageUnlockLock(user)` 決定要不要檢查鎖定，並寫入 `lockBypass`。
+  - `requeueUnlockRequest`（只有管理員能按）同時設 `lockBypass: true`，讓「時段已鎖定」的工單重送後也會去解鎖。
+- `src/pages/UnlockPage.tsx`：管理者照樣看得到哪幾筆在鎖定時段內，但只是提示、不擋送出；頁首提醒加註「你有管理權限，送出不受此限制」。
+- `src/components/UnlockLockPanel.tsx`：只留「鎖定」「解鎖」兩顆按鈕，拿掉「全部解除」與長說明；狀態改成一句「目前鎖定：115 年 9 月（含）以前。」。
+- `src/lib/unlockLockLogic.ts`：提示文字的按鈕名稱改成「解鎖」。
+- `firebase/firestore.rules`：
+  - 建立工單：`lockBypass == true` 只有 `isLockManager()` 能帶；帶了就不檢查鎖定。
+  - 更新工單：`lockBypass` 只有 `isLockManager()` 能改，避免本機工具那組一般使用者帳號把鎖定範圍內的舊工單放行。
+- `tools/ems-report/unlockQueue.mjs`：讀工單時帶出 `lockBypass`；新增純函式 `shouldSettleAsLocked`，有旗標的照常解鎖。
+- 測試：
+  - `scripts/rules.test.mjs`：新增 6 項（管理員／救護科管理者可帶旗標送、一般使用者／解鎖專用帶旗標被擋、一般使用者不可事後改旗標、管理員重新送單可設旗標）；原「管理員也不能送」改為「沒帶旗標不能送」。共 124 項全過。
+  - `tools/ems-report/unlockQueue.test.mjs`：新增 1 項；ems-report 全部 515 項通過。
+- 規格書：`docs/SPEC.md` v1.33.0（2.1.1、2.8、3）；`docs/TOOLS_SPEC.md` v1.53.0（5.2、5.9）。
+- `package.json`：版本 1.26.0。
+
+---
+
 ## 2026-11-03　網頁 v1.32.0／小工具 v1.52.0 救護科管理者角色＋解鎖工單鎖定時段
 
 ### 問題描述

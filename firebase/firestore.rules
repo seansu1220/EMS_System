@@ -171,20 +171,28 @@ service cloud.firestore {
 
       // 新工單一律從 pending 開始，且申請人必須是自己——
       // 不能替別人送，也不能直接送一張「已解鎖」的假工單。
-      // TEMSIS 至少 6 碼才判得出月份；落在鎖定時段內的一律不收（v1.32 起，管理員也一樣）。
+      // TEMSIS 至少 6 碼才判得出月份；落在鎖定時段內的不收（v1.32 起）。
+      // 例外（v1.33，使用者 2026-11-03 指定）：管理員與救護科管理者不受鎖定限制，
+      // 他們送的工單帶 lockBypass == true；這個旗標只有他們能設，其他人帶了一律拒絕。
       allow create: if isApproved()
         && request.resource.data.requestedBy == request.auth.uid
         && request.resource.data.status == 'pending'
         && request.resource.data.temsis is string
         && request.resource.data.temsis.size() >= 6
-        && !temsisInLockedPeriod(request.resource.data.temsis);
+        && (request.resource.data.get('lockBypass', false) != true || isLockManager())
+        && (request.resource.data.get('lockBypass', false) == true
+          || !temsisInLockedPeriod(request.resource.data.temsis));
 
       // 只有業務人員能回寫結果，且不可竄改申請內容（TEMSIS、事由、申請人、申請時間）。
+      // lockBypass 只有管理員／救護科管理者能改（管理員「重新送單」會設成 true）——
+      // 否則一般使用者（本機工具的身分）就能把鎖定時段內的舊工單偷偷放行。
       allow update: if isStaff()
         && request.resource.data.temsis == resource.data.temsis
         && request.resource.data.reason == resource.data.reason
         && request.resource.data.requestedBy == resource.data.requestedBy
-        && request.resource.data.requestedAt == resource.data.requestedAt;
+        && request.resource.data.requestedAt == resource.data.requestedAt
+        && (request.resource.data.get('lockBypass', false) == resource.data.get('lockBypass', false)
+          || isLockManager());
 
       allow delete: if isAdmin();
     }

@@ -57,6 +57,20 @@ export function isTemsisInLockedPeriod(temsis, lockedThroughMonth) {
 }
 
 /**
+ * 這張工單是否要因鎖定時段而**不去解鎖**（純函式）。
+ *
+ * 管理員與救護科管理者送的、或管理員重新送單的工單帶 `lockBypass`，
+ * 不受鎖定限制（網頁 v1.33，使用者 2026-11-03 指定）；安全規則保證只有他們設得了這個旗標。
+ *
+ * @param {{temsis: string, lockBypass: boolean}} request
+ * @param {string|null} lockedThroughMonth
+ * @returns {boolean}
+ */
+export function shouldSettleAsLocked(request, lockedThroughMonth) {
+  return !request.lockBypass && isTemsisInLockedPeriod(request.temsis, lockedThroughMonth);
+}
+
+/**
  * 解鎖結果 → 工單狀態的對照（純函式，方便測試）。
  *
  * 只有四種結局要讓申請人看到：解開了、解除了佔用、本來就沒鎖、需要人接手。
@@ -224,6 +238,7 @@ function describeAuthError(error) {
  * @property {string} reason 申請事由
  * @property {string} requestedByName 申請人
  * @property {string} requestedAt 申請時間（ISO 字串或 Firestore Timestamp 轉出的字串）
+ * @property {boolean} lockBypass 不受鎖定時段限制（管理員／救護科管理者送的，或管理員重新送單的）
  */
 
 /** Firestore Timestamp / 字串 → 可排序的字串。 */
@@ -267,6 +282,7 @@ async function readPendingRequests(session) {
         reason: data.reason ?? '',
         requestedByName: data.requestedByName ?? '',
         requestedAt: toIso(data.requestedAt),
+        lockBypass: data.lockBypass === true,
       };
     });
     // 先送的先做（時間讀不到的排最後，不讓它插隊）。
@@ -310,6 +326,7 @@ async function readLockedThroughMonth(session) {
 
 /**
  * 把落在鎖定時段內的工單直接回寫「時段已鎖定」，回傳剩下要真的去解鎖的。
+ * 帶 `lockBypass` 的（管理員／救護科管理者送的）照常解鎖，見 {@link shouldSettleAsLocked}。
  *
  * 回寫失敗也**照樣不去解鎖**：救護科已經鎖了這個時段，寧可讓工單停在待處理，
  * 也不能因為一次寫入失敗就把鎖定時段內的案件解開。
@@ -324,7 +341,7 @@ export async function settleLockedRequests(session, requests) {
 
   const remaining = [];
   for (const request of requests) {
-    if (!isTemsisInLockedPeriod(request.temsis, lockedThroughMonth)) {
+    if (!shouldSettleAsLocked(request, lockedThroughMonth)) {
       remaining.push(request);
       continue;
     }

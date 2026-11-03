@@ -21,6 +21,7 @@
  *    解鎖專用帳號只讀得到自己的領取紀錄。
  * 7. **鎖定時段**（v1.32）：案件月份（TEMSIS 前 6 碼）在鎖定月份（含）以前的工單誰都送不出去
  *    （尚未設定時預設鎖到 2026-09）；只有管理員與救護科管理者能改鎖定時段，且不可刪除。
+ *    v1.33 起管理員與救護科管理者帶 `lockBypass: true` 可不受鎖定限制，其他人不能帶、也不能事後改成 true。
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -450,7 +451,7 @@ await check(
 // ── 5.1 解鎖工單的鎖定時段（v1.32）──
 
 /** 造一張要送出的工單（申請人＝自己、狀態 pending）。 */
-function lockTestRequest(uid, temsis) {
+function lockTestRequest(uid, temsis, lockBypass = false) {
   return {
     temsis,
     reason: '鎖定時段測試',
@@ -459,6 +460,7 @@ function lockTestRequest(uid, temsis) {
     requestedAt: '2026-11-03T01:00:00.000Z',
     status: 'pending',
     result: null,
+    lockBypass,
   };
 }
 
@@ -476,8 +478,38 @@ await check(
   assertFails(addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2025120110100310380001'))),
 );
 await check(
-  '鎖定時段管理員也一樣不能送',
+  '管理員沒帶 lockBypass 也不能送鎖定時段（旗標要明確帶上）',
   assertFails(addDoc(collection(admin, 'unlockRequests'), lockTestRequest('admin-uid', '2026090110100310380001'))),
+);
+await check(
+  '管理員不受鎖定限制（帶 lockBypass 可送鎖定時段）',
+  assertSucceeds(addDoc(collection(admin, 'unlockRequests'), lockTestRequest('admin-uid', '2026090110100310380001', true))),
+);
+await check(
+  '救護科管理者不受鎖定限制（帶 lockBypass 可送鎖定時段）',
+  assertSucceeds(
+    addDoc(collection(emsManager, 'unlockRequests'), lockTestRequest('ems-manager-uid', '2025120110100310380003', true)),
+  ),
+);
+await check(
+  '一般使用者不可自己帶 lockBypass 繞過鎖定',
+  assertFails(addDoc(collection(member, 'unlockRequests'), lockTestRequest('member-uid', '2026090110100310380002', true))),
+);
+await check(
+  '解鎖專用帳號不可自己帶 lockBypass 繞過鎖定',
+  assertFails(
+    addDoc(collection(unlocker, 'unlockRequests'), lockTestRequest('unlocker-uid', '2026090110100310380003', true)),
+  ),
+);
+await check(
+  '一般使用者不可把既有工單的 lockBypass 改成 true',
+  assertFails(updateDoc(doc(member, 'unlockRequests/req-mine'), { lockBypass: true })),
+);
+await check(
+  '管理員重新送單可順便設 lockBypass',
+  assertSucceeds(
+    updateDoc(doc(admin, 'unlockRequests/req-mine'), { status: 'pending', result: null, lockBypass: true }),
+  ),
 );
 await check(
   'TEMSIS 不到 6 碼（判不出月份）不能送',

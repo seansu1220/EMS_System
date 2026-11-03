@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTemsisInLockedPeriod, toQueueStatus } from './unlockQueue.mjs';
+import { isTemsisInLockedPeriod, shouldSettleAsLocked, toQueueStatus } from './unlockQueue.mjs';
 import { runUnlockFlow } from './unlock.mjs';
 
 test('解鎖成功對應到網頁的「已解鎖」', () => {
@@ -38,6 +38,14 @@ test('鎖定時段：鎖定月份當月與以前都算鎖定，之後的不算',
   assert.equal(isTemsisInLockedPeriod('2025120110100310380001', '2026-09'), true);
   assert.equal(isTemsisInLockedPeriod('2026100110100310380001', '2026-09'), false);
   assert.equal(isTemsisInLockedPeriod('2027010110100310380001', '2026-09'), false);
+});
+
+test('鎖定時段：管理員／救護科管理者送的（lockBypass）照常解鎖，其他人的才標成時段已鎖定', () => {
+  const temsis = '2026093010100310380001';
+  assert.equal(shouldSettleAsLocked({ temsis, lockBypass: false }, '2026-09'), true);
+  assert.equal(shouldSettleAsLocked({ temsis, lockBypass: true }, '2026-09'), false);
+  // 不在鎖定範圍內的，有沒有旗標都照常處理。
+  assert.equal(shouldSettleAsLocked({ temsis: '2026100110100310380001', lockBypass: false }, '2026-09'), false);
 });
 
 test('鎖定時段：沒有鎖定或編號太短（判不出月份）一律不算鎖定', () => {

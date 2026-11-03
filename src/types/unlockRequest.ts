@@ -74,6 +74,14 @@ export interface UnlockRequest {
   status: UnlockRequestStatus;
   /** 執行結果；尚未處理為 null。 */
   result: UnlockRequestResult | null;
+  /**
+   * 是否不受鎖定時段限制（v1.33 起）。
+   *
+   * 管理員與救護科管理者送的工單、以及管理員「重新送單」的工單為 true：
+   * 送出時不擋，本機工具拿單時也不會把它標成「時段已鎖定」。
+   * 安全規則只准這兩種人設成 true，其他人送的一律為 false。
+   */
+  lockBypass: boolean;
 }
 
 /** 送出新工單時要填的內容。 */

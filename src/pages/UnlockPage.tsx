@@ -143,7 +143,10 @@ export function UnlockPage() {
    */
   const lengthErrors = useMemo(() => findTemsisLengthErrors(parsed), [parsed]);
   const lockedThroughMonth = policy?.lockedThroughMonth ?? null;
-  /** 落在鎖定時段內的編號（邊打邊檢查，跟長度檢查一樣當場講清楚）。 */
+  /**
+   * 落在鎖定時段內的編號（邊打邊檢查，跟長度檢查一樣當場講清楚）。
+   * 管理員與救護科管理者不受限制（v1.33）：照樣列出來讓他知道，但不擋送出。
+   */
   const lockedErrors = useMemo(
     () => findTemsisLockedErrors(parsed, lockedThroughMonth),
     [parsed, lockedThroughMonth],
@@ -202,6 +205,7 @@ export function UnlockPage() {
         {lockedThroughMonth !== null && (
           <p className="mt-1 text-sm text-amber-700">
             {formatRocMonth(lockedThroughMonth)}（含）以前的救護紀錄表已鎖定，不受理解鎖申請，有需要請洽救護科人員。
+            {canManageLock && '（你有管理權限，送出不受此限制。）'}
           </p>
         )}
       </div>
@@ -234,8 +238,17 @@ export function UnlockPage() {
             )}
             {lockedErrors.length > 0 && (
               <div className="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                {canManageLock && (
+                  <p className="font-medium">
+                    以下 {lockedErrors.length} 筆在鎖定時段內；你有管理權限，仍可送出，救護科電腦會照常解鎖。
+                  </p>
+                )}
                 {lockedErrors.map((item) => (
-                  <p key={item.temsis}>{describeTemsisLockedError(item)}</p>
+                  <p key={item.temsis}>
+                    {canManageLock
+                      ? `${item.temsis}：${formatRocMonth(item.lockedThroughMonth)}（含）以前的案件`
+                      : describeTemsisLockedError(item)}
+                  </p>
                 ))}
               </div>
             )}
@@ -266,7 +279,7 @@ export function UnlockPage() {
                 || (policy === null && policyError === null)
                 || parsed.length === 0
                 || lengthErrors.length > 0
-                || lockedErrors.length > 0
+                || (lockedErrors.length > 0 && !canManageLock)
                 || reason.trim() === ''
               }
             >
