@@ -107,6 +107,19 @@ export const ASSIGNABLE_ROLES: readonly { value: string; label: string; hint: st
   { value: 'unlocker', label: '解鎖專用', hint: '只能提出解鎖工單，看不到業務資料' },
 ];
 
+/**
+ * 使用者管理頁上方的分頁（v1.36 起，使用者 2026-11-03 指定順序）。
+ * 每個分頁對應一種帳號狀態；「停用」同時包含審核時就被拒絕的帳號（兩者狀態都是 rejected）。
+ */
+export const USER_TABS: readonly { status: 'approved' | 'rejected' | 'pending'; label: string; emptyText: string }[] = [
+  { status: 'approved', label: '目前使用者', emptyText: '目前沒有已核准的使用者。' },
+  { status: 'rejected', label: '停用', emptyText: '沒有停用的帳號。' },
+  { status: 'pending', label: '待審核', emptyText: '目前沒有待審核的帳號。' },
+];
+
+/** 「目前使用者」分頁內依角色分組的顯示順序（權限高到低）。 */
+export const USER_ROLE_GROUP_ORDER: readonly string[] = ['admin', 'emsManager', 'member', 'unlocker'];
+
 /** 解鎖工單狀態的中文標籤與色調。 */
 export const UNLOCK_STATUS_LABELS: Record<string, { label: string; tone: Tone }> = {
   pending: { label: '待處理', tone: 'amber' },

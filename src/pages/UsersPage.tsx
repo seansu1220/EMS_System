@@ -1,20 +1,24 @@
 /**
  * 使用者管理頁（僅管理員可進入）。
- * 列出所有註冊帳號（待審核排最前），可核准、拒絕、停用、指派角色；
+ * 上方分頁切「目前使用者／停用／待審核」（v1.36），「目前使用者」再依角色分組；
+ * 可核准、拒絕、停用、重新啟用、指派角色；
  * 管理員本身的帳號不可調整（管理員身分來自 email 白名單）。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { setUserRole, setUserStatus, subscribeUsers } from '../services/userService';
 import { isAdminEmail } from '../lib/permissions';
-import { ASSIGNABLE_ROLES, USER_ROLE_LABELS, USER_STATUS_LABELS } from '../config/constants';
+import { countUsersByStatus, filterUsersByStatus, groupUsersByRole } from '../lib/userGrouping';
+import { ASSIGNABLE_ROLES, USER_ROLE_GROUP_ORDER, USER_ROLE_LABELS, USER_TABS } from '../config/constants';
 import type { AppUser, UserRole, UserStatus } from '../types/user';
-import { Badge, Button, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
+import { Button, CenteredSpinner, ErrorBanner, INPUT_CLASS } from '../components/ui';
 
 export function UsersPage() {
   const { user, isAdmin } = useAuth();
   const [users, setUsers] = useState<AppUser[]>([]);
+  // null＝還沒手動切過分頁，由待審核數量決定預設分頁。
+  const [selectedTab, setSelectedTab] = useState<UserStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyUid, setBusyUid] = useState<string | null>(null);
@@ -70,7 +74,34 @@ export function UsersPage() {
     }
   }
 
-  const pendingCount = users.filter((item) => item.status === 'pending').length;
+  const statusCounts = countUsersByStatus(users);
+  // 還沒手動切過分頁時：有人待審核就先開「待審核」，否則開「目前使用者」。
+  const activeTab: UserStatus = selectedTab ?? (statusCounts.pending > 0 ? 'pending' : 'approved');
+  const tabUsers = filterUsersByStatus(users, activeTab);
+  const tabEmptyText = USER_TABS.find((tab) => tab.status === activeTab)?.emptyText ?? '';
+
+  function renderRow(item: AppUser) {
+    const name = item.displayName || item.email;
+    return (
+      <UserRow
+        key={item.uid}
+        item={item}
+        busy={busyUid === item.uid}
+        isSelf={item.uid === user?.uid}
+        onApprove={() =>
+          handleSetStatus(
+            item,
+            'approved',
+            item.status === 'rejected' ? `確定重新啟用「${name}」？` : `確定核准「${name}」使用系統？`,
+          )
+        }
+        onReject={() =>
+          handleSetStatus(item, 'rejected', `確定停用「${name}」？停用後他將無法進入系統（資料不會刪除）。`)
+        }
+        onChangeRole={(role) => handleSetRole(item, role)}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -86,44 +117,65 @@ export function UsersPage() {
 
       <ErrorBanner message={error} />
 
-      {pendingCount > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          有 {pendingCount} 個帳號等待審核。
-        </div>
+      {statusCounts.pending > 0 && activeTab !== 'pending' && (
+        <button
+          type="button"
+          onClick={() => setSelectedTab('pending')}
+          className="block w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-left text-sm text-amber-800 hover:bg-amber-100"
+        >
+          有 {statusCounts.pending} 個帳號等待審核，點這裡查看。
+        </button>
       )}
+
+      <div className="flex flex-wrap rounded-lg border border-slate-300 bg-white p-0.5" role="tablist" aria-label="使用者分類">
+        {USER_TABS.map((tab) => (
+          <button
+            key={tab.status}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.status}
+            onClick={() => setSelectedTab(tab.status)}
+            className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeTab === tab.status ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            {tab.label}
+            <span className={`ml-1.5 text-xs ${tab.status === 'pending' && statusCounts.pending > 0 ? 'font-bold text-amber-500' : 'opacity-70'}`}>
+              {statusCounts[tab.status]}
+            </span>
+          </button>
+        ))}
+      </div>
 
       {loading ? (
         <CenteredSpinner />
-      ) : users.length === 0 ? (
-        <p className="text-sm text-slate-400">尚無使用者資料。</p>
-      ) : (
-        <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm">
-          {users.map((item) => (
-            <UserRow
-              key={item.uid}
-              item={item}
-              busy={busyUid === item.uid}
-              isSelf={item.uid === user?.uid}
-              onApprove={() =>
-                handleSetStatus(item, 'approved', `確定核准「${item.displayName || item.email}」使用系統？`)
-              }
-              onReject={() =>
-                handleSetStatus(
-                  item,
-                  'rejected',
-                  `確定停用「${item.displayName || item.email}」？停用後他將無法進入系統（資料不會刪除）。`,
-                )
-              }
-              onChangeRole={(role) => handleSetRole(item, role)}
-            />
+      ) : tabUsers.length === 0 ? (
+        <p className="text-sm text-slate-400">{tabEmptyText}</p>
+      ) : activeTab === 'approved' ? (
+        <div className="space-y-4">
+          {groupUsersByRole(tabUsers, USER_ROLE_GROUP_ORDER).map((group) => (
+            <section key={group.role}>
+              <h2 className="mb-2 text-sm font-semibold text-slate-600">
+                {USER_ROLE_LABELS[group.role] ?? group.role}
+                <span className="ml-1.5 text-xs font-normal text-slate-400">{group.users.length} 人</span>
+              </h2>
+              <UserList>{group.users.map(renderRow)}</UserList>
+            </section>
           ))}
         </div>
+      ) : (
+        <UserList>{tabUsers.map(renderRow)}</UserList>
       )}
     </div>
   );
 }
 
-/** 單列使用者：顯示名稱 / email / 角色 / 狀態，並依狀態提供核准或停用按鈕。 */
+/** 使用者列的外框。 */
+function UserList({ children }: { children: ReactNode }) {
+  return <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white shadow-sm">{children}</div>;
+}
+
+/** 單列使用者：顯示名稱 / email / 角色，並依狀態提供核准、重新啟用或停用按鈕（狀態由所在分頁表示）。 */
 function UserRow({
   item,
   busy,
@@ -139,7 +191,6 @@ function UserRow({
   onReject: () => void;
   onChangeRole: (role: Exclude<UserRole, 'admin'>) => void;
 }) {
-  const statusLabel = USER_STATUS_LABELS[item.status] ?? USER_STATUS_LABELS.pending;
   // 管理員（白名單 email）的權限來自 email，不可在此調整。
   const locked = isSelf || isAdminEmail(item.email);
 
@@ -169,14 +220,13 @@ function UserRow({
           ))}
         </select>
       )}
-      <Badge tone={statusLabel.tone}>{statusLabel.label}</Badge>
       {locked ? (
         <span className="text-xs text-slate-400">管理員帳號</span>
       ) : (
         <div className="flex gap-2">
           {item.status !== 'approved' && (
             <Button className="px-3 py-1.5 text-xs" onClick={onApprove} disabled={busy}>
-              {busy ? '處理中…' : '核准'}
+              {busy ? '處理中…' : item.status === 'rejected' ? '重新啟用' : '核准'}
             </Button>
           )}
           {item.status !== 'rejected' && (
