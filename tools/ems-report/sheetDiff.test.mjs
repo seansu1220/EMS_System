@@ -327,3 +327,9 @@ test('已知區塊外的勾選框：雲端不寫選項（旁邊可能是手寫�
   assert.doesNotMatch(cloud, /王/);
   assert.deepEqual(toCloudItems(changes, CONFIG).items, ['有 1 個勾選項目有更動（勾了哪些詳見本機報告）']);
 });
+
+test('PDF 斷行切出的半句選項，網頁上換成顯示名稱', () => {
+  const build = (mark) => [at(493, 618, `${mark} 拒醫療聲明:本人聲明：救護人`)];
+  const changes = describeChanges(build('□'), build('■'), CONFIG);
+  assert.deepEqual(toCloudItems(changes, CONFIG).items, ['「拒絕送醫」勾選「拒醫療聲明」']);
+});

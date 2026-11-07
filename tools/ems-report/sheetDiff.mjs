@@ -25,7 +25,8 @@
  *
  * 產出兩種版本：
  *   - **本機版**：完整的改前改後（含病患資料，只寫進 `out/internal/`）
- *   - **雲端版**：只寫欄位名；勾選框只有落在已知區塊（表上印好的選項）才寫出選項與勾選／取消勾選，
+ *   - **雲端版**：只寫欄位名；勾選框只有落在已知區塊、而且選項在印好的選項白名單（`checkboxPrintedOptions`）裡，
+ *     才寫出選項與勾選／取消勾選（擋手寫內容靠白名單，不是區塊），
  *     其他勾選只寫「有 N 個勾選項目有更動」；
  *     只有白名單欄位（時間、檢傷、生命徵象）、而且值看起來只是數字或分級時，才寫改前改後
  */
@@ -59,6 +60,7 @@
  * @property {string[]} sensitiveLabels 個資欄位（包含比對）
  * @property {string[]} [sensitiveCheckboxGroups] 只寫區塊、不寫選項的勾選區塊（完全相等）
  * @property {string[]} [checkboxPrintedOptions] 表上印好的勾選選項（白名單）：雲端只寫得出這份裡的選項
+ * @property {Record<string, string>} [checkboxOptionNames] 勾選選項在網頁上的顯示名稱
  * @property {string[]} cloudValueLabels 雲端可以寫出內容的欄位（完全相等）
  * @property {number} cloudMaxItems
  * @property {number} cloudMaxValueLength
@@ -586,8 +588,9 @@ function describeValueForCloud(change, config) {
  * 以下只寫「「區塊」勾選有更動」、不寫選項：
  * - 選項不在 `checkboxPrintedOptions`（表上印好的選項白名單）——勾選框旁邊的手寫內容就算兩份一樣也擋得住
  * - 選項沒有在兩份裡一模一樣（`optionVerified`，第二道檢查）——變的是文字本身
- * - 個資區塊（`sensitiveCheckboxGroups`：傷病患住址、財物明細、主訴），跟填值的個資規則一致。
- *   明確列名、完全相等，不用 `sensitiveLabels` 的「包含」比對（「無法簽名原因」含「簽名」，但不是個資）
+ * - `sensitiveCheckboxGroups` 列的區塊（明確列名、完全相等；**目前空的**，使用者 2026-11-07 確認所有區塊的選項都可以顯示）。
+ *   不用 `sensitiveLabels` 的「包含」比對（「無法簽名原因」含「簽名」，但不是個資）
+ * 寫出的選項套用 `checkboxOptionNames` 的顯示名稱（PDF 斷行切出的半句）。
  * - 選項太長或認不出
  * 5 碼以上的數字一律遮掉（最後一道防線）。
  *
@@ -601,7 +604,8 @@ function describeCheckboxForCloud(change, config) {
     && (config.checkboxPrintedOptions ?? []).includes(change.option)
     && !(config.sensitiveCheckboxGroups ?? []).includes(group)
     && change.option.length <= config.cloudMaxValueLength;
-  const option = showable ? change.option.replace(/\d{5,}/g, '#####') : null;
+  const shown = showable ? config.checkboxOptionNames?.[change.option] ?? change.option : null;
+  const option = shown ? shown.replace(/\d{5,}/g, '#####') : null;
   if (!option) return `「${group}」勾選有更動`;
   return `「${group}」${checkActionText(change.checkAction)}「${option}」`;
 }

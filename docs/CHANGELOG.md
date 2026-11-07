@@ -24,7 +24,7 @@
 
 ### 修改的檔案與內容
 - `tools/ems-report/config.mjs`：新增 `layout.checkboxGroups`（勾選框位置 → 區塊，取自範本、6 份實際紀錄表 203 個勾選處全部對到）、
-  `layout.sameRowMaxGapByLabel: { E: 20, V: 20, M: 20 }`、`layout.sameRowEndOverlap`（從結尾量的容許值，不再借用列方向的 `rowTolerance`）、
+  `layout.sameRowMaxGapByLabel: { E: 16, V: 16, M: 16 }`、`layout.sameRowEndOverlap`（從結尾量的容許值，不再借用列方向的 `rowTolerance`）、
   `sensitiveCheckboxGroups`（機制保留，依使用者確認**留空**）、`checkboxPrintedOptions`（印好的選項白名單 159 個，從已遮蔽範本產生）；
   藥物處置拆成靜脈輸液／骨針兩列；`sameRowMaxGapByLabel` 設 16；`diffRuleVersion` 升到 3。
 - `tools/ems-report/sheetDiff.mjs`：`parseCheckboxes`、`describeCheckboxEdits`（每個變的框各一筆；框數不同依選項配對；只改了字回傳 `changed`、無選項）、
@@ -38,6 +38,9 @@
   手寫內容兩份一樣也不上雲、靜脈輸液／骨針分開；`npm run tool:ems:test` 602 項全過。用 6 份實際紀錄表逐格驗證（只印統計、不印內容）：
   生命徵象表每一格歸對、每份 203 個勾選處反勾一次全部對到區塊、6 件原本的結果不變。
 - `docs/TOOLS_SPEC.md` v1.57.3（2.13、2.14）；`docs/SPEC.md` v1.39.1（解鎖工單後續追蹤的條列寫法）。
+- 第三輪獨立審查（783cb91）沒找到個資上雲的漏洞或功能錯誤；依建議修正文件與註解的不一致（GCS 距離 20／16 並存、
+  「區塊旁邊都是印好的選項」的過時說法、`sensitiveCheckboxGroups` 註解），並把 PDF 斷行切出的半句
+  「拒醫療聲明:本人聲明：救護人」在網頁上顯示成「拒醫療聲明」（`checkboxOptionNames`）。
 
 ---
 
