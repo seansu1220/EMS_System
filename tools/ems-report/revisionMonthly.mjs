@@ -34,7 +34,7 @@ import { log } from './logger.mjs';
 import { readLocalSheetItems } from './revisionCheck.mjs';
 import { loadTracker, localDateKey } from './revisionTrack.mjs';
 import { TRACKER_FILE, organizeRevisionFiles, revisionFilePath } from './revisionFiles.mjs';
-import { describeChanges } from './sheetDiff.mjs';
+import { checkActionText, describeChanges } from './sheetDiff.mjs';
 import { maskCode } from './sheetFields.mjs';
 import {
   fetchRequestDetails,
@@ -164,10 +164,15 @@ function clipCell(text, maxLength) {
 export function toChangeRows(change, maxLength) {
   const show = (parts) => clipCell(parts.filter(Boolean).join(' ').trim(), maxLength) || '（空白）';
   if (change.kind === 'checkbox') {
-    // 生命徵象表裡的勾選（意識狀況）判斷得出是哪個時間點的哪一欄，寫在前面。
+    // 區塊（非創傷、生命徵象（送醫途中）意識狀況…）判斷得出就寫在前面；看得出有沒有勾就寫「已勾選／未勾選」。
     const block = change.fields.length > 0 ? `${change.fields.join('、')}：` : '';
     const option = change.option ? `「${change.option}」` : '（認不出是哪一項）';
-    return [{ field: `${block}勾選${option}`, before: show(change.before), after: show(change.after) }];
+    const state = (checked, raw) => (checked === true ? '已勾選' : checked === false ? '未勾選' : show(raw));
+    return [{
+      field: `${block}${checkActionText(change.checkAction)}${option}`,
+      before: state(change.checkedBefore, change.before),
+      after: state(change.checkedAfter, change.after),
+    }];
   }
   if (change.fieldSource === 'inline' && change.segments.length > 0) {
     return change.segments.map((segment) => ({

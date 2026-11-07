@@ -45,6 +45,7 @@ import { padRange } from './dateRange.mjs';
  * @property {number} failCount 連續失敗次數
  * @property {string|null} lastError 最近一次失敗的原因
  * @property {number} [diffRuleVersion] 比對時用的是第幾版判斷規則（v1.57.2 起才記；沒有＝第 1 版）
+ * @property {number} [refreshFailedVersion] 用這一版規則重新比對失敗過（本機 PDF 不見或壞掉）；同一版不再重試
  */
 
 /**
@@ -271,6 +272,8 @@ export function withEntry(tracker, entry) {
  * 比對規則升版後，哪幾件已比對過的要拿本機兩份 PDF 重新比對（純函式）。
  *
  * 只挑兩份檔都在的 `compared`；舊紀錄沒有 `diffRuleVersion` 當作第 1 版。
+ * 用這一版規則重新比對失敗過的（`refreshFailedVersion`）不再挑，免得每一輪都重讀、重印同一條警告；
+ * 下次規則升版時會再試一次。
  *
  * @param {Tracker} tracker
  * @param {number} ruleVersion 目前的規則版本（`UNLOCK.revision.diffRuleVersion`）
@@ -279,7 +282,8 @@ export function withEntry(tracker, entry) {
 export function pickStaleComparisons(tracker, ruleVersion) {
   return tracker.entries.filter((entry) => entry.state === 'compared'
     && Boolean(entry.backupFile) && Boolean(entry.closedFile)
-    && (entry.diffRuleVersion ?? 1) < ruleVersion);
+    && (entry.diffRuleVersion ?? 1) < ruleVersion
+    && entry.refreshFailedVersion !== ruleVersion);
 }
 
 /**

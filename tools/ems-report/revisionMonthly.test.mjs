@@ -108,11 +108,11 @@ test('判斷不出欄位時整段照列，欄位寫明', () => {
   assert.deepEqual(row, { field: '未能判斷欄位', before: '舊的', after: '新的' });
 });
 
-test('勾選框寫出是哪一項；空白寫「（空白）」', () => {
+test('勾選框寫出是哪一項；看不出勾沒勾時照原文、空白寫「（空白）」', () => {
   const [row] = toChangeRows({
     kind: 'checkbox', before: ['□'], after: [], fields: [], fieldSource: 'unknown', segments: [], option: '意識不清',
   }, 2000);
-  assert.deepEqual(row, { field: '勾選「意識不清」', before: '□', after: '（空白）' });
+  assert.deepEqual(row, { field: '更動勾選「意識不清」', before: '□', after: '（空白）' });
 });
 
 test('太長的內容會截斷', () => {
@@ -216,7 +216,7 @@ test('修改內容分頁：同一件改好幾處時，編號～出勤車輛上�
 test('生命徵象的勾選寫出時間點與欄位', () => {
   const [row] = toChangeRows({
     kind: 'checkbox', before: ['■'], after: ['□'], fields: ['生命徵象（送醫途中）意識狀況'],
-    fieldSource: 'inline', segments: [], option: '清',
+    fieldSource: 'inline', segments: [], option: '清', checkAction: 'unchecked', checkedBefore: true, checkedAfter: false,
   }, 2000);
-  assert.equal(row.field, '生命徵象（送醫途中）意識狀況：勾選「清」');
+  assert.deepEqual(row, { field: '生命徵象（送醫途中）意識狀況：取消勾選「清」', before: '已勾選', after: '未勾選' });
 });

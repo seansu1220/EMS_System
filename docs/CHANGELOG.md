@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-11-07　小工具 v1.57.3 勾選框寫出改了哪一個；修正 SpO2／血糖值被算成 GCS-M
+
+### 問題描述
+1. 使用者要看得出改了哪個勾選，例如原本勾「到院前心跳停止」後來取消、原本勾「創傷」後來取消、「非創傷」沒勾變成有勾。
+   之前雲端只寫「有 N 個勾選項目有更動」，本機報告也只寫選項、不寫區塊與勾選／取消勾選。
+2. 使用者要求修改後另開新的工作階段檢查。獨立審查（全新子代理，只看程式與已遮蔽範本）找出：
+   SpO2、血糖值會被算成 GCS-M；勾選只改了字時會把那段字當選項送上雲；一段裡兩個框同時改只列一個；
+   個資區塊的勾選沒有套用個資規則；重新比對失敗時每一輪都重試。修完再開第二個新子代理複查，又找出：
+   「兩份一模一樣」不能證明是印好的字（手寫內容解鎖前就寫了、之後沒改也一樣）；網頁規格書沒同步；GCS 距離餘裕偏小；
+   靜脈輸液、骨針兩列的同名選項分不開。
+3. 使用者確認所有勾選區塊的選項都可以顯示（「什麼選項改了沒差」）。
+
+### 根本原因
+- 勾選框之前刻意不判斷區塊（拿附近的標籤猜常猜錯），而同一個選項名稱會出現在好幾個區塊（「到院前心肺功能停止」在非創傷、創傷各一個），
+  只寫選項看不懂；也沒有比較兩份的記號，看不出是勾選還是取消勾選。
+- GCS 的 E／V／M 是單字母標籤，用一般的同一列距離 90，右邊 33 的 SpO2、56 的血糖值都先命中 M，表頭輪不到；
+  加上時間點後三格同名，又被合成一處。之前 6 件剛好都沒改到 SpO2，所以沒發現。
+
+### 修改的檔案與內容
+- `tools/ems-report/config.mjs`：新增 `layout.checkboxGroups`（勾選框位置 → 區塊，取自範本、6 份實際紀錄表 203 個勾選處全部對到）、
+  `layout.sameRowMaxGapByLabel: { E: 20, V: 20, M: 20 }`、`layout.sameRowEndOverlap`（從結尾量的容許值，不再借用列方向的 `rowTolerance`）、
+  `sensitiveCheckboxGroups`（機制保留，依使用者確認**留空**）、`checkboxPrintedOptions`（印好的選項白名單 159 個，從已遮蔽範本產生）；
+  藥物處置拆成靜脈輸液／骨針兩列；`sameRowMaxGapByLabel` 設 16；`diffRuleVersion` 升到 3。
+- `tools/ems-report/sheetDiff.mjs`：`parseCheckboxes`、`describeCheckboxEdits`（每個變的框各一筆；框數不同依選項配對；只改了字回傳 `changed`、無選項）、
+  `checkboxGroupOf`、`checkActionText`；勾選處多記 `checkAction`、`checkedBefore／After`、`optionVerified`（選項在兩份一模一樣才為真）；
+  雲端寫「「傷病患類別」取消勾選「創傷」」，選項不在白名單或 `optionVerified` 為假只寫「「區塊」勾選有更動」，區塊外照舊只算筆數；
+  刪掉已沒人用的 `checkboxOption`；
+  `isWithinSameRowGap` 套用個別標籤距離；`describeCell` 改回傳陣列（`flatMap`）；補齊 JSDoc 型別。
+- `tools/ems-report/revisionMonthly.mjs`：勾選列寫「區塊：勾選／取消勾選「選項」」，原內容／修改後寫「已勾選／未勾選」。
+- `tools/ems-report/revisionTrack.mjs`、`revisionCheck.mjs`：重新比對失敗記 `refreshFailedVersion`，同一版規則不再重試。
+- 測試：`sheetDiff.test.mjs` 新增多框、框數不同、只改了字不上雲、旁邊那段字兩份不同不上雲、個資區塊、SpO2／血糖值不算 GCS-M 等；
+  手寫內容兩份一樣也不上雲、靜脈輸液／骨針分開；`npm run tool:ems:test` 602 項全過。用 6 份實際紀錄表逐格驗證（只印統計、不印內容）：
+  生命徵象表每一格歸對、每份 203 個勾選處反勾一次全部對到區塊、6 件原本的結果不變。
+- `docs/TOOLS_SPEC.md` v1.57.3（2.13、2.14）；`docs/SPEC.md` v1.39.1（解鎖工單後續追蹤的條列寫法）。
+
+---
+
 ## 2026-11-07　小工具 v1.57.2 結案後比對的欄位判斷補強（受傷部位、指派案號、生命徵象時間點）
 
 ### 問題描述

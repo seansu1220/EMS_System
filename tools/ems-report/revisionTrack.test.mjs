@@ -197,8 +197,11 @@ test('比對規則升版：只挑兩份檔都在、規則版本較舊的已比�
       { ...base, temsis: '2', version: 1, diffRuleVersion: 2 },
       { ...base, temsis: '3', version: 1, closedFile: null },
       { ...base, temsis: '4', version: 1, state: 'waiting' },
+      { ...base, temsis: '5', version: 1, refreshFailedVersion: 2 },
     ],
   };
   assert.deepEqual(pickStaleComparisons(tracker, 2).map((entry) => entry.temsis), ['1']);
+  // 規則再升版時，之前失敗過的會再試一次
+  assert.deepEqual(pickStaleComparisons(tracker, 3).map((entry) => entry.temsis), ['1', '2', '5']);
   assert.deepEqual(pickStaleComparisons(tracker, 1), []);
 });

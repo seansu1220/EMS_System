@@ -20,11 +20,13 @@
  *      - 固定區塊（補述欄、受傷部位及尺寸）：位置落在範圍裡就是它
  *      - 都找不到就找附近的標籤，只能說「附近」
  *      不拿「兩份都沒變的字」當標籤：沒改過的姓名也是兩份都一樣，拿它當標籤就會被寫上雲端。
- *   4. 勾選框：`□ 保暖` → `■ 保暖`（記號與選項同一段），或單獨一個 `□` → `■`（選項在旁邊）
+ *   4. 勾選框：`□ 保暖` → `■ 保暖`（記號與選項同一段），或單獨一個 `□` → `■`（選項在旁邊）；
+ *      依位置對到區塊（`layout.checkboxGroups`），寫成「「傷病患類別」取消勾選「創傷」」
  *
  * 產出兩種版本：
  *   - **本機版**：完整的改前改後（含病患資料，只寫進 `out/internal/`）
- *   - **雲端版**：只寫欄位名；勾選框只寫「哪個區塊的勾選有更動」，不寫勾了哪一項（那本身就是病歷內容）；
+ *   - **雲端版**：只寫欄位名；勾選框只有落在已知區塊（表上印好的選項）才寫出選項與勾選／取消勾選，
+ *     其他勾選只寫「有 N 個勾選項目有更動」；
  *     只有白名單欄位（時間、檢傷、生命徵象）、而且值看起來只是數字或分級時，才寫改前改後
  */
 
@@ -43,7 +45,11 @@
  * @property {{label: string, baseLabel?: string, before: string, after: string}[]} segments
  *   各欄位改前改後的值（`inline` 時才有）。`label` 是顯示名稱（生命徵象會加上時間點，
  *   例如「生命徵象（到院後）量測時間」）；`baseLabel` 是表上印的欄位名，雲端白名單／個資判斷用它
- * @property {string|null} option 勾選框的選項文字（本機報告用；可能就是病歷內容，不上雲）
+ * @property {string|null} option 勾選框的選項文字（已知區塊裡、而且 `optionVerified` 的才上雲，見 `toCloudItems`）
+ * @property {boolean} [optionVerified] 勾選框的選項文字在兩份裡一模一樣（第二道檢查；是不是印好的字看 `checkboxPrintedOptions`）
+ * @property {'checked'|'unchecked'|'changed'} [checkAction] 勾選框：勾選／取消勾選／看不出來
+ * @property {boolean|null} [checkedBefore] 勾選框解鎖前有沒有勾（看不出來為 null）
+ * @property {boolean|null} [checkedAfter] 勾選框結案後有沒有勾
  */
 
 /**
@@ -51,13 +57,17 @@
  * @property {string[]} layoutLabels 表格上印好的欄位標籤（實際取樣而來）
  * @property {Record<string, string>} [labelNames] 標籤的顯示名稱（`M` → `GCS-M`）
  * @property {string[]} sensitiveLabels 個資欄位（包含比對）
+ * @property {string[]} [sensitiveCheckboxGroups] 只寫區塊、不寫選項的勾選區塊（完全相等）
+ * @property {string[]} [checkboxPrintedOptions] 表上印好的勾選選項（白名單）：雲端只寫得出這份裡的選項
  * @property {string[]} cloudValueLabels 雲端可以寫出內容的欄位（完全相等）
  * @property {number} cloudMaxItems
  * @property {number} cloudMaxValueLength
  * @property {{matchTolerance: number, rowTolerance: number, sameRowMaxGap: number, sameRowEndGap?: number,
+ *   sameRowEndOverlap?: number, sameRowMaxGapByLabel?: Record<string, number>,
  *   headerMaxGap: number, headerColTolerance: number, nearbyMaxDistance: number,
  *   optionMaxGap: number, regions?: {label: string, rowFrom: number, rowTo: number,
- *   colFrom: number, colTo: number}[]}} layout 版面判斷的距離（pt）與固定區塊
+ *   colFrom: number, colTo: number}[], checkboxGroups?: {label: string, rowFrom: number, rowTo: number,
+ *   colFrom: number, colTo: number}[]}} layout 版面判斷的距離（pt）、固定區塊與勾選框的區塊
  * @property {VitalSignsConfig} [vitalSigns] 生命徵象表的時間點（沒設就不加時間點）
  */
 
@@ -74,6 +84,99 @@
 
 /** 勾選框記號。 */
 const CHECKBOX_MARKS = /[□■☐☑☒✓✔]/;
+
+/** 代表「有勾」的記號（其餘 `□☐` 是沒勾）。 */
+const CHECKED_MARKS = /[■☑☒✓✔]/;
+
+/** 「不是勾選記號」的字元（從 `CHECKBOX_MARKS` 推出，新增記號只改一處）。 */
+const NOT_A_MARK = CHECKBOX_MARKS.source.replace('[', '[^');
+
+/**
+ * 一段文字裡的每個勾選框：有沒有勾、後面接的選項文字（純函式）。
+ * `目擊者: □ 有` → `[{checked: false, option: '有'}]`；`□ 不識字 ■ 拒簽` → 兩個。記號前面的字（標題）不算。
+ *
+ * @param {string} text
+ * @returns {{checked: boolean, option: string}[]}
+ */
+export function parseCheckboxes(text) {
+  const marks = new RegExp(`(${CHECKBOX_MARKS.source})(${NOT_A_MARK}*)`, 'g');
+  return [...String(text ?? '').matchAll(marks)].map((match) => ({
+    checked: CHECKED_MARKS.test(match[1]),
+    option: cleanOption(match[2]),
+  }));
+}
+
+/**
+ * 選項文字去掉頭尾的斜線、冒號，與**沒成對**的括號（`正常/` → `正常`、`右)` → `右`；
+ * `BVM(正壓輔助呼吸)` 的括號成對，保留）。
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanOption(text) {
+  let option = String(text ?? '').replace(/[\s　]+/g, ' ').trim().replace(/^[/／:：\s]+|[/／:：\s]+$/g, '');
+  if (!/[(（]/.test(option)) option = option.replace(/[)）]+$/, '').trim();
+  if (!/[)）]/.test(option)) option = option.replace(/^[(（]+/, '').trim();
+  return option;
+}
+
+/**
+ * @typedef {Object} CheckboxEdit 一個勾選框的改動
+ * @property {string|null} option 選項文字（同一段裡記號後面的字；單獨一個框時為 null，由呼叫端取旁邊的字）
+ * @property {'checked'|'unchecked'|'changed'} action 勾選／取消勾選／看不出來
+ * @property {boolean|null} checkedBefore
+ * @property {boolean|null} checkedAfter
+ * @property {boolean} optionStable 選項文字兩份一模一樣（不是改過的內容；雲端另外還要在印好的選項白名單裡）
+ */
+
+/**
+ * 一段勾選改了什麼（純函式）：**每個**有沒有勾不一樣的框各一筆。
+ *
+ * - 兩邊框數一樣：逐一比位置
+ * - 框數不一樣（PDF 切段不同、新增或刪除）：依選項文字配對；只出現在一邊的，有勾才算
+ * - 勾選狀態都沒變、只有字變了：回傳一筆 `changed`、選項 null——變的是文字本身，那段字不是印好的選項
+ *
+ * @param {string} beforeText
+ * @param {string} afterText
+ * @returns {CheckboxEdit[]} 至少一筆
+ */
+export function describeCheckboxEdits(beforeText, afterText) {
+  const before = parseCheckboxes(beforeText);
+  const after = parseCheckboxes(afterText);
+  const edits = before.length === after.length
+    ? after.flatMap((box, index) => (box.checked === before[index].checked ? [] : [toEdit(before[index], box)]))
+    : matchBoxesByOption(before, after);
+  if (edits.length > 0) return edits;
+  return [{ option: null, action: 'changed', checkedBefore: null, checkedAfter: null, optionStable: false }];
+}
+
+/** 框數不一樣時依選項文字配對（純函式）。 */
+function matchBoxesByOption(before, after) {
+  const edits = [];
+  for (const box of after) {
+    const old = before.find((candidate) => candidate.option === box.option);
+    if (old && old.checked !== box.checked) edits.push(toEdit(old, box));
+    else if (!old && box.checked) edits.push(toEdit(null, box));
+  }
+  for (const box of before) {
+    if (box.checked && !after.some((candidate) => candidate.option === box.option)) edits.push(toEdit(box, null));
+  }
+  return edits;
+}
+
+/** 一個框改前改後 → 一筆改動；`null`＝那一邊沒有這個框。 */
+function toEdit(before, after) {
+  const checkedBefore = before ? before.checked : null;
+  const checkedAfter = after ? after.checked : null;
+  const action = checkedAfter === true || (checkedAfter === null && checkedBefore === false) ? 'checked' : 'unchecked';
+  return {
+    option: after?.option || before?.option || null,
+    action,
+    checkedBefore,
+    checkedAfter,
+    optionStable: Boolean(before && after && before.option === after.option),
+  };
+}
 
 /** 比對用的鍵：壓掉空白、去掉結尾冒號、轉大寫。 */
 function labelKey(text) {
@@ -107,14 +210,6 @@ export function toReadingFrame(item) {
 export function isLoneCheckbox(text) {
   const trimmed = String(text ?? '').replace(/[\s　]+/g, '');
   return trimmed !== '' && [...trimmed].every((char) => CHECKBOX_MARKS.test(char));
-}
-
-/** 勾選框那段去掉記號後的選項文字（`■ 保暖` → `保暖`）；沒有記號回傳 null。 */
-export function checkboxOption(text) {
-  const value = String(text ?? '');
-  if (!CHECKBOX_MARKS.test(value)) return null;
-  const option = value.replace(new RegExp(CHECKBOX_MARKS.source, 'g'), '').replace(/[\s　]+/g, ' ').trim();
-  return option || null;
 }
 
 /** 加上閱讀座標，方便後面算距離。 */
@@ -204,12 +299,21 @@ export function attributeCell(cell, labels, layout) {
 /**
  * 同一列的標籤離這一格夠不夠近：從標籤開頭量不超過 `sameRowMaxGap`，
  * 或從標籤**結尾**量不超過 `sameRowEndGap`（長標籤後面接的值，例如指派案號）。
+ * `sameRowMaxGapByLabel` 有列的標籤（GCS 的 E／V／M）只認開頭量的那個距離，不套用其他兩條。
+ *
+ * @param {{str: string, col: number, width?: number}} label
+ * @param {{col: number}} cell
+ * @param {DiffConfig['layout']} layout
+ * @returns {boolean}
  */
 function isWithinSameRowGap(label, cell, layout) {
-  if (cell.col - label.col <= layout.sameRowMaxGap) return true;
+  const gapFromStart = cell.col - label.col;
+  const ownGap = layout.sameRowMaxGapByLabel?.[labelKey(label.str)];
+  if (ownGap != null) return gapFromStart <= ownGap;
+  if (gapFromStart <= layout.sameRowMaxGap) return true;
   if (layout.sameRowEndGap == null) return false;
   const gapFromEnd = cell.col - (label.col + (label.width ?? 0));
-  return gapFromEnd >= -layout.rowTolerance && gapFromEnd <= layout.sameRowEndGap;
+  return gapFromEnd >= -(layout.sameRowEndOverlap ?? 0) && gapFromEnd <= layout.sameRowEndGap;
 }
 
 /**
@@ -278,40 +382,93 @@ function vitalCheckboxField(cell, context) {
   return qualified === label ? null : qualified;
 }
 
-/** 單獨一個勾選框旁邊的選項文字（同一列、後面最近的一段；本機報告用）。 */
+/**
+ * 勾選框落在哪個區塊（`layout.checkboxGroups`，由上往下第一個符合的）；都不在回傳 null。
+ * @param {{row: number, col: number}} cell
+ * @param {DiffConfig['layout']} layout
+ * @returns {string|null}
+ */
+export function checkboxGroupOf(cell, layout) {
+  const group = (layout.checkboxGroups ?? []).find((area) => cell.row >= area.rowFrom && cell.row <= area.rowTo
+    && cell.col >= area.colFrom && cell.col <= area.colTo);
+  return group ? group.label : null;
+}
+
+/**
+ * 一處勾選的改動寫成一處（一段裡好幾個框改了就好幾處）不同：區塊、選項、勾選還是取消勾選。
+ *
+ * 區塊**只認位置**（生命徵象表，或 `layout.checkboxGroups`）：不拿附近的標籤猜——實際版面同一列橫跨好幾個區塊，
+ * 猜出來的常常是錯的（2026-11-03：「霧化吸入型面罩」被歸到「傷病患財物明細」）。
+ * 選項文字取同一段記號後面的字（`■ 保暖`），單獨一個 `□` 就取右邊緊鄰的那一段——
+ * 那一段在兩份裡要一模一樣才算 `optionVerified`（雲端另外還要在印好的選項白名單裡才寫出）。
+ *
+ * @param {{before: object|null, after: object|null}} diff
+ * @param {{labels: object[], items: object[], beforeItems: object[], timepoints: object[], config: DiffConfig}} context
+ * @returns {SheetChange[]}
+ */
+function describeCheckboxCell(diff, context) {
+  const cell = diff.after ?? diff.before;
+  const beforeText = diff.before?.str ?? '';
+  const afterText = diff.after?.str ?? '';
+  const group = vitalCheckboxField(cell, context) ?? checkboxGroupOf(cell, context.config.layout);
+  const { layout } = context.config;
+  return describeCheckboxEdits(beforeText, afterText).map((edit) => {
+    let option = edit.option;
+    let optionVerified = edit.optionStable;
+    if (option === null && edit.action !== 'changed') {
+      const nextAfter = diff.after ? optionNextTo(diff.after, context.items, layout) : null;
+      const nextBefore = diff.before ? optionNextTo(diff.before, context.beforeItems, layout) : null;
+      option = nextAfter ?? nextBefore;
+      optionVerified = Boolean(diff.after && diff.before && nextAfter !== null && nextAfter === nextBefore);
+    }
+    return {
+      kind: 'checkbox', before: [beforeText], after: [afterText], fields: group ? [group] : [],
+      fieldSource: group ? 'inline' : 'unknown', segments: [], option, optionVerified,
+      checkAction: edit.action, checkedBefore: edit.checkedBefore, checkedAfter: edit.checkedAfter,
+    };
+  });
+}
+
+/**
+ * 勾選的動作寫成字：勾選／取消勾選／更動勾選。
+ * @param {'checked'|'unchecked'|'changed'|undefined} action
+ * @returns {string}
+ */
+export function checkActionText(action) {
+  if (action === 'checked') return '勾選';
+  if (action === 'unchecked') return '取消勾選';
+  return '更動勾選';
+}
+
+/**
+ * 單獨一個勾選框旁邊的選項文字（同一列、後面最近的一段）。
+ * @param {{row: number, col: number, page: number}} cell
+ * @param {ReturnType<typeof withFrame>} items 同一份紀錄表的所有文字
+ * @param {DiffConfig['layout']} layout
+ * @returns {string|null}
+ */
 function optionNextTo(cell, items, layout) {
   const next = items
     .filter((item) => item.page === cell.page && !isLoneCheckbox(item.str)
       && Math.abs(item.row - cell.row) <= layout.rowTolerance
       && item.col > cell.col && item.col - cell.col <= layout.optionMaxGap)
     .sort((left, right) => left.col - right.col)[0];
-  return next ? next.str.trim() : null;
+  return next ? cleanOption(next.str) || null : null;
 }
 
 /**
  * 一段改動（配對成功但文字不同、或只出現在一邊）寫成一處不同。
  *
  * @param {{before: object|null, after: object|null}} diff
- * @param {{labels: object[], items: object[], timepoints: object[], config: DiffConfig}} context
- * @returns {SheetChange}
+ * @param {{labels: object[], items: object[], beforeItems: object[], timepoints: object[], config: DiffConfig}} context
+ * @returns {SheetChange[]} 填值一處；勾選框一段裡好幾個框改了就好幾處
  */
 function describeCell(diff, context) {
   const cell = diff.after ?? diff.before;
   const beforeText = diff.before?.str ?? '';
   const afterText = diff.after?.str ?? '';
   const isCheckbox = CHECKBOX_MARKS.test(beforeText) || CHECKBOX_MARKS.test(afterText);
-  if (isCheckbox) {
-    // 勾選框**不猜區塊**：實際版面同一列橫跨好幾個區塊，猜出來的區塊常常是錯的
-    // （2026-11-03 用取樣驗證：「霧化吸入型面罩」被歸到「傷病患財物明細」）。
-    // 選項文字（`■ 保暖` 的「保暖」，或單獨 `□` 旁邊那個字）準得多，直接寫進本機報告。
-    const option = checkboxOption(afterText) ?? checkboxOption(beforeText)
-      ?? optionNextTo(cell, context.items, context.config.layout);
-    const field = vitalCheckboxField(cell, context);
-    return {
-      kind: 'checkbox', before: [beforeText], after: [afterText], fields: field ? [field] : [],
-      fieldSource: field ? 'inline' : 'unknown', segments: [], option,
-    };
-  }
+  if (isCheckbox) return describeCheckboxCell(diff, context);
   const attributed = attributeCell(cell, context.labels, context.config.layout);
   const source = attributed.source;
   const baseLabel = attributed.label ? context.config.labelNames?.[attributed.label] ?? attributed.label : null;
@@ -320,7 +477,7 @@ function describeCell(diff, context) {
   const segments = label && source === 'inline'
     ? [{ label, baseLabel, before: beforeText.trim(), after: afterText.trim() }]
     : [];
-  return { kind: 'value', before: [beforeText], after: [afterText], fields, fieldSource: source, segments, option: null };
+  return [{ kind: 'value', before: [beforeText], after: [afterText], fields, fieldSource: source, segments, option: null }];
 }
 
 /**
@@ -364,7 +521,7 @@ export function describeChanges(beforeItems, afterItems, config) {
   const template = after.length > 0 ? after : before;
   const labels = findLayoutLabels(template, config.layoutLabels);
   const timepoints = findVitalTimepoints(template, config.vitalSigns);
-  const context = { labels, items: after, timepoints, config };
+  const context = { labels, items: after, beforeItems: before, timepoints, config };
   const diffs = [
     ...pairs
       .filter((pair) => pair.before.str.replace(/[\s　]+/g, '') !== pair.after.str.replace(/[\s　]+/g, ''))
@@ -376,7 +533,7 @@ export function describeChanges(beforeItems, afterItems, config) {
     const b = right.after ?? right.before;
     return a.page - b.page || a.row - b.row || a.col - b.col;
   });
-  return mergeByField(diffs.map((diff) => describeCell(diff, context)));
+  return mergeByField(diffs.flatMap((diff) => describeCell(diff, context)));
 }
 
 /** 這個欄位是不是個資欄位（包含比對：`身分證` 也認得 `國民身分證統一編號`）。 */
@@ -424,11 +581,37 @@ function describeValueForCloud(change, config) {
 }
 
 /**
+ * 已知區塊裡的一處勾選寫成雲端的一句話：「「非創傷」勾選「腹痛」」。
+ *
+ * 以下只寫「「區塊」勾選有更動」、不寫選項：
+ * - 選項不在 `checkboxPrintedOptions`（表上印好的選項白名單）——勾選框旁邊的手寫內容就算兩份一樣也擋得住
+ * - 選項沒有在兩份裡一模一樣（`optionVerified`，第二道檢查）——變的是文字本身
+ * - 個資區塊（`sensitiveCheckboxGroups`：傷病患住址、財物明細、主訴），跟填值的個資規則一致。
+ *   明確列名、完全相等，不用 `sensitiveLabels` 的「包含」比對（「無法簽名原因」含「簽名」，但不是個資）
+ * - 選項太長或認不出
+ * 5 碼以上的數字一律遮掉（最後一道防線）。
+ *
+ * @param {SheetChange} change
+ * @param {DiffConfig} config
+ * @returns {string}
+ */
+function describeCheckboxForCloud(change, config) {
+  const group = change.fields[0];
+  const showable = Boolean(change.option) && change.optionVerified
+    && (config.checkboxPrintedOptions ?? []).includes(change.option)
+    && !(config.sensitiveCheckboxGroups ?? []).includes(group)
+    && change.option.length <= config.cloudMaxValueLength;
+  const option = showable ? change.option.replace(/\d{5,}/g, '#####') : null;
+  if (!option) return `「${group}」勾選有更動`;
+  return `「${group}」${checkActionText(change.checkAction)}「${option}」`;
+}
+
+/**
  * 雲端版的差異摘要（網頁工單上顯示用，**不含病患資料**）。
  *
  * - 填值：同一欄只寫一次
- * - 勾選框：合成一句「有 N 個勾選項目有更動」，**不寫勾了哪一項**（那本身就是病歷內容）；
- *   生命徵象表裡的勾選（意識狀況）判斷得出欄位，寫「「生命徵象（到院後）意識狀況」勾選有更動」
+ * - 勾選框（v1.57.3，使用者 2026-11-07 指定要寫出改了哪個勾選）：落在已知區塊（生命徵象表、`layout.checkboxGroups`）的，
+ *   寫「「傷病患類別」取消勾選「創傷」」；區塊外的不寫選項（旁邊可能是手寫內容），合成一句「有 N 個勾選項目有更動」
  * - 判斷不出欄位的：合成一句「有 N 處」
  *
  * @param {SheetChange[]} changes
@@ -440,7 +623,7 @@ export function toCloudItems(changes, config) {
   let unknownValues = 0;
   let checkboxes = 0;
   for (const change of changes) {
-    if (change.kind === 'checkbox' && change.fields.length > 0) items.push(`「${change.fields[0]}」勾選有更動`);
+    if (change.kind === 'checkbox' && change.fields.length > 0) items.push(describeCheckboxForCloud(change, config));
     else if (change.kind === 'checkbox') checkboxes += 1;
     else if (change.fieldSource === 'unknown') unknownValues += 1;
     else items.push(describeValueForCloud(change, config));
@@ -491,8 +674,9 @@ export function formatLocalReport(meta, changes, config) {
       ? '未能判斷欄位'
       : `${change.fields.join('、')}${change.fieldSource === 'nearby' ? '（附近）' : ''}`;
     if (change.kind === 'checkbox') {
-      const block = change.fields.length > 0 ? `・${change.fields.join('、')}` : '';
-      lines.push(`${position + 1}. 〔勾選${block}〕${change.option ? `「${change.option}」` : '（認不出是哪一項）'}`);
+      const block = change.fields.length > 0 ? change.fields.join('、') : '勾選框';
+      const what = change.option ? `${checkActionText(change.checkAction)}「${change.option}」` : `${checkActionText(change.checkAction)}（認不出是哪一項）`;
+      lines.push(`${position + 1}. 〔${block}〕${what}`);
     } else {
       lines.push(`${position + 1}. 〔${where}〕`);
     }

@@ -117,7 +117,7 @@ async function compareAndReport(entry, sheets) {
 /**
  * 比對規則升版後，已比對過的案件拿本機兩份 PDF 重新比對（不必回系統），
  * 改寫差異說明並標成「雲端待更新」，網頁上的說法跟著換成新規則。
- * 一件失敗只記警告，不影響其他件，也不動原本的比對結果。
+ * 一件失敗只記警告與 `refreshFailedVersion`（同一版規則不再重試），不影響其他件，也不動原本的比對結果。
  */
 async function refreshStaleComparisons() {
   const stale = pickStaleComparisons(await loadTracker(TRACKER_FILE), UNLOCK.revision.diffRuleVersion);
@@ -133,9 +133,11 @@ async function refreshStaleComparisons() {
       await updateTrackedEntry(TRACKER_FILE, keyOf(entry), patch);
     } catch (error) {
       log.warn(
-        `　TEMSIS ${maskCode(entry.temsis)}：重新比對失敗，先保留原本的結果`
+        `　TEMSIS ${maskCode(entry.temsis)}：重新比對失敗，保留原本的結果，這一版規則不再重試`
           + `（${error instanceof Error ? error.message : error}）`,
       );
+      await updateTrackedEntry(TRACKER_FILE, keyOf(entry), { refreshFailedVersion: UNLOCK.revision.diffRuleVersion })
+        .catch((saveError) => log.warn(`　追蹤清單寫不進去：${saveError instanceof Error ? saveError.message : saveError}`));
     }
   }
 }
