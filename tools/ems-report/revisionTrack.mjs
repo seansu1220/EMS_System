@@ -44,6 +44,7 @@ import { padRange } from './dateRange.mjs';
  * @property {boolean} cloudSynced 雲端（工單）是否已寫入最新狀態
  * @property {number} failCount 連續失敗次數
  * @property {string|null} lastError 最近一次失敗的原因
+ * @property {number} [diffRuleVersion] 比對時用的是第幾版判斷規則（v1.57.2 起才記；沒有＝第 1 版）
  */
 
 /**
@@ -264,6 +265,21 @@ export function withEntry(tracker, entry) {
       ? { ...item, state: /** @type {RevisionState} */ ('superseded'), cloudSynced: !item.requestId }
       : item));
   return { ...tracker, entries: [...entries, entry] };
+}
+
+/**
+ * 比對規則升版後，哪幾件已比對過的要拿本機兩份 PDF 重新比對（純函式）。
+ *
+ * 只挑兩份檔都在的 `compared`；舊紀錄沒有 `diffRuleVersion` 當作第 1 版。
+ *
+ * @param {Tracker} tracker
+ * @param {number} ruleVersion 目前的規則版本（`UNLOCK.revision.diffRuleVersion`）
+ * @returns {RevisionEntry[]}
+ */
+export function pickStaleComparisons(tracker, ruleVersion) {
+  return tracker.entries.filter((entry) => entry.state === 'compared'
+    && Boolean(entry.backupFile) && Boolean(entry.closedFile)
+    && (entry.diffRuleVersion ?? 1) < ruleVersion);
 }
 
 /**

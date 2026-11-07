@@ -212,3 +212,11 @@ test('修改內容分頁：同一件改好幾處時，編號～出勤車輛上�
   assert.deepEqual([4, 5, 6].map((row) => sheet.getCell(`F${row}`).value), ['GCS-E', 'GCS-V', 'GCS-M']);
   assert.deepEqual(sheet.getCell('A4').value, { text: '02', hyperlink: '已結案/02_DONE2' });
 });
+
+test('生命徵象的勾選寫出時間點與欄位', () => {
+  const [row] = toChangeRows({
+    kind: 'checkbox', before: ['■'], after: ['□'], fields: ['生命徵象（送醫途中）意識狀況'],
+    fieldSource: 'inline', segments: [], option: '清',
+  }, 2000);
+  assert.equal(row.field, '生命徵象（送醫途中）意識狀況：勾選「清」');
+});

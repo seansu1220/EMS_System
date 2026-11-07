@@ -164,7 +164,10 @@ function clipCell(text, maxLength) {
 export function toChangeRows(change, maxLength) {
   const show = (parts) => clipCell(parts.filter(Boolean).join(' ').trim(), maxLength) || '（空白）';
   if (change.kind === 'checkbox') {
-    return [{ field: `勾選${change.option ? `「${change.option}」` : '（認不出是哪一項）'}`, before: show(change.before), after: show(change.after) }];
+    // 生命徵象表裡的勾選（意識狀況）判斷得出是哪個時間點的哪一欄，寫在前面。
+    const block = change.fields.length > 0 ? `${change.fields.join('、')}：` : '';
+    const option = change.option ? `「${change.option}」` : '（認不出是哪一項）';
+    return [{ field: `${block}勾選${option}`, before: show(change.before), after: show(change.after) }];
   }
   if (change.fieldSource === 'inline' && change.segments.length > 0) {
     return change.segments.map((segment) => ({

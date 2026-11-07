@@ -14,7 +14,10 @@
  *   2. 同一頁、同一位置的兩段配成一對；文字不同＝改了，配不到＝新增或刪除
  *   3. 判斷是哪一欄——**只認設定檔裡的固定標籤**（`UNLOCK.revision.layoutLabels`，取自實際表格）：
  *      - 同一列、前面最近的標籤（`傷病患姓名　王小明`）
+ *      - 同一列從標籤開頭或**結尾**量都可以（長標籤後面接的值，例如指派案號）
  *      - 找不到就找上方表頭（`到達現場時間` 下面那格；生命徵象一欄標籤對三欄數值）
+ *      - 生命徵象表再加上時間點（抵達現場／送醫途中／到院後，見 `vitalTimepointOf`）
+ *      - 固定區塊（補述欄、受傷部位及尺寸）：位置落在範圍裡就是它
  *      - 都找不到就找附近的標籤，只能說「附近」
  *      不拿「兩份都沒變的字」當標籤：沒改過的姓名也是兩份都一樣，拿它當標籤就會被寫上雲端。
  *   4. 勾選框：`□ 保暖` → `■ 保暖`（記號與選項同一段），或單獨一個 `□` → `■`（選項在旁邊）
@@ -37,7 +40,9 @@
  * @property {string[]} fields 判斷出的欄位（可能為空）
  * @property {'inline'|'nearby'|'unknown'} fieldSource
  *   `inline`＝同一列前面的標籤或正上方的表頭（可信）；`nearby`＝只是附近的標籤
- * @property {{label: string, before: string, after: string}[]} segments 各欄位改前改後的值（`inline` 時才有）
+ * @property {{label: string, baseLabel?: string, before: string, after: string}[]} segments
+ *   各欄位改前改後的值（`inline` 時才有）。`label` 是顯示名稱（生命徵象會加上時間點，
+ *   例如「生命徵象（到院後）量測時間」）；`baseLabel` 是表上印的欄位名，雲端白名單／個資判斷用它
  * @property {string|null} option 勾選框的選項文字（本機報告用；可能就是病歷內容，不上雲）
  */
 
@@ -49,10 +54,22 @@
  * @property {string[]} cloudValueLabels 雲端可以寫出內容的欄位（完全相等）
  * @property {number} cloudMaxItems
  * @property {number} cloudMaxValueLength
- * @property {{matchTolerance: number, rowTolerance: number, sameRowMaxGap: number,
+ * @property {{matchTolerance: number, rowTolerance: number, sameRowMaxGap: number, sameRowEndGap?: number,
  *   headerMaxGap: number, headerColTolerance: number, nearbyMaxDistance: number,
  *   optionMaxGap: number, regions?: {label: string, rowFrom: number, rowTo: number,
  *   colFrom: number, colTo: number}[]}} layout 版面判斷的距離（pt）與固定區塊
+ * @property {VitalSignsConfig} [vitalSigns] 生命徵象表的時間點（沒設就不加時間點）
+ */
+
+/**
+ * @typedef {Object} VitalSignsConfig 生命徵象表（對應 `UNLOCK.revision.vitalSigns`）
+ * @property {string} title 表名
+ * @property {{label: string, name: string}[]} timepoints 表上印的時間點標籤 → 顯示名稱
+ * @property {string[]} columns 這張表的欄位（換成 labelNames 之後的名稱）
+ * @property {Record<string, string>} [columnNames] 欄位的顯示名稱
+ * @property {number} rowAbove 一格最多在時間點標籤上方多遠
+ * @property {number} rowBelow 一格最多在時間點標籤下方多遠
+ * @property {number} colLead 一格最多在時間點標籤左邊多遠
  */
 
 /** 勾選框記號。 */
@@ -163,10 +180,10 @@ export function attributeCell(cell, labels, layout) {
     && cell.col >= area.colFrom && cell.col <= area.colTo);
   if (region) return { label: region.label, source: 'inline' };
   const onPage = labels.filter((label) => label.page === cell.page);
-  // 1. 同一列、在它前面、最近的標籤
+  // 1. 同一列、在它前面、最近的標籤（從標籤開頭量，或從標籤結尾量，任一條成立）
   const sameRow = onPage
     .filter((label) => Math.abs(label.row - cell.row) <= layout.rowTolerance
-      && label.col < cell.col && cell.col - label.col <= layout.sameRowMaxGap)
+      && label.col < cell.col && isWithinSameRowGap(label, cell, layout))
     .sort((left, right) => right.col - left.col)[0];
   if (sameRow) return { label: displayLabel(sameRow.str), source: 'inline' };
   // 2. 正上方的表頭（欄位差不多對齊，往上最近的那一個）
@@ -184,6 +201,83 @@ export function attributeCell(cell, labels, layout) {
   return { label: null, source: 'unknown' };
 }
 
+/**
+ * 同一列的標籤離這一格夠不夠近：從標籤開頭量不超過 `sameRowMaxGap`，
+ * 或從標籤**結尾**量不超過 `sameRowEndGap`（長標籤後面接的值，例如指派案號）。
+ */
+function isWithinSameRowGap(label, cell, layout) {
+  if (cell.col - label.col <= layout.sameRowMaxGap) return true;
+  if (layout.sameRowEndGap == null) return false;
+  const gapFromEnd = cell.col - (label.col + (label.width ?? 0));
+  return gapFromEnd >= -layout.rowTolerance && gapFromEnd <= layout.sameRowEndGap;
+}
+
+/**
+ * 生命徵象表上印的時間點標籤（`現場`、`送醫途中`、`到院後`），帶上顯示名稱。
+ * @param {ReturnType<typeof withFrame>} items
+ * @param {VitalSignsConfig|undefined} vitalSigns
+ * @returns {(ReturnType<typeof withFrame>[number] & {timepointName: string})[]}
+ */
+function findVitalTimepoints(items, vitalSigns) {
+  if (!vitalSigns) return [];
+  const nameByKey = new Map(vitalSigns.timepoints.map((timepoint) => [labelKey(timepoint.label), timepoint.name]));
+  return items
+    .filter((item) => nameByKey.has(labelKey(item.str)))
+    .map((item) => ({ ...item, timepointName: nameByKey.get(labelKey(item.str)) }));
+}
+
+/**
+ * 這一格是生命徵象表哪個時間點的（純函式）；不在表裡回傳 null。
+ *
+ * 時間點標籤印在每一格最下面：取「列不早於這格 `rowBelow`、不晚於 `rowAbove`」裡最上面那一個。
+ *
+ * @param {{row: number, col: number, page: number}} cell
+ * @param {ReturnType<typeof findVitalTimepoints>} timepoints
+ * @param {VitalSignsConfig|undefined} vitalSigns
+ * @returns {string|null} 時間點的顯示名稱
+ */
+export function vitalTimepointOf(cell, timepoints, vitalSigns) {
+  if (!vitalSigns) return null;
+  const found = timepoints
+    .filter((timepoint) => timepoint.page === cell.page
+      && cell.col >= timepoint.col - vitalSigns.colLead
+      && timepoint.row - cell.row >= -vitalSigns.rowBelow
+      && timepoint.row - cell.row <= vitalSigns.rowAbove)
+    .sort((upper, lower) => upper.row - lower.row)[0];
+  return found ? found.timepointName : null;
+}
+
+/**
+ * 欄位名稱加上生命徵象的時間點（`時間` → `生命徵象（到院後）量測時間`）。
+ * 不是生命徵象的欄位、或找不到時間點，照原樣回傳。
+ *
+ * @param {string} label 表上的欄位名（已換成 labelNames）
+ * @param {{row: number, col: number, page: number}} cell
+ * @param {{timepoints: ReturnType<typeof findVitalTimepoints>, config: DiffConfig}} context
+ * @returns {string}
+ */
+function qualifyVitalLabel(label, cell, context) {
+  const vitalSigns = context.config.vitalSigns;
+  if (!vitalSigns || !vitalSigns.columns.map(labelKey).includes(labelKey(label))) return label;
+  const timepoint = vitalTimepointOf(cell, context.timepoints, vitalSigns);
+  if (!timepoint) return label;
+  return `${vitalSigns.title}（${timepoint}）${vitalSigns.columnNames?.[label] ?? label}`;
+}
+
+/**
+ * 生命徵象表裡的勾選框（意識狀況的清／聲／痛／否）寫得出是哪個時間點的哪一欄；
+ * 其他勾選框不猜區塊（實際版面同一列橫跨好幾個區塊，猜出來常常是錯的），回傳 null。
+ * @returns {string|null}
+ */
+function vitalCheckboxField(cell, context) {
+  if (!context.config.vitalSigns) return null;
+  const attributed = attributeCell(cell, context.labels, context.config.layout);
+  if (attributed.source !== 'inline' || !attributed.label) return null;
+  const label = context.config.labelNames?.[attributed.label] ?? attributed.label;
+  const qualified = qualifyVitalLabel(label, cell, context);
+  return qualified === label ? null : qualified;
+}
+
 /** 單獨一個勾選框旁邊的選項文字（同一列、後面最近的一段；本機報告用）。 */
 function optionNextTo(cell, items, layout) {
   const next = items
@@ -198,7 +292,7 @@ function optionNextTo(cell, items, layout) {
  * 一段改動（配對成功但文字不同、或只出現在一邊）寫成一處不同。
  *
  * @param {{before: object|null, after: object|null}} diff
- * @param {{labels: object[], items: object[], config: DiffConfig}} context
+ * @param {{labels: object[], items: object[], timepoints: object[], config: DiffConfig}} context
  * @returns {SheetChange}
  */
 function describeCell(diff, context) {
@@ -212,16 +306,19 @@ function describeCell(diff, context) {
     // 選項文字（`■ 保暖` 的「保暖」，或單獨 `□` 旁邊那個字）準得多，直接寫進本機報告。
     const option = checkboxOption(afterText) ?? checkboxOption(beforeText)
       ?? optionNextTo(cell, context.items, context.config.layout);
+    const field = vitalCheckboxField(cell, context);
     return {
-      kind: 'checkbox', before: [beforeText], after: [afterText], fields: [], fieldSource: 'unknown', segments: [], option,
+      kind: 'checkbox', before: [beforeText], after: [afterText], fields: field ? [field] : [],
+      fieldSource: field ? 'inline' : 'unknown', segments: [], option,
     };
   }
   const attributed = attributeCell(cell, context.labels, context.config.layout);
   const source = attributed.source;
-  const label = attributed.label ? context.config.labelNames?.[attributed.label] ?? attributed.label : null;
+  const baseLabel = attributed.label ? context.config.labelNames?.[attributed.label] ?? attributed.label : null;
+  const label = baseLabel && source === 'inline' ? qualifyVitalLabel(baseLabel, cell, context) : baseLabel;
   const fields = label ? [label] : [];
   const segments = label && source === 'inline'
-    ? [{ label, before: beforeText.trim(), after: afterText.trim() }]
+    ? [{ label, baseLabel, before: beforeText.trim(), after: afterText.trim() }]
     : [];
   return { kind: 'value', before: [beforeText], after: [afterText], fields, fieldSource: source, segments, option: null };
 }
@@ -264,8 +361,10 @@ export function describeChanges(beforeItems, afterItems, config) {
   const after = withFrame(afterItems.filter(keep));
   const { pairs, removed, added } = matchItems(before, after, config.layout.matchTolerance);
   // 標籤從結案後那份找（兩份是同一個範本，位置一樣）；找不到再看解鎖前那份。
-  const labels = findLayoutLabels(after.length > 0 ? after : before, config.layoutLabels);
-  const context = { labels, items: after, config };
+  const template = after.length > 0 ? after : before;
+  const labels = findLayoutLabels(template, config.layoutLabels);
+  const timepoints = findVitalTimepoints(template, config.vitalSigns);
+  const context = { labels, items: after, timepoints, config };
   const diffs = [
     ...pairs
       .filter((pair) => pair.before.str.replace(/[\s　]+/g, '') !== pair.after.str.replace(/[\s　]+/g, ''))
@@ -312,8 +411,10 @@ function describeValueForCloud(change, config) {
   const names = change.fields.map((field) => `「${field}」`).join('');
   if (change.fieldSource === 'nearby') return `${names}附近的內容有更動`;
   return change.segments.map((segment) => {
-    const showable = config.cloudValueLabels.map(labelKey).includes(labelKey(segment.label))
-      && !isSensitiveLabel(segment.label, config.sensitiveLabels);
+    // 白名單與個資判斷看表上印的欄位名（`時間`），不看加了時間點的顯示名稱。
+    const baseLabel = segment.baseLabel ?? segment.label;
+    const showable = config.cloudValueLabels.map(labelKey).includes(labelKey(baseLabel))
+      && !isSensitiveLabel(baseLabel, config.sensitiveLabels);
     if (!showable) return `更正「${segment.label}」`;
     const before = toCloudValue(segment.before, config.cloudMaxValueLength);
     const after = toCloudValue(segment.after, config.cloudMaxValueLength);
@@ -326,7 +427,8 @@ function describeValueForCloud(change, config) {
  * 雲端版的差異摘要（網頁工單上顯示用，**不含病患資料**）。
  *
  * - 填值：同一欄只寫一次
- * - 勾選框：合成一句「有 N 個勾選項目有更動」，**不寫勾了哪一項**（那本身就是病歷內容）
+ * - 勾選框：合成一句「有 N 個勾選項目有更動」，**不寫勾了哪一項**（那本身就是病歷內容）；
+ *   生命徵象表裡的勾選（意識狀況）判斷得出欄位，寫「「生命徵象（到院後）意識狀況」勾選有更動」
  * - 判斷不出欄位的：合成一句「有 N 處」
  *
  * @param {SheetChange[]} changes
@@ -338,7 +440,8 @@ export function toCloudItems(changes, config) {
   let unknownValues = 0;
   let checkboxes = 0;
   for (const change of changes) {
-    if (change.kind === 'checkbox') checkboxes += 1;
+    if (change.kind === 'checkbox' && change.fields.length > 0) items.push(`「${change.fields[0]}」勾選有更動`);
+    else if (change.kind === 'checkbox') checkboxes += 1;
     else if (change.fieldSource === 'unknown') unknownValues += 1;
     else items.push(describeValueForCloud(change, config));
   }
@@ -388,7 +491,8 @@ export function formatLocalReport(meta, changes, config) {
       ? '未能判斷欄位'
       : `${change.fields.join('、')}${change.fieldSource === 'nearby' ? '（附近）' : ''}`;
     if (change.kind === 'checkbox') {
-      lines.push(`${position + 1}. 〔勾選〕${change.option ? `「${change.option}」` : '（認不出是哪一項）'}`);
+      const block = change.fields.length > 0 ? `・${change.fields.join('、')}` : '';
+      lines.push(`${position + 1}. 〔勾選${block}〕${change.option ? `「${change.option}」` : '（認不出是哪一項）'}`);
     } else {
       lines.push(`${position + 1}. 〔${where}〕`);
     }

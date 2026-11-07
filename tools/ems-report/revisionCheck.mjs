@@ -35,6 +35,7 @@ import {
   isClosedStatus,
   loadTracker,
   pickSheetButton,
+  pickStaleComparisons,
   planRevisionWork,
   revisionFileNames,
   toCloudRevision,
@@ -68,13 +69,14 @@ export async function readLocalSheetItems(fileName) {
  *
  * @param {import('./revisionTrack.mjs').RevisionEntry} entry
  * @param {{beforeItems: import('./pdfText.mjs').PdfTextItem[],
- *   afterItems: import('./pdfText.mjs').PdfTextItem[], closedFile: string}} sheets
+ *   afterItems: import('./pdfText.mjs').PdfTextItem[], closedFile: string, comparedAt?: string}} sheets
+ *   `comparedAt`：重新比對時沿用原本的比對時間（結案後那份是當時抓的）
  * @returns {Promise<Partial<import('./revisionTrack.mjs').RevisionEntry>>}
  */
 async function compareAndReport(entry, sheets) {
   const config = UNLOCK.revision;
   const changes = describeChanges(sheets.beforeItems, sheets.afterItems, config);
-  const comparedAt = new Date().toISOString();
+  const comparedAt = sheets.comparedAt ?? new Date().toISOString();
   const names = revisionFileNames(entry.temsis, entry.version);
   const report = formatLocalReport(
     {
@@ -108,7 +110,34 @@ async function compareAndReport(entry, sheets) {
     cloudSynced: !entry.requestId,
     failCount: 0,
     lastError: null,
+    diffRuleVersion: config.diffRuleVersion,
   };
+}
+
+/**
+ * 比對規則升版後，已比對過的案件拿本機兩份 PDF 重新比對（不必回系統），
+ * 改寫差異說明並標成「雲端待更新」，網頁上的說法跟著換成新規則。
+ * 一件失敗只記警告，不影響其他件，也不動原本的比對結果。
+ */
+async function refreshStaleComparisons() {
+  const stale = pickStaleComparisons(await loadTracker(TRACKER_FILE), UNLOCK.revision.diffRuleVersion);
+  if (stale.length === 0) return;
+  log.step(`比對規則更新了，用本機的兩份紀錄表重新比對 ${stale.length} 件`);
+  for (const entry of stale) {
+    try {
+      const beforeItems = await readLocalSheetItems(entry.backupFile);
+      const afterItems = await readLocalSheetItems(entry.closedFile);
+      const patch = await compareAndReport(entry, {
+        beforeItems, afterItems, closedFile: entry.closedFile, comparedAt: entry.comparedAt ?? undefined,
+      });
+      await updateTrackedEntry(TRACKER_FILE, keyOf(entry), patch);
+    } catch (error) {
+      log.warn(
+        `　TEMSIS ${maskCode(entry.temsis)}：重新比對失敗，先保留原本的結果`
+          + `（${error instanceof Error ? error.message : error}）`,
+      );
+    }
+  }
 }
 
 /** 終端機只印雲端版摘要（不含病患資料），完整內容看報告檔。 */
@@ -260,6 +289,7 @@ export async function checkRevisionsSafely(session, options = {}) {
   const summary = { checked: 0, compared: 0 };
   try {
     await organizeRevisionFiles();
+    await refreshStaleComparisons();
     const now = new Date();
     const work = planRevisionWork(await loadTracker(TRACKER_FILE), now, UNLOCK.revision);
     const total = work.toCheck.length + work.toCompareOffline.length + work.toExpire.length;

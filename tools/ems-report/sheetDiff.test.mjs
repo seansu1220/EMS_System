@@ -188,3 +188,51 @@ test('GCS 的 M 分數：標籤顯示成 GCS-M，數值寫得出改前改後', (
   const changes = describeChanges([...labels, at(420, 712, '5')], [...labels, at(420, 712, '6')], CONFIG);
   assert.deepEqual(toCloudItems(changes, CONFIG).items, ['「GCS-M」5 → 6']);
 });
+
+/** 生命徵象表：表頭（列 403）＋三個時間點標籤（印在每一格最下面，位置取自 2026110610100310422401）。 */
+const VITALS = [
+  at(403, 451, '時間'), at(403, 490, '意識狀況'), at(403, 682, 'GCS'), at(403, 732, 'SpO2'),
+  at(424.4, 450, '現場'), at(446.4, 442, '送醫途中'), at(469.4, 446, '到院後'),
+];
+
+test('生命徵象的量測時間：時間在時間點標籤上方，11:31 屬於「到院後」不是「送醫途中」', () => {
+  const build = (third) => [...VITALS, at(414.4, 448, '10:50'), at(436.4, 448, '11:10'), at(459.4, 448, third)];
+  const changes = describeChanges(build('10:50'), build('11:31'), CONFIG);
+  assert.deepEqual(changes[0].fields, ['生命徵象（到院後）量測時間']);
+  assert.deepEqual(toCloudItems(changes, CONFIG).items, ['「生命徵象（到院後）量測時間」10:50 → 11:31']);
+});
+
+test('生命徵象各時間點分開列：抵達現場、送醫途中的 GCS 各寫一項', () => {
+  const build = (value) => [...VITALS, at(420.4, 653, 'E'), at(420.4, 663.5, value), at(441.4, 653, 'E'), at(441.4, 663.5, value)];
+  const changes = describeChanges(build('4'), build('1'), CONFIG);
+  assert.deepEqual(toCloudItems(changes, CONFIG).items, [
+    '「生命徵象（抵達現場）GCS-E」4 → 1',
+    '「生命徵象（送醫途中）GCS-E」4 → 1',
+  ]);
+});
+
+test('生命徵象的意識狀況勾選：寫得出時間點與欄位，雲端不寫勾了哪一項', () => {
+  const build = (mark) => [...VITALS, at(435.5, 486.5, mark), at(436.4, 493, '清')];
+  const changes = describeChanges(build('■'), build('□'), CONFIG);
+  assert.equal(changes[0].kind, 'checkbox');
+  assert.deepEqual(changes[0].fields, ['生命徵象（送醫途中）意識狀況']);
+  assert.equal(changes[0].option, '清');
+  const cloud = toCloudItems(changes, CONFIG).items;
+  assert.deepEqual(cloud, ['「生命徵象（送醫途中）意識狀況」勾選有更動']);
+});
+
+test('受傷部位說明（人形圖旁一行一行往下排）合成一處「受傷部位及尺寸」，雲端只寫欄位名', () => {
+  const label = at(55.4, 666.5, '請在圖上標示說明受傷部位及其尺寸');
+  const before = [label, at(64.6, 732, '1:肢體，擦傷，3公分。2:背'), at(71.6, 732, '，擦傷，5公分。')];
+  const after = [label, at(64.6, 732, '1:肢體，擦傷，3公分。2:腹'), at(71.6, 732, '，右腹，擦傷，3公分。'), at(78.6, 732, '3:手心')];
+  const changes = describeChanges(before, after, CONFIG);
+  assert.equal(changes.length, 1);
+  assert.deepEqual(changes[0].fields, ['受傷部位及尺寸']);
+  assert.deepEqual(toCloudItems(changes, CONFIG).items, ['更正「受傷部位及尺寸」']);
+});
+
+test('長標籤後面接的值（從標籤結尾量）：指派案號認得到', () => {
+  const label = { ...at(15.2, 625, '救災救護指揮中心指派案號:'), width: 112.5 };
+  const changes = describeChanges([label, at(15.2, 745, '20261104180923003')], [label, at(15.2, 745, '20261104180923004')], CONFIG);
+  assert.deepEqual(changes[0].fields, ['救災救護指揮中心指派案號']);
+});

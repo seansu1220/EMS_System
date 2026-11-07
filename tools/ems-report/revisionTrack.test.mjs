@@ -23,6 +23,7 @@ import {
   nextBackupVersion,
   parseBackupVersion,
   pickSheetButton,
+  pickStaleComparisons,
   planRevisionWork,
   folderedRevisionPath,
   revisionCaseFolder,
@@ -185,4 +186,19 @@ test('不設停止期限（null）時，等再久、失敗再多次都照樣追'
     { maxWaitDays: null, maxFailures: null });
   assert.equal(work.toExpire.length, 0);
   assert.equal(work.toCheck.length, 1);
+});
+
+test('比對規則升版：只挑兩份檔都在、規則版本較舊的已比對案件', () => {
+  const base = { backupFile: 'a.pdf', closedFile: 'b.pdf', state: 'compared' };
+  const tracker = {
+    formatVersion: 1,
+    entries: [
+      { ...base, temsis: '1', version: 1 },
+      { ...base, temsis: '2', version: 1, diffRuleVersion: 2 },
+      { ...base, temsis: '3', version: 1, closedFile: null },
+      { ...base, temsis: '4', version: 1, state: 'waiting' },
+    ],
+  };
+  assert.deepEqual(pickStaleComparisons(tracker, 2).map((entry) => entry.temsis), ['1']);
+  assert.deepEqual(pickStaleComparisons(tracker, 1), []);
 });
