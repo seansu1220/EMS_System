@@ -376,21 +376,18 @@ export function applyDecisions(outcomes, decisions) {
  * @returns {string[][]} 與 {@link REVIEW_COLUMNS} 同順序（最後兩欄留白給使用者填）
  */
 /**
- * 這個影音檔看了**有沒有可能改變數字**（純函式，2026-11-13 加）。
+ * 這個影音檔是不是**到院後才傳**的（純函式，2026-11-13 加）。
  *
- * 到院後才傳的檔案，就算確定是 12 導程也不算進分子——除非備註有補述原因（見 `isMeaningfulRemark`）。
- * 2026-10 實跑抓到一件：ZOLL 介接心電圖到院後 8 分鐘才傳，案件影音的照片也都是到院後傳的，
- * 卻列進清單請使用者看；而使用者若因為「那確實是 12 導程」填了「算」，
- * 人工判定是最高權威，會把一件到院後的案子硬算進分子。
+ * 使用者 2026-11-13 說明：案件影音本來就多半是到院後才傳——同仁在院前傳輸出了問題，
+ * 事後才把當時做的心電圖補傳上來。因此到院後才傳的**照樣要列**，
+ * 但要請使用者看的是「照片上那張心電圖是不是到院前做的」，不是「是不是 12 導程」。
+ * 填「算」就計入分子（人工判定是最高權威，見 `ekgVerify.countsAsNumerator`）。
  *
- * @param {{timing?: string, remark?: string}} item
+ * @param {{timing?: string}} item
  * @returns {boolean}
  */
-export function canAffectCount(item) {
-  if (item?.timing !== '到院後') return true;
-  // 會進人工判定的都是「案件影音」那一類（人自己上傳、自己打的字），比照 `ekgVerify.remarkOf`。
-  const mediaType = EKG.verify.mediaMarkers?.[0] ?? '案件影音';
-  return isMeaningfulRemark(item.remark, EKG.verify.remark, { trustAsHuman: true, fileType: mediaType });
+export function isUploadedAfterArrival(item) {
+  return item?.timing === '到院後';
 }
 
 export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => false) {
@@ -401,7 +398,7 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
 
     // 影音檔分兩種：判不出內容的（請他點開決定）、靠照片辨識判出來的（請他覆核）。
     // 兩種的「要你做什麼」不一樣，寫在同一句會讓人不知道該不該動手。
-    const recognized = reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead && canAffectCount(item));
+    const recognized = reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead);
 
     /**
      * ⚠ **這一件已經算進分子了，判不出內容的那些檔案就不必再列**
@@ -417,7 +414,7 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
      */
     const unreadable = isCounted(outcome)
       ? []
-      : reviews.filter((item) => item.kind !== MEDIA_KIND.twelveLead && canAffectCount(item));
+      : reviews.filter((item) => item.kind !== MEDIA_KIND.twelveLead);
 
     if (!isUnknown && unreadable.length === 0 && recognized.length === 0) continue;
 
@@ -426,6 +423,13 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
     if (unreadable.length > 0) reasons.push(`案件影音有 ${unreadable.length} 個檔案判不出內容`);
     if (recognized.length > 0) {
       reasons.push(`案件影音有 ${recognized.length} 個檔案靠照片辨識判成 12 導程，請覆核`);
+    }
+    const lateCount = [...unreadable, ...recognized].filter(isUploadedAfterArrival).length;
+    if (lateCount > 0) {
+      reasons.push(
+        `其中 ${lateCount} 個是到院後才傳的：請看照片上心電圖的時間，`
+          + '是到院前做的（院前傳不出去、事後補傳）就填「算」，到院後才做的填「不算」',
+      );
     }
 
     /**

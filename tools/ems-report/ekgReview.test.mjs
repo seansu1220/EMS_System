@@ -25,7 +25,6 @@ import {
   readDecisions,
   reviewFilePath,
   writeReviewList,
-  canAffectCount,
   hasBrokenReviewFile,
 } from './ekgReview.mjs';
 import { countsAsNumerator, VERDICT } from './ekgVerify.mjs';
@@ -258,14 +257,13 @@ test('要你看的檔案：下載失敗、空檔、不見了都要重查，正�
   assert.equal(hasBrokenReviewFile({}, sizes), false);
 });
 
-test('到院後才傳的影音不列：看了也不會改變數字，填「算」反而會把到院後的硬算進分子', () => {
-  // 2026-10 實跑：ZOLL 介接心電圖到院後才傳，案件影音照片也都是到院後，卻被列進清單。
+test('到院後才傳的影音照樣列，並請使用者看心電圖是不是到院前做的', () => {
+  // 使用者 2026-11-13：案件影音多半是院前傳不出去、事後補傳，到院後才傳不代表到院後才做。
   const rows = buildReviewRows([
     outcome('T-1', { verdict: VERDICT.after, mediaReviews: [mediaReview({ timing: '到院後', remark: '案件影音' })] }),
     outcome('T-2', { verdict: VERDICT.after, mediaReviews: [mediaReview({ timing: '到院前' })] }),
   ], VERDICT.unknown);
-  assert.equal(rows.length, 1);
-  assert.equal(at(rows[0], 'TEMSIS'), 'T-2');
-  assert.equal(canAffectCount({ timing: '比不出來' }), true, '比不出來的照樣要人看');
-  assert.equal(canAffectCount({ timing: '到院後', remark: '' }), false);
+  assert.equal(rows.length, 2);
+  assert.match(String(at(rows[0], '為什麼要你看')), /到院後才傳.*到院前做的/);
+  assert.doesNotMatch(String(at(rows[1], '為什麼要你看')), /到院後才傳/);
 });
