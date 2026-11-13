@@ -150,6 +150,12 @@ export async function savePhotoForReview(monthRange, caseInfo, index, originalNa
   const tail = String(caseInfo.temsis ?? '').slice(-4) || '0000';
   const fileName = `${caseInfo.squad || '未知分隊'}-${day}-${tail}-${index}.${extension}`;
 
+  // 空檔存下來使用者也打不開（2026-10 月報表踩到 5 張），不如不存、清單改放網址。
+  if (!bytes || bytes.length === 0) {
+    log.warn(`要你看的檔案是空檔（0 位元組），不存：${fileName}`);
+    return null;
+  }
+
   try {
     const directory = reviewPhotoDir(monthRange);
     await fs.mkdir(directory, { recursive: true });
@@ -159,6 +165,75 @@ export async function savePhotoForReview(monthRange, caseInfo, index, originalNa
     log.warn(`要你看的檔案存不下來（清單上會改放網址）：${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
+}
+
+/**
+ * 「要你看的照片」資料夾裡的檔案**狀態**：檔名 → 位元組數（2026-11-13 加）。
+ * 資料夾不存在就回空的 Map（等於每個檔案都不見了）。
+ *
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Promise<Map<string, number>>}
+ */
+export async function listReviewPhotoSizes(monthRange) {
+  const directory = reviewPhotoDir(monthRange);
+  const sizes = new Map();
+  let names = [];
+  try {
+    names = await fs.readdir(directory);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      log.warn(`讀不到「${PHOTO_FOLDER}」資料夾（當成照片都不見了）：${error instanceof Error ? error.message : String(error)}`);
+    }
+    return sizes;
+  }
+  for (const name of names) {
+    try {
+      sizes.set(name, (await fs.stat(path.join(directory, name))).size);
+    } catch (error) {
+      log.warn(`讀不到照片檔大小：${name}（${error instanceof Error ? error.message : String(error)}）`);
+    }
+  }
+  return sizes;
+}
+
+/**
+ * 這一件的「要你看」檔案是不是**壞了**，要重新查一次（純函式）。
+ *
+ * 壞了＝下載失敗（`failed`），或存下來的檔案不見了／是 0 位元組。
+ * 2026-10 月報表有 5 張存成空檔，舊版重跑會直接跳過那幾件，空檔永遠修不好。
+ *
+ * @param {{mediaReviews?: Array<{kind: string, savedAs?: string}>}} outcome
+ * @param {Map<string, number>} photoSizes {@link listReviewPhotoSizes} 的輸出
+ * @returns {boolean}
+ */
+export function hasBrokenReviewFile(outcome, photoSizes) {
+  return (outcome?.mediaReviews ?? []).some((item) => {
+    if (item.kind === MEDIA_KIND.failed) return true;
+    if (!item.savedAs) return false;
+    return !((photoSizes.get(item.savedAs) ?? 0) > 0);
+  });
+}
+
+/**
+ * 刪掉「要你看的照片」資料夾裡的空檔（0 位元組）。
+ * 它們是舊版下載失敗留下來的，留著只會讓使用者以為照片壞了。
+ *
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @param {Map<string, number>} photoSizes
+ * @returns {Promise<number>} 刪掉幾個
+ */
+export async function removeEmptyReviewPhotos(monthRange, photoSizes) {
+  let removed = 0;
+  for (const [name, size] of photoSizes) {
+    if (size > 0) continue;
+    try {
+      await fs.unlink(path.join(reviewPhotoDir(monthRange), name));
+      removed += 1;
+    } catch (error) {
+      log.warn(`空檔刪不掉：${name}（${error instanceof Error ? error.message : String(error)}）`);
+    }
+  }
+  return removed;
 }
 
 /** 實際讀得到的那一份：新位置優先，沒有才回舊位置。 */

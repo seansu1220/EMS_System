@@ -59,7 +59,13 @@ import {
   isMeaningfulRemark,
 } from './ekgMedia.mjs';
 // 人工判定的兩個值。`ekgReview.mjs` 不反過來 import 本檔，因此沒有循環相依。
-import { DECISION as MANUAL_DECISION, savePhotoForReview } from './ekgReview.mjs';
+import {
+  DECISION as MANUAL_DECISION,
+  hasBrokenReviewFile,
+  listReviewPhotoSizes,
+  removeEmptyReviewPhotos,
+  savePhotoForReview,
+} from './ekgReview.mjs';
 import { readImageText, closeOcr } from './ekgOcr.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
@@ -952,6 +958,31 @@ async function verifyWithRetry(session, target, monthRange, timeContext) {
 }
 
 /**
+ * 找出「要你看的檔案」壞掉、要重查的案件（2026-11-13 加）。
+ *
+ * 已經算進分子的不重查：那些檔案看了也不會改變數字（見 `buildReviewRows`）。
+ * 順手把資料夾裡舊版留下的空檔刪掉。
+ *
+ * @param {Map<string, VerifyOutcome>} done 進度檔內容
+ * @param {import('./dateRange.mjs').MonthRange} monthRange
+ * @returns {Promise<Set<string>>} 要重查的 TEMSIS
+ */
+async function findCasesWithBrokenPhotos(done, monthRange) {
+  const photoSizes = await listReviewPhotoSizes(monthRange);
+  const removed = await removeEmptyReviewPhotos(monthRange, photoSizes);
+  if (removed > 0) log.info(`刪掉「要你看的照片」裡 ${removed} 個下載失敗留下的空檔`);
+
+  const broken = new Set();
+  for (const [temsis, outcome] of done) {
+    if (!countsAsNumerator(outcome) && hasBrokenReviewFile(outcome, photoSizes)) broken.add(temsis);
+  }
+  if (broken.size > 0) {
+    log.info(`有 ${broken.size} 件的照片上次沒下載成功（空檔或下載失敗），這次會重查並重新下載`);
+  }
+  return broken;
+}
+
+/**
  * 逐案查核整批案件。
  *
  * @param {import('./session.mjs').EmsSession} session
@@ -996,9 +1027,12 @@ export async function verifyEkgCases(session, cases, monthRange, options = {}) {
    * 紀錄表視窗還在載入。舊版連它一起跳過，等於把一次失敗永久固定下來，
    * 連程式修好了都救不回，只能整月重跑。
    */
+  const brokenPhotos = await findCasesWithBrokenPhotos(done, monthRange);
   const settled = (temsis) => {
     const outcome = done.get(temsis);
     if (outcome === undefined || outcome.verdict === VERDICT.unknown) return false;
+    // 要你看的檔案下載失敗或存成空檔：重查一次才有機會把照片補下來（2026-11-13 加）。
+    if (brokenPhotos.has(temsis)) return false;
     /**
      * ⚠ **判定規則改版後，舊結論不能沿用**（2026-09-21 加）。
      *

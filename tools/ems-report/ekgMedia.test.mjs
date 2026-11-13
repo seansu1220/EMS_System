@@ -185,6 +185,36 @@ test('沒有網址的那一列回「讀取失敗」，不會拿 undefined 去抓
   assert.equal(result.kind, MEDIA_KIND.failed);
 });
 
+test('系統回空檔（0 位元組）要重抓，重抓到了就照常判讀', async () => {
+  let calls = 0;
+  const body = JSON.stringify({ channels: ['aVR', 'aVL', 'aVF', 'V1'] });
+  const request = { get: async () => { calls += 1; return okResponse(calls === 1 ? '' : body); } };
+  const config = { ...EKG.verify.media, emptyBodyRetryDelayMs: 0 };
+  const result = await inspectMediaFile(request, { text: 'a.json', href: 'https://x/a.json' }, config);
+  assert.equal(calls, 2);
+  assert.equal(result.kind, MEDIA_KIND.twelveLead);
+});
+
+test('重抓完還是空檔：回「讀取失敗」，不交給照片辨識、也不存檔', async () => {
+  // 2026-10 月報表踩到：空檔被照片辨識寫成「讀不出任何字（可能拍糊）」，存下來的空檔打不開。
+  let ocrCalled = false;
+  let saved = false;
+  const config = { ...EKG.verify.media, emptyBodyRetryDelayMs: 0 };
+  const result = await inspectMediaFile(
+    fakeRequest(okResponse('')),
+    { text: 'IMG_1.jpg', href: 'https://x/IMG_1.jpg' },
+    config,
+    {
+      readImageText: async () => { ocrCalled = true; return { text: '', rounds: 1 }; },
+      onNeedsReview: async () => { saved = true; return 'x.jpg'; },
+    },
+  );
+  assert.equal(result.kind, MEDIA_KIND.failed);
+  assert.match(result.why, /空檔/);
+  assert.equal(ocrCalled, false);
+  assert.equal(saved, false);
+});
+
 // ── 照片 OCR（v1.40.0）────────────────────────────────────────
 
 test('OCR 文字正規化：大小寫、空白、aVvF 這種重複 V 都要收斂', () => {

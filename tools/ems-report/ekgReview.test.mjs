@@ -25,6 +25,7 @@ import {
   readDecisions,
   reviewFilePath,
   writeReviewList,
+  hasBrokenReviewFile,
 } from './ekgReview.mjs';
 import { countsAsNumerator, VERDICT } from './ekgVerify.mjs';
 import { PATHS } from './config.mjs';
@@ -243,4 +244,15 @@ test('檔案不存在時安靜地回空的，不可以讓整個月報表跑不�
   const result = await readDecisions(MONTH);
   assert.equal(result.decisions.size, 0);
   assert.deepEqual(result.unreadable, []);
+});
+
+test('要你看的檔案：下載失敗、空檔、不見了都要重查，正常的不重查', () => {
+  const sizes = new Map([['好的-1.jpg', 1024], ['空的-1.jpg', 0]]);
+  const outcome = (reviews) => ({ mediaReviews: reviews });
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '好的-1.jpg' }]), sizes), false);
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '空的-1.jpg' }]), sizes), true);
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '不見了-1.jpg' }]), sizes), true);
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '讀取失敗' }]), sizes), true);
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容' }]), sizes), false, '本來就沒存檔的不算壞');
+  assert.equal(hasBrokenReviewFile({}, sizes), false);
 });

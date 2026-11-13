@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-11-13　小工具 v1.57.4 人工判定的照片下載回來是空檔：重抓、不存、重跑時補下載
+
+### 問題描述
+使用者要填 2026-10 心電圖人工判定時，「要你看的照片」資料夾有很多張打不開。
+檢查發現 9 張裡有 5 張是 0 位元組的空檔，清單上那幾件卻寫「照片辨識試了幾輪都讀不出任何字（可能拍糊）」。
+
+### 根本原因
+- 抓案件影音時系統回 HTTP 200、內容卻是空的；`inspectMediaFile` 只檢查狀態碼與大小上限，沒檢查空檔，
+  照樣交給照片辨識（讀不出字 → 判成「程式讀不出內容」），再把空檔存進「要你看的照片」。
+- 重跑同一個月時，這幾件已經有結論、規則版號也沒變，會被直接跳過，空檔永遠補不回來。
+
+### 修改的檔案與內容
+- `tools/ems-report/config.mjs`：`EKG.verify.media` 新增 `emptyBodyRetries: 2`、`emptyBodyRetryDelayMs: 3000`。
+- `tools/ems-report/ekgMedia.mjs`：抓檔拆成 `fetchMediaBytes`；回來是空檔就重抓，重抓完還是空的回「讀取失敗」，
+  不交給照片辨識、不存檔；`response.body()` 失敗也回讀取失敗。
+- `tools/ems-report/ekgReview.mjs`：`savePhotoForReview` 遇到空的位元組不寫檔；新增 `listReviewPhotoSizes`、
+  `hasBrokenReviewFile`（純函式）、`removeEmptyReviewPhotos`。
+- `tools/ems-report/ekgVerify.mjs`：新增 `findCasesWithBrokenPhotos`，重跑時先刪舊空檔，
+  還沒算進分子、且照片下載失敗或存檔不見／是空檔的案件視為沒有結論、重查一次。
+- 測試：`ekgMedia.test.mjs` 加空檔重抓兩項、`ekgReview.test.mjs` 加壞檔判斷一項（共 606 項全過）。
+- `docs/TOOLS_SPEC.md`：3.16 人工判定清單新增「下載回來是空檔」。
+
 ## 2026-11-07　小工具 v1.57.3 勾選框寫出改了哪一個；修正 SpO2／血糖值被算成 GCS-M
 
 ### 問題描述

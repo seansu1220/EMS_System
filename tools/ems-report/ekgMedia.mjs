@@ -355,34 +355,11 @@ export async function inspectMediaFile(request, link, config = EKG.verify.media,
   }
   if (!link?.href) return { kind: MEDIA_KIND.failed, why: '這一列的檔案連結沒有網址' };
 
-  let response;
-  try {
-    response = await request.get(link.href, { timeout: config.fetchTimeoutMs });
-  } catch (error) {
-    return {
-      kind: MEDIA_KIND.failed,
-      why: `抓檔案時連線失敗：${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  if (!response.ok()) {
-    return { kind: MEDIA_KIND.failed, why: `抓檔案時系統回 HTTP ${response.status()}` };
-  }
-
-  // 先看長度再決定要不要整個讀進記憶體：有人把幾百 MB 的影片改成 .dat 傳上來，
-  // 整個讀進來會讓 Node 直接爆掉，而那種檔案本來就不會是心電圖。
-  const declaredLength = Number(response.headers()['content-length'] ?? '0');
-  if (declaredLength > config.maxBytes) {
-    return {
-      kind: MEDIA_KIND.notEcg,
-      why: `檔案 ${Math.round(declaredLength / 1024 / 1024)} MB，超過 ${Math.round(config.maxBytes / 1024 / 1024)} MB 上限，當成影音不判讀`,
-    };
-  }
+  const fetched = await fetchMediaBytes(request, link.href, config);
+  if (fetched.result) return fetched.result;
+  const { bytes, response } = fetched;
 
   try {
-    const bytes = await response.body();
-    if (bytes.length > config.maxBytes) {
-      return { kind: MEDIA_KIND.notEcg, why: '檔案超過大小上限，當成影音不判讀' };
-    }
     const result = handling === 'image'
       ? await inspectImage(
         bytes,
@@ -417,4 +394,78 @@ export async function inspectMediaFile(request, link, config = EKG.verify.media,
       why: `檔案抓回來了但解析不了：${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+/**
+ * 抓一個影音檔的位元組；**回來是空檔就重抓**（見 `config.emptyBodyRetries`）。
+ *
+ * 重抓完還是空的，回「讀取失敗」而不是交給判讀：
+ * 空檔丟給照片辨識只會得到「讀不出任何字」，被誤寫成拍糊，
+ * 而存下來的空檔使用者也打不開（2026-10 月報表實跑踩到）。
+ *
+ * @param {import('playwright-core').APIRequestContext} request
+ * @param {string} href
+ * @param {typeof EKG.verify.media} config
+ * @returns {Promise<{result: {kind: string, why: string}}
+ *   | {result?: undefined, bytes: Buffer, response: import('playwright-core').APIResponse}>}
+ *   有 `result`＝已經有結論（失敗或超過上限），呼叫端直接回傳它
+ */
+async function fetchMediaBytes(request, href, config) {
+  const attempts = 1 + Math.max(0, config.emptyBodyRetries ?? 0);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    try {
+      response = await request.get(href, { timeout: config.fetchTimeoutMs });
+    } catch (error) {
+      return {
+        result: {
+          kind: MEDIA_KIND.failed,
+          why: `抓檔案時連線失敗：${error instanceof Error ? error.message : String(error)}`,
+        },
+      };
+    }
+    if (!response.ok()) {
+      return { result: { kind: MEDIA_KIND.failed, why: `抓檔案時系統回 HTTP ${response.status()}` } };
+    }
+
+    // 先看長度再決定要不要整個讀進記憶體：有人把幾百 MB 的影片改成 .dat 傳上來，
+    // 整個讀進來會讓 Node 直接爆掉，而那種檔案本來就不會是心電圖。
+    const declaredLength = Number(response.headers()['content-length'] ?? '0');
+    if (declaredLength > config.maxBytes) {
+      return {
+        result: {
+          kind: MEDIA_KIND.notEcg,
+          why: `檔案 ${Math.round(declaredLength / 1024 / 1024)} MB，超過 ${Math.round(config.maxBytes / 1024 / 1024)} MB 上限，當成影音不判讀`,
+        },
+      };
+    }
+
+    let bytes;
+    try {
+      bytes = await response.body();
+    } catch (error) {
+      return {
+        result: {
+          kind: MEDIA_KIND.failed,
+          why: `檔案下載到一半失敗：${error instanceof Error ? error.message : String(error)}`,
+        },
+      };
+    }
+    if (bytes.length > config.maxBytes) {
+      return { result: { kind: MEDIA_KIND.notEcg, why: '檔案超過大小上限，當成影音不判讀' } };
+    }
+    if (bytes.length > 0) return { bytes, response };
+    if (attempt < attempts) await delay(config.emptyBodyRetryDelayMs ?? 0);
+  }
+  return {
+    result: {
+      kind: MEDIA_KIND.failed,
+      why: `系統回傳的是空檔（0 位元組），重抓 ${attempts} 次都一樣；請到系統的案件影音自己點開看`,
+    },
+  };
+}
+
+/** 等一段時間（毫秒）。 */
+function delay(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
