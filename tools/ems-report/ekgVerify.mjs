@@ -310,6 +310,12 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
   const baseline = await probe(content(page)).catch(() => null);
   const signatureOf = (found) => JSON.stringify(found?.matched ?? []);
   const baselineSignature = signatureOf(baseline);
+  // 其他框架也記下按之前的樣子，規則與內容框相同：要「按下去之後才變出來」才算（2026-11-13 加）。
+  const otherFrameBaselines = new Map();
+  for (const frame of page.frames()) {
+    if (frame === content(page)) continue;
+    otherFrameBaselines.set(frame, signatureOf(await probe(frame).catch(() => null)));
+  }
   if (baseline?.matched.length) {
     log.info(
       `（原畫面本來就有 ${baseline.matched.length} 列符合，多半是查詢條件區的元件，`
@@ -358,10 +364,20 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
           if (found?.matched.length) return describe(found, '另開的視窗');
         }
       }
+      // 清單在頁面下方、要捲動才看得到時，可能要捲到才會載入（2026-11-13 加，大園分隊 2026-10 實例）。
+      await scrollFramesToBottom(page);
       const inPlace = await probe(content(page)).catch(() => null);
       // 與按下去之前一模一樣＝畫面根本沒變，命中的是查詢條件區那一列，不是目標畫面。
       if (inPlace?.matched.length && signatureOf(inPlace) !== baselineSignature) {
         return describe(inPlace, '原本的畫面（按下去之後才出現）');
+      }
+      // 同一頁的其他框架（清單可能放在內容框以外的框架裡）。
+      for (const frame of page.frames()) {
+        if (frame === content(page)) continue;
+        const found = await probe(frame).catch(() => null);
+        if (found?.matched.length && signatureOf(found) !== otherFrameBaselines.get(frame)) {
+          return describe(found, '同一頁的其他框架（按下去之後才出現）');
+        }
       }
 
       // 系統已經明說開不了，再等下去也不會有內容。
@@ -387,6 +403,25 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
     page.off('dialog', onDialog);
     // 看完立刻關閉，畫面上不留個案明細。
     for (const openedPage of opened) await openedPage.close().catch(() => {});
+  }
+}
+
+/**
+ * 把這一頁每個框架都捲到最底（2026-11-13 加）。
+ *
+ * 使用者說明：上傳清單出現在上傳表單的**同一頁下方、要捲動才看得到**。
+ * 有的頁面要捲到才載入下方內容，不捲的話程式等滿 30 秒也看不到清單。
+ * 只捲動、不點任何東西，失敗也不影響後續（捲不動就照原本的方式找）。
+ *
+ * @param {import('playwright-core').Page} page
+ * @returns {Promise<void>}
+ */
+async function scrollFramesToBottom(page) {
+  for (const frame of page.frames()) {
+    await frame.evaluate(() => {
+      const height = Math.max(document.body?.scrollHeight ?? 0, document.documentElement?.scrollHeight ?? 0);
+      window.scrollTo(0, height);
+    }).catch(() => {});
   }
 }
 
@@ -762,6 +797,12 @@ async function verifyOneCase(context, page, target, range, timeContext) {
   const panel = await readUploadPanel(context, page);
   const files = classifyFileRows(panel?.rows ?? []);
   const where = panel?.where ?? '原本的畫面';
+  // 有讀到列、卻既不是 12 導程也不是案件影音時，把讀到的檔案類型寫出來（2026-11-13 加）：
+  // 檔案類型是系統的分類字樣、不是個資，卻是「程式為什麼沒認出來」唯一的線索。
+  if (files.others.length > 0 && files.twelveLead.length === 0 && files.media.length === 0) {
+    const types = files.others.map((row) => `「${row.fileType || '(空白)'}」`).join('、');
+    log.info(`上傳清單有 ${files.others.length} 列，但檔案類型都不是 12 導程或案件影音：${types}`);
+  }
 
   // ---- 1. 檔案類型欄就寫著 12 導程的那幾列（原本就有的主要路徑）----
   let picked = pickEarliestFileRow(files.twelveLead, localContext);

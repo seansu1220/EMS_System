@@ -374,7 +374,31 @@ function queryPage(params) {
     //   - 檔案連結的 href：**刻意不遮蔽**，遮了就抓不到檔案。
     //     它只存在記憶體與 `out/internal/` 的內部清單，不印在終端機、不進 log。
     const wantedType = params.typeColumns.map(normalize);
-    const textOfCell = (cell) => (cell?.textContent || '').replace(/\s+/g, ' ').trim();
+    /**
+     * 儲存格的文字；**下拉選單只取選中的那一項、輸入框取它的值**（2026-11-13 加）。
+     *
+     * 2026-10 大園分隊有一件，使用者在系統上看到檔案類型是「12導程心電圖」，
+     * 程式卻判成「上傳清單裡沒有 12 導程」。只讀 textContent 的話：
+     * 輸入框裡的字讀不到（變成空白）；下拉選單則會把**所有選項**串在一起
+     * （每一列都含「12導程」，全部誤判）。兩種都要換成畫面上真正顯示的那一段。
+     */
+    const textOfCell = (cell) => {
+      if (!cell) return '';
+      const hasControls = cell.querySelector('select, input, textarea');
+      if (!hasControls) return (cell.textContent || '').replace(/\s+/g, ' ').trim();
+      const clone = cell.cloneNode(true);
+      const originals = [...cell.querySelectorAll('select, input, textarea')];
+      [...clone.querySelectorAll('select, input, textarea')].forEach((control, position) => {
+        const original = originals[position];
+        let shown = '';
+        if (original.tagName === 'SELECT') shown = original.selectedOptions?.[0]?.textContent || '';
+        else if (!['hidden', 'button', 'submit', 'checkbox', 'radio', 'file'].includes(original.type)) {
+          shown = original.value || '';
+        }
+        control.replaceWith(document.createTextNode(` ${shown} `));
+      });
+      return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+    };
 
     for (const table of document.querySelectorAll('table')) {
       const headerRow = [...table.rows].find((item) => item.querySelector('th')) || table.rows[0];
