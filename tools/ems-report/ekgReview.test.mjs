@@ -246,13 +246,13 @@ test('檔案不存在時安靜地回空的，不可以讓整個月報表跑不�
   assert.deepEqual(result.unreadable, []);
 });
 
-test('要你看的檔案：下載失敗、空檔、不見了都要重查，正常的不重查', () => {
+test('要你看的檔案：空檔、不見了要重查；正常的與「讀取失敗」不重查', () => {
   const sizes = new Map([['好的-1.jpg', 1024], ['空的-1.jpg', 0]]);
   const outcome = (reviews) => ({ mediaReviews: reviews });
   assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '好的-1.jpg' }]), sizes), false);
   assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '空的-1.jpg' }]), sizes), true);
   assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容', savedAs: '不見了-1.jpg' }]), sizes), true);
-  assert.equal(hasBrokenReviewFile(outcome([{ kind: '讀取失敗' }]), sizes), true);
+  assert.equal(hasBrokenReviewFile(outcome([{ kind: '讀取失敗' }]), sizes), false, '重抓多半也一樣，每次重查會永遠收不了尾');
   assert.equal(hasBrokenReviewFile(outcome([{ kind: '程式讀不出內容' }]), sizes), false, '本來就沒存檔的不算壞');
   assert.equal(hasBrokenReviewFile({}, sizes), false);
 });
@@ -266,4 +266,36 @@ test('到院後才傳的影音照樣列，並請使用者看心電圖是不是�
   assert.equal(rows.length, 2);
   assert.match(String(at(rows[0], '為什麼要你看')), /到院後才傳.*到院前做的/);
   assert.doesNotMatch(String(at(rows[1], '為什麼要你看')), /到院後才傳/);
+});
+
+test('已因備註有原因或事後新增而算進去的：不列照片辨識覆核、不加「到院後填不算」提示', () => {
+  // 2026-11-13 獨立審查抓到：照提示填「不算」會把一件依規則該算的案子拉出分子。
+  const counted = () => true;
+  const rows = buildReviewRows([
+    outcome('T-1', {
+      verdict: VERDICT.after,
+      manualAdd: { from: '12導程心電圖' },
+      mediaReviews: [mediaReview({ kind: '12導程心電圖', timing: '到院後' })],
+    }),
+    outcome('T-2', {
+      verdict: VERDICT.before,
+      mediaReviews: [mediaReview({ kind: '12導程心電圖', timing: '到院後' })],
+    }),
+  ], VERDICT.unknown, counted);
+  assert.equal(rows.length, 1, '事後新增而算進去的那件不必覆核照片');
+  assert.equal(at(rows[0], 'TEMSIS'), 'T-2');
+  assert.doesNotMatch(String(at(rows[0], '為什麼要你看')), /填「不算」/);
+});
+
+test('補述寫在案件影音那一列（照片辨識猜的）時，照片照樣要覆核', () => {
+  // 第二輪審查抓到：算不算全靠像素猜的結果，不能藏起來。
+  const rows = buildReviewRows([
+    outcome('T-1', {
+      verdict: VERDICT.after,
+      remark: { text: '現場網路不通延後上傳', from: '案件影音' },
+      mediaReviews: [mediaReview({ kind: '12導程心電圖', timing: '到院後' })],
+    }),
+  ], VERDICT.unknown, () => true);
+  assert.equal(rows.length, 1);
+  assert.match(String(at(rows[0], '為什麼要你看')), /請覆核/);
 });

@@ -460,7 +460,7 @@ async function fetchMediaBytes(request, href, config) {
   return {
     result: {
       kind: MEDIA_KIND.failed,
-      why: `系統回傳的是空檔（0 位元組），重抓 ${attempts} 次都一樣；請到系統的案件影音自己點開看`,
+      why: `系統回傳的是空檔（0 位元組），共抓了 ${attempts} 次都一樣；請到系統的案件影音自己點開看`,
     },
   };
 }

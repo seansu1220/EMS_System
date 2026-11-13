@@ -335,3 +335,19 @@ test('紀錄表沒選 12 導程、也確實沒有檔案的，不計入分子', (
   );
 });
 
+
+test('事後回電腦新增（有刪除鍵）的 12 導程，到院後也算；ZOLL 連動、到院後又沒補述的不算', () => {
+  // 使用者 2026-11-13 定的規則。
+  assert.equal(countsAsNumerator(outcome(VERDICT.after, { manualAdd: { from: '12導程心電圖' } })), true);
+  assert.equal(countsAsNumerator(outcome(VERDICT.after, { manualAdd: null })), false);
+  assert.equal(
+    countsAsNumerator(outcome(VERDICT.unknown, { manualAdd: { from: '12導程心電圖' } })),
+    false,
+    '判定不出來的不靠這條放行，照樣進人工判定清單',
+  );
+  assert.equal(
+    countsAsNumerator(outcome(VERDICT.after, { manualAdd: { from: 'x' }, manual: { decision: '不算', note: '' } })),
+    false,
+    '人工判定仍是最高權威',
+  );
+});

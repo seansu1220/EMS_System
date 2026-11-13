@@ -422,6 +422,25 @@ function queryPage(params) {
 
       const remarkIndex = indexOfFirst(params.remarkColumns);
       const linkIndex = indexOfFirst(params.linkColumns);
+      const actionIndex = indexOfFirst(params.actionColumns || []);
+      /** 這一列（或它的操作欄）有沒有「刪除」這類按鈕＝事後回電腦新增的（2026-11-13 加）。 */
+      const hasManualMarker = (row, cells) => {
+        const markers = params.manualMarkers || [];
+        if (markers.length === 0) return false;
+        const scope = actionIndex >= 0 && cells[actionIndex] ? cells[actionIndex] : row;
+        // 只認**看得見、按得下去的按鈕**：藏起來或停用的不算（不然每列都有、只是藏起來時會全部誤判），
+        // 備註與檔案連結那兩格也不看（檔名或備註裡剛好有「刪除」兩個字，例如「誤傳已刪除」）。
+        const skipCells = [cells[remarkIndex], cells[linkIndex]].filter(Boolean);
+        return [...scope.querySelectorAll('a, button, input[type="button"], input[type="submit"], input[type="image"], img')]
+          .some((element) => {
+            if (skipCells.some((cell) => cell.contains(element))) return false;
+            if (element.disabled) return false;
+            const style = window.getComputedStyle(element);
+            if (style.display === 'none' || style.visibility === 'hidden' || element.getClientRects().length === 0) return false;
+            const label = `${element.textContent || ''}${element.value || ''}${element.title || ''}${element.alt || ''}`;
+            return markers.some((marker) => label.includes(marker));
+          });
+      };
 
       const matched = [];
       for (const row of table.rows) {
@@ -448,6 +467,7 @@ function queryPage(params) {
             ? textOfCell(cells[remarkIndex]).slice(0, params.maxRemarkLength)
             : '',
           links,
+          manualAdded: hasManualMarker(row, cells),
         });
         if (matched.length >= params.maxRows) break;
       }
@@ -1070,6 +1090,7 @@ export async function findRowsWithColumnValue(frame, columnCandidates, wantedHea
  * @property {string} uploadTime 上傳時間欄的原文
  * @property {string} remark 檔案說明／備註欄的原文（人寫的字，未遮蔽）
  * @property {{text: string, href: string}[]} links 檔案連結欄裡的下載連結（絕對網址）
+ * @property {boolean} manualAdded 這一列有「刪除」鍵＝同仁事後回電腦新增的（不是 ZOLL 程式連動上傳）
  */
 
 /**
@@ -1090,6 +1111,8 @@ export async function findRowsWithColumnValue(frame, columnCandidates, wantedHea
  * @param {string[]} options.timeColumns 上傳時間欄的欄名候選（「包含」比對，依序）
  * @param {string[]} options.remarkColumns 備註欄的欄名候選（「包含」比對，依序）
  * @param {string[]} options.linkColumns 檔案連結欄的欄名候選（「包含」比對，依序）
+ * @param {string[]} [options.actionColumns] 操作欄的欄名候選（找不到就看整列）
+ * @param {string[]} [options.manualMarkers] 代表「事後新增」的按鈕字樣（例如「刪除」）
  * @param {number} [options.maxRows] 最多讀幾列（預設 40）
  * @param {number} [options.maxRemarkLength] 備註最多留幾個字（預設 300）
  * @returns {Promise<{headers: string[], matched: FileRow[]}>}
@@ -1101,6 +1124,8 @@ export async function findFileRows(frame, options) {
     timeColumns: options.timeColumns,
     remarkColumns: options.remarkColumns,
     linkColumns: options.linkColumns,
+    actionColumns: options.actionColumns ?? [],
+    manualMarkers: options.manualMarkers ?? [],
     maxRows: options.maxRows ?? 40,
     maxRemarkLength: options.maxRemarkLength ?? 300,
   });

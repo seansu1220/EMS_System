@@ -113,6 +113,8 @@ import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './time
  * @property {string} source 上傳時間是從哪個畫面讀到的
  * @property {string|null} [caseDate] 案件日期。判定不出來的案件要靠它才找得回原案
  * @property {RemarkNote|null} [remark] 到院後但備註有補述原因；非 null 即計入分子
+ * @property {{from: string}|null} [manualAdd] 到院後、沒補述，但有一列 12 導程是**事後回電腦新增**的（有「刪除」鍵）；
+ *   非 null 即計入分子（使用者 2026-11-13 定的規則）
  * @property {MediaReview[]} [mediaReviews] 判不出內容、要人工看的影音檔
  * @property {{decision: string, note: string}|null} [manual]
  *   使用者在人工判定清單上填的（見 `ekgReview.mjs`）。**蓋掉程式的判定**
@@ -144,6 +146,8 @@ export const VERDICT = {
  *      人看過原始檔案之後的結論不該再被程式推翻。
  *   2. 查核判定為**到院前**傳出
  *   3. 判定為到院後，但**備註欄有補述原因**（使用者 2026-09-21 定的規則）
+ *   4. 判定為到院後、沒補述，但 12 導程是**事後回電腦新增**的（有「刪除」鍵；使用者 2026-11-13 定的規則）
+ *      ——反過來說，**ZOLL 程式連動上傳、到院後才傳、又沒寫原因的不算**
  *
  * 「無法判定」且沒有人工判定的一律不算（使用者 2026-08-03 的選擇）。
  *
@@ -155,7 +159,7 @@ export function countsAsNumerator(outcome) {
   if (outcome.manual?.decision === MANUAL_DECISION.count) return true;
   if (outcome.manual?.decision === MANUAL_DECISION.skip) return false;
   if (outcome.verdict === VERDICT.before) return true;
-  return outcome.verdict === VERDICT.after && Boolean(outcome.remark);
+  return outcome.verdict === VERDICT.after && (Boolean(outcome.remark) || Boolean(outcome.manualAdd));
 }
 
 /**
@@ -427,9 +431,10 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
  * @param {import('playwright-core').Page} page
  * @param {number} buttonCount 這一頁有幾個「上傳」按鈕
  * @param {string} temsis 這一件的 TEMSIS
+ * @param {() => Promise<void>} reenterCase 畫面被紀錄表帶離案件內部時，重新進入這件案子
  * @returns {Promise<{index: number, problem?: undefined}|{problem: string}>}
  */
-async function pickUploadButton(context, page, buttonCount, temsis) {
+async function pickUploadButton(context, page, buttonCount, temsis, reenterCase) {
   if (buttonCount === 1) return { index: 0 };
   const paired = await findPairedRows(
     content(page),
@@ -438,6 +443,15 @@ async function pickUploadButton(context, page, buttonCount, temsis) {
     { recordExact: false },
   ).catch(() => null);
   const candidates = (paired?.pairs ?? []).filter((pair) => pair.unlockIndex >= 0);
+  // 「上傳」數出不只一個，但整件**只有一張紀錄表**、且配上了（例如按鈕的圖示也被數到）＝其實只有一台，直接用它。
+  // 紀錄表不只一張時不走捷徑：另一台的上傳鍵可能只是沒配上，直接用會看到別台車的清單（第二輪審查抓到）。
+  if ((paired?.pairs?.length ?? 0) === 1 && candidates.length === 1) return { index: candidates[0].unlockIndex };
+  if (candidates.length === 0) {
+    return {
+      problem: `案件內部有 ${buttonCount} 個「上傳」，但看不出各屬於哪一台車的紀錄表，`
+        + '不猜是哪一台的上傳，請看人工判定清單',
+    };
+  }
   const vehicles = [];
   const matched = [];
   const unchecked = [];
@@ -455,13 +469,16 @@ async function pickUploadButton(context, page, buttonCount, temsis) {
       continue;
     }
     const code = await readCaseRecordTemsis(context, page, pair.recordIndex);
-    if (code.error) {
-      unchecked.push(`${vehicle}（${code.error}）`);
-      if (!(await hasCaseDetail(page))) break;
+    // 有些紀錄表按下去會把案件內部整個換掉（解鎖工具實跑遇過），先回到案件內部，後面才按得到東西。
+    if (!(await hasCaseDetail(page)) && !(await reenterCase().then(() => true).catch(() => false))) {
+      return { problem: `比對 ${vehicle} 的紀錄表時畫面離開了案件內部、回不去，不猜是哪一台的上傳，請看人工判定清單` };
+    }
+    if (code.error || !code.temsis) {
+      unchecked.push(`${vehicle}（${code.error || '紀錄表上讀不到 TEMSIS'}）`);
       continue;
     }
-    const isMatch = Boolean(code.temsis) && isSameCode(code.temsis, temsis);
-    log.info(`　${vehicle}：紀錄表 TEMSIS ${code.temsis ? maskCode(code.temsis) : '（讀不到）'}　${isMatch ? '✅ 相符' : '不相符'}`);
+    const isMatch = isSameCode(code.temsis, temsis);
+    log.info(`　${vehicle}：紀錄表 TEMSIS ${maskCode(code.temsis)}　${isMatch ? '✅ 相符' : '不相符'}`);
     if (isMatch) matched.push({ index: pair.unlockIndex, vehicle });
   }
   const listed = vehicles.join('、') || '(讀不到)';
@@ -927,7 +944,12 @@ async function verifyOneCase(context, page, target, range, timeContext) {
   await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
 
   const arrival = parseDateTime(arrivalText, localContext);
-  const panel = await readUploadPanel(context, page, target.temsis);
+  const panel = await readUploadPanel(
+    context,
+    page,
+    target.temsis,
+    () => openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range).then(() => {}),
+  );
   if (panel?.problem) {
     return {
       ...base,
@@ -950,6 +972,11 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     log.info(`上傳清單有 ${files.others.length} 列，但檔案類型都不是 12 導程或案件影音：${types}`);
   }
   if (files.twelveLead.length === 0) await logMarkerLocations(page, EKG.verify.twelveLeadMarkers);
+  if (files.twelveLead.length > 0) {
+    // 實跑時用來核對「刪除鍵」有沒有認對（使用者 2026-11-13：有刪除鍵＝事後回電腦新增）。
+    const manualCount = files.twelveLead.filter((row) => row.manualAdded).length;
+    log.info(`上傳清單的 12 導程 ${files.twelveLead.length} 列：ZOLL 連動 ${files.twelveLead.length - manualCount} 列、事後新增（有刪除鍵）${manualCount} 列`);
+  }
 
   // ---- 1. 檔案類型欄就寫著 12 導程的那幾列（原本就有的主要路徑）----
   let picked = pickEarliestFileRow(files.twelveLead, localContext);
@@ -1045,15 +1072,24 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     : null;
   const remarkNote = remark ? `；備註有補述原因，依規則仍計入分子：「${remark.text}」` : '';
 
+  // ---- 5. 到院後、沒補述，但 12 導程是事後回電腦新增的（有「刪除」鍵）→ 也算（使用者 2026-11-13 定的規則）----
+  //        沒有刪除鍵的是 ZOLL 程式連動上傳，到院後才傳又沒寫原因就不算。
+  const manualRow = verdict === VERDICT.after && !remark
+    ? files.twelveLead.find((row) => row.manualAdded) ?? null
+    : null;
+  const manualAdd = manualRow ? { from: describeFileRow(manualRow) } : null;
+  const manualNote = manualAdd ? '；這筆 12 導程是事後回電腦新增的（有「刪除」鍵），依規則計入分子' : '';
+
   return {
     ...base,
     verdict,
-    reason: `${reason}（上傳時間取自${upload.from}）${remarkNote}`,
+    reason: `${reason}（上傳時間取自${upload.from}）${remarkNote}${manualNote}`,
     arrival: arrivalText,
     upload: upload.time.matched ?? null,
     source: source || '未知',
     caseDate,
     remark,
+    manualAdd,
     mediaReviews,
   };
 }
@@ -1069,13 +1105,13 @@ async function verifyOneCase(context, page, target, range, timeContext) {
  *
  * @returns {Promise<{rows: import('./pageFinder.mjs').FileRow[], where: string}|null>}
  */
-async function readUploadPanel(context, page, temsis) {
+async function readUploadPanel(context, page, temsis, reenterCase) {
   const buttons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
   if (buttons.length === 0) {
     log.info('案件內部的「上傳」：這一頁沒有這個按鈕');
     return null;
   }
-  const choice = await pickUploadButton(context, page, buttons.length, temsis);
+  const choice = await pickUploadButton(context, page, buttons.length, temsis, reenterCase);
   if (choice.problem) {
     log.warn(choice.problem);
     return { rows: [], where: '案件內部', problem: choice.problem };
@@ -1092,6 +1128,8 @@ async function readUploadPanel(context, page, temsis) {
       timeColumns: EKG.verify.uploadTimeLabels,
       remarkColumns: EKG.verify.remarkColumns,
       linkColumns: EKG.verify.fileLinkColumns,
+      actionColumns: EKG.verify.actionColumns,
+      manualMarkers: EKG.verify.manualUploadMarkers,
     }),
   );
   return panel ? { rows: panel.matched, where: panel.where } : null;

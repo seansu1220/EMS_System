@@ -55,13 +55,14 @@ function describeCounts(counts) {
  */
 function countVerdicts(outcomes) {
   const of = (verdict) => outcomes.filter((item) => item.verdict === verdict).length;
-  const afterWithRemark = outcomes.filter(
-    (item) => item.verdict === VERDICT.after && countsAsNumerator(item),
-  ).length;
+  const afterCounted = outcomes.filter((item) => item.verdict === VERDICT.after && countsAsNumerator(item));
+  // 事後回電腦新增（有「刪除」鍵）而計入的另列一排（使用者 2026-11-13 定的規則）。
+  const afterManualAdd = afterCounted.filter((item) => !item.remark && item.manualAdd).length;
   return {
     before: of(VERDICT.before),
-    after: of(VERDICT.after) - afterWithRemark,
-    afterWithRemark,
+    after: of(VERDICT.after) - afterCounted.length,
+    afterWithRemark: afterCounted.length - afterManualAdd,
+    afterManualAdd,
     unknown: of(VERDICT.unknown),
     none: of(VERDICT.none),
   };
@@ -389,7 +390,8 @@ export async function writeRunSummary(input) {
     '| --- | --- | --- |',
     `| 到院前傳出 | ${verdicts.before} | 是 |`,
     `| 到院後才傳，**備註有補述原因** | ${verdicts.afterWithRemark} | 是 |`,
-    `| 到院後才傳，備註沒有補述 | ${verdicts.after} | 否 |`,
+    `| 到院後才傳，**事後回電腦新增的 12 導程**（有刪除鍵） | ${verdicts.afterManualAdd} | 是 |`,
+    `| 到院後才傳，沒有補述、也不是事後新增 | ${verdicts.after} | 否 |`,
     `| 判定不出來 | ${verdicts.unknown} | 否 |`,
     ...(verdicts.none > 0
       ? [`| 紀錄表沒選 12 導程，上傳清單也沒有 12 導程檔案 | ${verdicts.none} | 否 |`]

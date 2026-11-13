@@ -36,7 +36,7 @@ import ExcelJS from 'exceljs';
 import { EKG, PATHS } from './config.mjs';
 import { bundleFolderName } from './bundle.mjs';
 import { buildListSheet } from './ekgLists.mjs';
-import { MEDIA_KIND, isMeaningfulRemark } from './ekgMedia.mjs';
+import { MEDIA_KIND } from './ekgMedia.mjs';
 import { monthlyFileName } from './fileNames.mjs';
 import { log } from './logger.mjs';
 
@@ -199,8 +199,11 @@ export async function listReviewPhotoSizes(monthRange) {
 /**
  * 這一件的「要你看」檔案是不是**壞了**，要重新查一次（純函式）。
  *
- * 壞了＝下載失敗（`failed`），或存下來的檔案不見了／是 0 位元組。
+ * 壞了＝存下來的檔案不見了／是 0 位元組（舊版留下的空檔）。
  * 2026-10 月報表有 5 張存成空檔，舊版重跑會直接跳過那幾件，空檔永遠修不好。
+ *
+ * ⚠ 「讀取失敗」（`failed`）**不算**：沒有網址、HTTP 404、系統回空檔這些多半重抓也一樣，
+ *   算的話每次重跑都要重查一遍、永遠收不了尾；那種本來就列在人工判定清單上給人看。
  *
  * @param {{mediaReviews?: Array<{kind: string, savedAs?: string}>}} outcome
  * @param {Map<string, number>} photoSizes {@link listReviewPhotoSizes} 的輸出
@@ -208,7 +211,6 @@ export async function listReviewPhotoSizes(monthRange) {
  */
 export function hasBrokenReviewFile(outcome, photoSizes) {
   return (outcome?.mediaReviews ?? []).some((item) => {
-    if (item.kind === MEDIA_KIND.failed) return true;
     if (!item.savedAs) return false;
     return !((photoSizes.get(item.savedAs) ?? 0) > 0);
   });
@@ -357,6 +359,21 @@ export function applyDecisions(outcomes, decisions) {
 }
 
 /**
+ * 這個影音檔是不是**到院後才傳**的（純函式，2026-11-13 加）。
+ *
+ * 使用者 2026-11-13 說明：案件影音本來就多半是到院後才傳——同仁在院前傳輸出了問題，
+ * 事後才把當時做的心電圖補傳上來。因此到院後才傳的**照樣要列**，
+ * 但要請使用者看的是「照片上那張心電圖是不是到院前做的」，不是「是不是 12 導程」。
+ * 填「算」就計入分子（人工判定是最高權威，見 `ekgVerify.countsAsNumerator`）。
+ *
+ * @param {{timing?: string}} item
+ * @returns {boolean}
+ */
+export function isUploadedAfterArrival(item) {
+  return item?.timing === '到院後';
+}
+
+/**
  * 組出這次「要請使用者看」的列（純函式，不碰檔案）。
  *
  * 兩種案件會進來：
@@ -375,20 +392,6 @@ export function applyDecisions(outcomes, decisions) {
  *   本檔不直接 import 它，因為 `ekgVerify` 會 import 本檔取用 `DECISION`，直接相依會繞圈。
  * @returns {string[][]} 與 {@link REVIEW_COLUMNS} 同順序（最後兩欄留白給使用者填）
  */
-/**
- * 這個影音檔是不是**到院後才傳**的（純函式，2026-11-13 加）。
- *
- * 使用者 2026-11-13 說明：案件影音本來就多半是到院後才傳——同仁在院前傳輸出了問題，
- * 事後才把當時做的心電圖補傳上來。因此到院後才傳的**照樣要列**，
- * 但要請使用者看的是「照片上那張心電圖是不是到院前做的」，不是「是不是 12 導程」。
- * 填「算」就計入分子（人工判定是最高權威，見 `ekgVerify.countsAsNumerator`）。
- *
- * @param {{timing?: string}} item
- * @returns {boolean}
- */
-export function isUploadedAfterArrival(item) {
-  return item?.timing === '到院後';
-}
 
 export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => false) {
   const rows = [];
@@ -398,7 +401,16 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
 
     // 影音檔分兩種：判不出內容的（請他點開決定）、靠照片辨識判出來的（請他覆核）。
     // 兩種的「要你做什麼」不一樣，寫在同一句會讓人不知道該不該動手。
-    const recognized = reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead);
+    /**
+     * 靠照片辨識判成 12 導程的要覆核——但這一件若已經**因為備註有寫原因、或事後新增的 12 導程**算進去，
+     * 那些照片跟算不算無關，列出來反而會讓人照著填「不算」而把它拉出分子（2026-11-13 獨立審查抓到）。
+     */
+    // ⚠ 補述若是寫在**案件影音**那一列（照片辨識猜出來的 12 導程），照片照樣要覆核：
+    //   算不算完全取決於像素猜的結果（2026-09 有一件「APP人形圖受傷部位拍照」被誤判），不能藏起來（第二輪審查抓到）。
+    const remarkOnMedia = (EKG.verify.mediaMarkers ?? []).some((marker) =>
+      String(outcome.remark?.from ?? '').includes(marker));
+    const countedRegardless = Boolean(outcome.manualAdd) || (Boolean(outcome.remark) && !remarkOnMedia);
+    const recognized = countedRegardless ? [] : reviews.filter((item) => item.kind === MEDIA_KIND.twelveLead);
 
     /**
      * ⚠ **這一件已經算進分子了，判不出內容的那些檔案就不必再列**
@@ -424,7 +436,8 @@ export function buildReviewRows(outcomes, unknownVerdict, isCounted = () => fals
     if (recognized.length > 0) {
       reasons.push(`案件影音有 ${recognized.length} 個檔案靠照片辨識判成 12 導程，請覆核`);
     }
-    const lateCount = [...unreadable, ...recognized].filter(isUploadedAfterArrival).length;
+    // 已經算進去的不加這句：它叫人「到院後才做的填不算」，照做會把整件拉出分子。
+    const lateCount = isCounted(outcome) ? 0 : [...unreadable, ...recognized].filter(isUploadedAfterArrival).length;
     if (lateCount > 0) {
       reasons.push(
         `其中 ${lateCount} 個是到院後才傳的：請看照片上心電圖的時間，`

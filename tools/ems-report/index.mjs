@@ -1090,16 +1090,20 @@ function printVerifySummary(outcomes, totalCases) {
   const countOf = (verdict) => outcomes.filter((item) => item.verdict === verdict).length;
   // 到院後要拆成兩排：備註有補述的也計入分子（使用者 2026-09-21 定的規則）。
   // 合成一排寫「不計入」的話，這裡的數字與正式報表對不起來。
-  const afterWithRemark = outcomes.filter(
-    (item) => item.verdict === VERDICT.after && countsAsNumerator(item),
-  ).length;
+  const afterCounted = outcomes.filter((item) => item.verdict === VERDICT.after && countsAsNumerator(item));
+  // 事後回電腦新增（有「刪除」鍵）而計入的，與「備註有補述」分開列（使用者 2026-11-13 定的規則）。
+  const afterManualAdd = afterCounted.filter((item) => !item.remark && item.manualAdd).length;
+  const afterWithRemark = afterCounted.length - afterManualAdd;
   const mediaToReview = outcomes.reduce((total, item) => total + (item.mediaReviews?.length ?? 0), 0);
   log.step('逐案查核結果');
   log.info(`到院前傳出：${countOf(VERDICT.before)} 件（這些才計入分子）`);
   if (afterWithRemark > 0) {
     log.info(`到院後才傳但備註有補述：${afterWithRemark} 件（依規則計入分子）`);
   }
-  log.info(`到院後才傳且沒有補述：${countOf(VERDICT.after) - afterWithRemark} 件（不計入）`);
+  if (afterManualAdd > 0) {
+    log.info(`到院後才傳但是事後回電腦新增的（有刪除鍵）：${afterManualAdd} 件（依規則計入分子）`);
+  }
+  log.info(`到院後才傳、沒有補述、也不是事後新增：${countOf(VERDICT.after) - afterCounted.length} 件（不計入）`);
   log.info(`判定不出來：${countOf(VERDICT.unknown)} 件（不計入，另外列清單）`);
   const ekgOnly = outcomes.filter((item) => item.mediaOnly);
   if (ekgOnly.length > 0) {

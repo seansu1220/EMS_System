@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-11-13　小工具 v1.58.0 事後回電腦新增的 12 導程也算；兩輪獨立審查的修正
+
+### 問題描述
+使用者定的計入規則：(1) 備註有寫原因就算（第一優先）；(2) 上傳清單有「刪除」鍵的 12 導程＝同仁事後回電腦新增，到院後也算；
+(3) ZOLL 程式連動（沒有刪除鍵）的 12 導程到院後才傳、又沒寫原因就不算。原本程式完全沒分辨刪除鍵。
+使用者要求修改後另開新的工作階段檢查，兩輪全新子代理審查（只看程式、不讀病患資料、不連線）又找出：
+打開紀錄表後畫面被帶走仍照按上傳；人工判定提示「到院後填不算」會把依規則該算的拉出分子；
+補述寫在案件影音列時照片覆核被藏起來；只有一列配得上就跳過 TEMSIS 比對；讀取失敗的影音每次都重查；摘要標題不準。
+
+### 根本原因
+- 上傳清單只讀檔案類型、時間、備註、連結四欄，沒讀「操作」欄。
+- 多台車挑選、人工判定清單的提示與覆核條件，沒考慮新規則與畫面被導走的情況。
+
+### 修改的檔案與內容
+- `tools/ems-report/config.mjs`：新增 `EKG.verify.actionColumns: ['操作']`、`manualUploadMarkers: ['刪除']`；`logicVersion` 6 → 7。
+- `tools/ems-report/pageFinder.mjs`：`fileRows` 模式每列多回傳 `manualAdded`（只認看得見、沒停用的按鈕，跳過備註與連結格）。
+- `tools/ems-report/ekgVerify.mjs`：`countsAsNumerator` 加「到院後且 `manualAdd`」；`verifyOneCase` 產生 `manualAdd` 與判定依據加註、
+  log 寫出 12 導程的連動／事後新增列數；`pickUploadButton` 畫面被帶走時重新進入、只有一張紀錄表才走捷徑、讀不到 TEMSIS 列為沒比對到、配不上時寫正確原因。
+- `tools/ems-report/ekgReview.mjs`：已因事後新增或寫在 12 導程列的補述而算進去的，不列照片覆核；已算進分子的不加到院後提示；
+  `hasBrokenReviewFile` 不再把讀取失敗當成壞掉；`isUploadedAfterArrival` 說明移回正確位置；`ekgMedia.mjs` 重抓訊息改正。
+- `tools/ems-report/index.mjs`、`ekgSummary.mjs`：到院後計入拆「備註有補述」「事後回電腦新增」兩排，不計入那排改名。
+- 測試新增 4 項（共 610 項全過）；`docs/TOOLS_SPEC.md` 新增 3.4.4，3.16 各節同步。實際系統驗證待使用者登入重跑 2026-10。
+
 ## 2026-11-13　小工具 v1.57.8 一件出動多台車時，看這筆 TEMSIS 那一台的「上傳」
 
 ### 問題描述
