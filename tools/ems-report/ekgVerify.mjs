@@ -47,6 +47,7 @@ import {
   clickMatch,
   findClickables,
   findFileRows,
+  findPairedRows,
   findRowsWithColumnValue,
   groupByRow,
   listTableHeaders,
@@ -406,6 +407,106 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
   }
 }
 
+/** 車號比對用：去掉空白、全形轉半形，「大園 96」「大園９６」都當成「大園96」。 */
+function normalizeVehicle(text) {
+  return String(text ?? '')
+    .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0))
+    .replace(/\s+/g, '');
+}
+
+/**
+ * 案件內部有好幾台車時，挑出**這筆 TEMSIS 那一台**的「上傳」按鈕（2026-11-13 加）。
+ *
+ * 2026-10 大園分隊兩件（TEMSIS 都是 02 結尾）：同一個派遣案號出動兩台車，
+ * 案件內部一列一台車、各有自己的「上傳」。舊版一律按**第一個**，
+ * 看到的是另一台車的檔案，於是「明明有 12 導程心電圖卻判成找不到」。
+ *
+ * 做法：紀錄表上的車號（出勤單位，例如「大園96」）對到案件內部那一列的「派遣車輛」，
+ * 「上傳」按鈕以**同一列**配對（`findPairedRows`），不靠順序猜。
+ * 對不到、或對到不只一台，就**不猜**，回報讓這件進人工判定清單。
+ *
+ * @param {import('playwright-core').Page} page
+ * @param {number} buttonCount 這一頁有幾個「上傳」按鈕
+ * @param {string|null} vehicle 紀錄表上的車號
+ * @returns {Promise<{index: number, problem?: undefined}|{problem: string}>}
+ */
+async function pickUploadButton(page, buttonCount, vehicle) {
+  if (buttonCount === 1) return { index: 0 };
+  const paired = await findPairedRows(
+    content(page),
+    UNLOCK.buttonTexts.openRecordInCase,
+    EKG.verify.uploadButtons,
+    { recordExact: false },
+  ).catch(() => null);
+  const rows = [];
+  for (const pair of paired?.pairs ?? []) {
+    if (pair.unlockIndex < 0) continue;
+    const fields = await readRowFields(
+      content(page),
+      UNLOCK.buttonTexts.openRecordInCase,
+      pair.recordIndex,
+      UNLOCK.caseColumns.vehicle,
+    ).catch(() => null);
+    rows.push({ index: pair.unlockIndex, vehicle: pickFirstValue(fields, UNLOCK.caseColumns.vehicle) ?? '' });
+  }
+  const wanted = normalizeVehicle(vehicle);
+  const matched = wanted ? rows.filter((row) => normalizeVehicle(row.vehicle) === wanted) : [];
+  const listed = rows.map((row) => row.vehicle || '(讀不到)').join('、') || '(讀不到)';
+  if (matched.length === 1) {
+    log.info(`案件內部有 ${buttonCount} 台車（${listed}），看紀錄表上這一台「${vehicle}」的上傳`);
+    return { index: matched[0].index };
+  }
+  return {
+    problem: `這件出動了 ${buttonCount} 台車（${listed}），紀錄表上的車號是「${vehicle || '讀不到'}」，`
+      + `${matched.length > 1 ? '對到不只一台' : '對不到是哪一台'}，不猜是哪一台的上傳，請看人工判定清單`,
+  };
+}
+
+/**
+ * 「12導程」這幾個字在畫面上**放在哪種結構裡**（診斷用，2026-11-13 加）。
+ *
+ * 大園分隊 2026-10 兩件：使用者在「上傳」看得到檔案類型「12導程心電圖」，
+ * 程式讀到的清單裡卻沒有那一列。要知道它是在第二張表、不是表格、還是別的框架，
+ * 才修得對。
+ *
+ * ⚠ 個資：只回傳**標籤名稱、id、class 與所在表格的欄名**（畫面結構），
+ *   不回傳任何儲存格內容；命中的字樣本身來自設定檔。
+ *
+ * @param {import('playwright-core').Page} page
+ * @param {string[]} markers
+ * @returns {Promise<void>}
+ */
+async function logMarkerLocations(page, markers) {
+  for (const [frameIndex, frame] of page.frames().entries()) {
+    const spots = await frame.evaluate((wanted) => {
+      const describe = (element) => {
+        const parts = [];
+        for (let node = element; node && node !== document.body && parts.length < 8; node = node.parentElement) {
+          parts.unshift(node.tagName.toLowerCase() + (node.id ? `#${node.id}` : '')
+            + (node.className && typeof node.className === 'string' ? `.${node.className.trim().split(/\s+/).slice(0, 2).join('.')}` : ''));
+        }
+        return parts.join('>');
+      };
+      const found = [];
+      for (const element of document.querySelectorAll('body *')) {
+        const own = [...element.childNodes].filter((node) => node.nodeType === 3).map((node) => node.textContent).join('');
+        const isSelected = element.tagName === 'OPTION' ? element.selected : true;
+        if (!wanted.some((marker) => own.includes(marker))) continue;
+        const table = element.closest('table');
+        const headerRow = table ? ([...table.rows].find((row) => row.querySelector('th')) || table.rows[0]) : null;
+        const headers = headerRow ? [...headerRow.cells].map((cell) => (cell.textContent || '').replace(/\s+/g, '').slice(0, 8)).join('｜') : '';
+        const style = window.getComputedStyle(element);
+        found.push(`${describe(element)}${element.tagName === 'OPTION' ? `（下拉選項，${isSelected ? '已選' : '未選'}）` : ''}`
+          + `${style.display === 'none' || style.visibility === 'hidden' ? '（隱藏）' : ''}`
+          + (headers ? `［所在表格欄位：${headers}］` : '［不在表格裡］'));
+        if (found.length >= 12) break;
+      }
+      return found;
+    }, markers).catch(() => []);
+    for (const spot of spots) log.info(`　診斷：框架 ${frameIndex}（${frame.name() || '無名稱'}）有「12導程」字樣：${spot}`);
+  }
+}
+
 /**
  * 把這一頁每個框架都捲到最底（2026-11-13 加）。
  *
@@ -622,7 +723,7 @@ function describeTiming(uploadTime, arrival) {
  *
  * 兩個值都要用到，開兩次 PDF 太浪費（每次都是幾秒鐘的網路往返），故一次讀完。
  *
- * @returns {Promise<{dispatchNo: string|null, arrivalText: string|null}>}
+ * @returns {Promise<{dispatchNo: string|null, arrivalText: string|null, vehicle: string|null}>}
  */
 async function readSheetInfo(context, page, index) {
   const sheet = await openRecordSheet(context, content(page), UNLOCK.buttonTexts.openRecordSheet, index);
@@ -632,8 +733,14 @@ async function readSheetInfo(context, page, index) {
   });
   // 到院時間的值含空白（`2026/07/02 12:44`），不能開 singleToken，否則只會取到日期那一段。
   const arrival = extractLabeledValue(sheet.text, EKG.verify.arrivalLabels, { maxLength: 24 });
+  // 車號（例如「大園96」）：一件案子出動兩台車時，靠它才知道要看哪一台的「上傳」（2026-11-13 加）。
+  const vehicle = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.vehicle, { maxLength: 16, singleToken: true });
   log.info(`紀錄表已讀取（${sheet.kind}／${sheet.source}），共 ${sheet.text.length} 個字元`);
-  return { dispatchNo: dispatchNo?.value ?? null, arrivalText: arrival?.value ?? null };
+  return {
+    dispatchNo: dispatchNo?.value ?? null,
+    arrivalText: arrival?.value ?? null,
+    vehicle: vehicle?.value ?? null,
+  };
 }
 
 /**
@@ -794,7 +901,20 @@ async function verifyOneCase(context, page, target, range, timeContext) {
   await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
 
   const arrival = parseDateTime(arrivalText, localContext);
-  const panel = await readUploadPanel(context, page);
+  const panel = await readUploadPanel(context, page, sheetInfo.vehicle);
+  if (panel?.problem) {
+    return {
+      ...base,
+      verdict: VERDICT.unknown,
+      reason: panel.problem,
+      arrival: arrivalText,
+      upload: null,
+      source: '案件內部有多台車',
+      caseDate,
+      remark: null,
+      mediaReviews: [],
+    };
+  }
   const files = classifyFileRows(panel?.rows ?? []);
   const where = panel?.where ?? '原本的畫面';
   // 有讀到列、卻既不是 12 導程也不是案件影音時，把讀到的檔案類型寫出來（2026-11-13 加）：
@@ -803,6 +923,7 @@ async function verifyOneCase(context, page, target, range, timeContext) {
     const types = files.others.map((row) => `「${row.fileType || '(空白)'}」`).join('、');
     log.info(`上傳清單有 ${files.others.length} 列，但檔案類型都不是 12 導程或案件影音：${types}`);
   }
+  if (files.twelveLead.length === 0) await logMarkerLocations(page, EKG.verify.twelveLeadMarkers);
 
   // ---- 1. 檔案類型欄就寫著 12 導程的那幾列（原本就有的主要路徑）----
   let picked = pickEarliestFileRow(files.twelveLead, localContext);
@@ -922,18 +1043,23 @@ async function verifyOneCase(context, page, target, range, timeContext) {
  *
  * @returns {Promise<{rows: import('./pageFinder.mjs').FileRow[], where: string}|null>}
  */
-async function readUploadPanel(context, page) {
+async function readUploadPanel(context, page, vehicle) {
   const buttons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
   if (buttons.length === 0) {
     log.info('案件內部的「上傳」：這一頁沒有這個按鈕');
     return null;
+  }
+  const choice = await pickUploadButton(page, buttons.length, vehicle);
+  if (choice.problem) {
+    log.warn(choice.problem);
+    return { rows: [], where: '案件內部', problem: choice.problem };
   }
   log.info('案件內部的「上傳」：點進去看');
   const panel = await openPanelRows(
     context,
     page,
     EKG.verify.uploadButtons,
-    buttons[0].index,
+    choice.index,
     (frame) => findFileRows(frame, {
       // 時間欄沿用原本那組候選（`上傳時間` 排第一），系統改欄名時不必動程式。
       typeColumns: EKG.verify.fileTypeColumns,
