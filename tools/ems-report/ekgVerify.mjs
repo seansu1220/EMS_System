@@ -40,6 +40,7 @@ import {
   submitQuery,
   pickFirstValue,
   openCaseByDispatchNo,
+  hasCaseDetail,
 } from './caseFlow.mjs';
 import { log } from './logger.mjs';
 import { gotoRecordQuery } from './navigation.mjs';
@@ -70,7 +71,7 @@ import {
 import { readImageText, closeOcr } from './ekgOcr.mjs';
 import { captureSnapshot } from './probe.mjs';
 import { openRecordSheet } from './recordSheet.mjs';
-import { extractLabeledValue, maskCode } from './sheetFields.mjs';
+import { extractLabeledCode, extractLabeledValue, isSameCode, maskCode } from './sheetFields.mjs';
 import { parseDateTime, findFirstDateTime, compareUploadToArrival } from './timeParse.mjs';
 
 /**
@@ -407,13 +408,6 @@ async function openPanelRows(context, page, buttonTexts, index, probe) {
   }
 }
 
-/** 車號比對用：去掉空白、全形轉半形，「大園 96」「大園９６」都當成「大園96」。 */
-function normalizeVehicle(text) {
-  return String(text ?? '')
-    .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0))
-    .replace(/\s+/g, '');
-}
-
 /**
  * 案件內部有好幾台車時，挑出**這筆 TEMSIS 那一台**的「上傳」按鈕（2026-11-13 加）。
  *
@@ -421,16 +415,21 @@ function normalizeVehicle(text) {
  * 案件內部一列一台車、各有自己的「上傳」。舊版一律按**第一個**，
  * 看到的是另一台車的檔案，於是「明明有 12 導程心電圖卻判成找不到」。
  *
- * 做法：紀錄表上的車號（出勤單位，例如「大園96」）對到案件內部那一列的「派遣車輛」，
- * 「上傳」按鈕以**同一列**配對（`findPairedRows`），不靠順序猜。
- * 對不到、或對到不只一台，就**不猜**，回報讓這件進人工判定清單。
+ * 做法比照解鎖工具（`unlock.locateUnlockTarget`）：「救護紀錄」與「上傳」以**同一列**配對
+ * （`findPairedRows`），逐台打開那台的救護紀錄、讀出 TEMSIS，**相符的那一台**才看它的上傳。
+ * 先試過用車號比對，但紀錄表 PDF 的文字順序讀不出可靠的車號（實跑抓到「受案單位」）。
+ * 恰好一台相符就採用（TEMSIS 一張紀錄表一個，其他台打不開也不影響）；
+ * 一台都對不到、或對到不只一台，就**不猜**，回報讓這件進人工判定清單。
  *
+ * ⚠ 沒鎖頭的紀錄表按下去是編輯畫面、不是 PDF（見 `unlock.mjs`），不開，視為比對不到。
+ *
+ * @param {import('playwright-core').BrowserContext} context
  * @param {import('playwright-core').Page} page
  * @param {number} buttonCount 這一頁有幾個「上傳」按鈕
- * @param {string|null} vehicle 紀錄表上的車號
+ * @param {string} temsis 這一件的 TEMSIS
  * @returns {Promise<{index: number, problem?: undefined}|{problem: string}>}
  */
-async function pickUploadButton(page, buttonCount, vehicle) {
+async function pickUploadButton(context, page, buttonCount, temsis) {
   if (buttonCount === 1) return { index: 0 };
   const paired = await findPairedRows(
     content(page),
@@ -438,28 +437,61 @@ async function pickUploadButton(page, buttonCount, vehicle) {
     EKG.verify.uploadButtons,
     { recordExact: false },
   ).catch(() => null);
-  const rows = [];
-  for (const pair of paired?.pairs ?? []) {
-    if (pair.unlockIndex < 0) continue;
+  const candidates = (paired?.pairs ?? []).filter((pair) => pair.unlockIndex >= 0);
+  const vehicles = [];
+  const matched = [];
+  const unchecked = [];
+  for (const pair of candidates) {
     const fields = await readRowFields(
       content(page),
       UNLOCK.buttonTexts.openRecordInCase,
       pair.recordIndex,
       UNLOCK.caseColumns.vehicle,
     ).catch(() => null);
-    rows.push({ index: pair.unlockIndex, vehicle: pickFirstValue(fields, UNLOCK.caseColumns.vehicle) ?? '' });
+    const vehicle = pickFirstValue(fields, UNLOCK.caseColumns.vehicle) || `第 ${pair.recordIndex + 1} 台`;
+    vehicles.push(vehicle);
+    if (!String(pair.recordText ?? '').includes(UNLOCK.buttonTexts.lockedRecordMarker)) {
+      unchecked.push(`${vehicle}（紀錄表沒鎖頭，打不開來比對）`);
+      continue;
+    }
+    const code = await readCaseRecordTemsis(context, page, pair.recordIndex);
+    if (code.error) {
+      unchecked.push(`${vehicle}（${code.error}）`);
+      if (!(await hasCaseDetail(page))) break;
+      continue;
+    }
+    const isMatch = Boolean(code.temsis) && isSameCode(code.temsis, temsis);
+    log.info(`　${vehicle}：紀錄表 TEMSIS ${code.temsis ? maskCode(code.temsis) : '（讀不到）'}　${isMatch ? '✅ 相符' : '不相符'}`);
+    if (isMatch) matched.push({ index: pair.unlockIndex, vehicle });
   }
-  const wanted = normalizeVehicle(vehicle);
-  const matched = wanted ? rows.filter((row) => normalizeVehicle(row.vehicle) === wanted) : [];
-  const listed = rows.map((row) => row.vehicle || '(讀不到)').join('、') || '(讀不到)';
+  const listed = vehicles.join('、') || '(讀不到)';
+  // TEMSIS 一張紀錄表一個：已經有一台確定相符，沒比對到的那幾台就不可能也是它，不必全部比對到。
   if (matched.length === 1) {
-    log.info(`案件內部有 ${buttonCount} 台車（${listed}），看紀錄表上這一台「${vehicle}」的上傳`);
+    log.info(`案件內部有 ${buttonCount} 台車（${listed}），TEMSIS 相符的是「${matched[0].vehicle}」，看這一台的上傳`);
     return { index: matched[0].index };
   }
-  return {
-    problem: `這件出動了 ${buttonCount} 台車（${listed}），紀錄表上的車號是「${vehicle || '讀不到'}」，`
-      + `${matched.length > 1 ? '對到不只一台' : '對不到是哪一台'}，不猜是哪一台的上傳，請看人工判定清單`,
-  };
+  const why = matched.length > 1 ? '不只一台的紀錄表 TEMSIS 相符'
+    : unchecked.length > 0 ? `有車輛沒比對到：${unchecked.join('、')}`
+      : '每一台的紀錄表 TEMSIS 都不相符';
+  return { problem: `這件出動了 ${buttonCount} 台車（${listed}），${why}，不猜是哪一台的上傳，請看人工判定清單` };
+}
+
+/**
+ * 打開案件內部第 `recordIndex` 張救護紀錄，讀出 TEMSIS（紀錄表全文用完即棄）。
+ *
+ * @returns {Promise<{temsis: string|null, error?: undefined}|{error: string}>}
+ */
+async function readCaseRecordTemsis(context, page, recordIndex) {
+  try {
+    const sheet = await openRecordSheet(context, content(page), UNLOCK.buttonTexts.openRecordInCase, recordIndex, {
+      exact: false,
+      // 有些紀錄表按下去會把案件內部整個換掉，再等也等不到紀錄表，早點收手。
+      shouldAbort: async () => (await hasCaseDetail(page) ? null : '畫面離開了案件內部，紀錄表沒有開出來'),
+    });
+    return { temsis: extractLabeledCode(sheet.text, UNLOCK.sheetLabels.temsis)?.value ?? null };
+  } catch (error) {
+    return { error: `紀錄表打不開：${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 /**
@@ -723,7 +755,7 @@ function describeTiming(uploadTime, arrival) {
  *
  * 兩個值都要用到，開兩次 PDF 太浪費（每次都是幾秒鐘的網路往返），故一次讀完。
  *
- * @returns {Promise<{dispatchNo: string|null, arrivalText: string|null, vehicle: string|null}>}
+ * @returns {Promise<{dispatchNo: string|null, arrivalText: string|null}>}
  */
 async function readSheetInfo(context, page, index) {
   const sheet = await openRecordSheet(context, content(page), UNLOCK.buttonTexts.openRecordSheet, index);
@@ -733,14 +765,8 @@ async function readSheetInfo(context, page, index) {
   });
   // 到院時間的值含空白（`2026/07/02 12:44`），不能開 singleToken，否則只會取到日期那一段。
   const arrival = extractLabeledValue(sheet.text, EKG.verify.arrivalLabels, { maxLength: 24 });
-  // 車號（例如「大園96」）：一件案子出動兩台車時，靠它才知道要看哪一台的「上傳」（2026-11-13 加）。
-  const vehicle = extractLabeledValue(sheet.text, UNLOCK.sheetLabels.vehicle, { maxLength: 16, singleToken: true });
   log.info(`紀錄表已讀取（${sheet.kind}／${sheet.source}），共 ${sheet.text.length} 個字元`);
-  return {
-    dispatchNo: dispatchNo?.value ?? null,
-    arrivalText: arrival?.value ?? null,
-    vehicle: vehicle?.value ?? null,
-  };
+  return { dispatchNo: dispatchNo?.value ?? null, arrivalText: arrival?.value ?? null };
 }
 
 /**
@@ -901,7 +927,7 @@ async function verifyOneCase(context, page, target, range, timeContext) {
   await openCaseByDispatchNo(context, page, sheetInfo.dispatchNo, range);
 
   const arrival = parseDateTime(arrivalText, localContext);
-  const panel = await readUploadPanel(context, page, sheetInfo.vehicle);
+  const panel = await readUploadPanel(context, page, target.temsis);
   if (panel?.problem) {
     return {
       ...base,
@@ -1043,13 +1069,13 @@ async function verifyOneCase(context, page, target, range, timeContext) {
  *
  * @returns {Promise<{rows: import('./pageFinder.mjs').FileRow[], where: string}|null>}
  */
-async function readUploadPanel(context, page, vehicle) {
+async function readUploadPanel(context, page, temsis) {
   const buttons = await findClickables(content(page), EKG.verify.uploadButtons).catch(() => []);
   if (buttons.length === 0) {
     log.info('案件內部的「上傳」：這一頁沒有這個按鈕');
     return null;
   }
-  const choice = await pickUploadButton(page, buttons.length, vehicle);
+  const choice = await pickUploadButton(context, page, buttons.length, temsis);
   if (choice.problem) {
     log.warn(choice.problem);
     return { rows: [], where: '案件內部', problem: choice.problem };

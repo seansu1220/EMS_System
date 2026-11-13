@@ -15,9 +15,10 @@ v1.57.7 的補強實跑後，大園分隊那兩件仍判成無法判定。加診
 `readUploadPanel` 一律按第一個「上傳」（`buttons[0]`），看的是另一台車的檔案。
 
 ### 修改的檔案與內容
-- `tools/ems-report/ekgVerify.mjs`：`readSheetInfo` 多讀車號；新增 `pickUploadButton`、`normalizeVehicle`，
-  多台車時以同一列配對「救護紀錄」與「上傳」並比對「派遣車輛」，恰好一台才按，否則判無法判定並寫出各台車號；
-  `verifyOneCase` 接住這個情況；新增 `logMarkerLocations` 結構診斷；匯入 `findPairedRows`。
+- `tools/ems-report/ekgVerify.mjs`：新增 `pickUploadButton`、`readCaseRecordTemsis`：多台車時以同一列配對「救護紀錄」與「上傳」，
+  逐台打開有鎖頭的救護紀錄比對 TEMSIS，恰好一台相符才按那一列的「上傳」，否則判無法判定並寫出各台車號；
+  `verifyOneCase` 接住這個情況；新增 `logMarkerLocations` 結構診斷；匯入 `findPairedRows`、`hasCaseDetail`、`extractLabeledCode`、`isSameCode`。
+  （先試過以車號比對，PDF 讀不出可靠車號，已撤掉。）
 - `docs/TOOLS_SPEC.md`：3.16 新增「一件出動多台車」。測試 607 項全過；實際系統驗證待下次登入。
 
 ## 2026-11-13　小工具 v1.57.7 上傳清單讀不到的補強（捲動、其他框架、下拉／輸入框）
