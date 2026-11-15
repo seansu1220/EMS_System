@@ -1,10 +1,12 @@
 /**
  * 小工具頁（/tools）。三種角色都進得來，但看到的內容不同（使用者 2026-10-27 指定）：
  * - 所有人：PDF 工作區（合併、拆分、整理、塗黑／馬賽克／螢光筆都在同一個畫面），檔案只在瀏覽器處理。
- * - 只有管理員：多「電腦端工具說明」（月報表、解鎖救護紀錄表…）與「使用紀錄」（30 天內誰用過 PDF 工具）兩個分區。
+ * - 只有管理員：多「電腦端工具說明」（月報表、解鎖救護紀錄表…）、「使用紀錄」（30 天內誰用過 PDF 工具）
+ *   與「強平價計算機」（幣安逐倉強平價，使用者 2026-11-15 指定**只有最高管理者看得到**）三個分區。
  *
  * 純顯示元件。PDF 工具含大型函式庫，以 React.lazy 延遲到真的要顯示時才載入。
- * 網址 #local、#usage 直接開對應分區（非管理員忽略），其他 hash（含舊版的 #merge 等書籤）一律顯示 PDF 工具。
+ * 強平價計算機同樣延遲載入，而且只在管理員畫面裡才掛上——非管理員的瀏覽器連那段程式都不會下載。
+ * 網址 #local、#usage、#liq 直接開對應分區（非管理員忽略），其他 hash（含舊版的 #merge 等書籤）一律顯示 PDF 工具。
  */
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -16,14 +18,18 @@ import { CenteredSpinner } from '../components/ui';
 const PdfToolbox = lazy(() =>
   import('../components/pdf/PdfToolbox').then((module) => ({ default: module.PdfToolbox })),
 );
+const LiquidationCalculator = lazy(() =>
+  import('../components/LiquidationCalculator').then((module) => ({ default: module.LiquidationCalculator })),
+);
 
-type ToolsSection = 'pdf' | 'local' | 'usage';
+type ToolsSection = 'pdf' | 'local' | 'usage' | 'liq';
 
 /** 分區定義：pdf 所有人都看得到；其餘只有管理員（adminOnly）。hash 可直接開該區。 */
 const SECTIONS: readonly { key: ToolsSection; label: string; hash: string; subtitle: string }[] = [
   { key: 'pdf', label: '📄 PDF 工具', hash: '', subtitle: 'PDF 合併、拆分、整理頁面，以及塗黑、馬賽克、螢光筆。' },
   { key: 'local', label: '💻 電腦端工具說明', hash: '#local', subtitle: '在你自己的電腦上執行的程式，這裡只提供使用說明。' },
   { key: 'usage', label: '📊 使用紀錄', hash: '#usage', subtitle: '近 30 天內有誰用過 PDF 工具。' },
+  { key: 'liq', label: '🧮 強平價計算機', hash: '#liq', subtitle: '幣安 U 本位永續合約：逐倉、單向持倉的強平價與所需保證金估算。' },
 ];
 
 /** 網址 hash → 分區；不認得的（含舊版 #merge 書籤）一律是 PDF 工具。 */
@@ -37,11 +43,13 @@ export function ToolsPage() {
 
   useEffect(() => setSection(sectionFromHash(location.hash)), [location.hash]);
 
-  // 非管理員永遠只看到 PDF 工具（直接打 #local、#usage 也一樣）。
+  // 非管理員永遠只看到 PDF 工具（直接打 #local、#usage、#liq 也一樣）。
   const shown: ToolsSection = isAdmin ? section : 'pdf';
   const [usageOpened, setUsageOpened] = useState(false);
+  const [liqOpened, setLiqOpened] = useState(false);
   useEffect(() => {
     if (shown === 'usage') setUsageOpened(true);
+    if (shown === 'liq') setLiqOpened(true);
   }, [shown]);
 
   function selectSection(key: ToolsSection) {
@@ -91,6 +99,14 @@ export function ToolsPage() {
           <div hidden={shown !== 'usage'}>
             <PdfUsageLog active={usageOpened} />
           </div>
+          {/* 強平價計算機：第一次切過來才下載程式，之後保持掛載（切走再回來輸入值還在）。 */}
+          {liqOpened && (
+            <div hidden={shown !== 'liq'}>
+              <Suspense fallback={<CenteredSpinner label="載入計算機中…" />}>
+                <LiquidationCalculator />
+              </Suspense>
+            </div>
+          )}
         </>
       )}
     </div>

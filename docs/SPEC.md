@@ -1,6 +1,7 @@
 # 救護科業務管理系統 規格書（SPEC）
 
-> 版本：v1.39.1　建立日期：2026-07-22　最後更新：2026-11-07
+> 版本：v1.40.0　建立日期：2026-07-22　最後更新：2026-11-15
+> v1.40.0：小工具頁新增**「🧮 強平價計算機」分區（只有管理員看得到，`#liq` 直接開）**：幣安 U 本位永續合約逐倉、單向持倉的強平價、依目標強平價反推最少保證金、槓桿 1～20 倍對照表；純瀏覽器計算、不碰資料庫，上次輸入只存在本機 localStorage（使用者 2026-11-15 指定，見 2.10）
 > v1.39.1：解鎖工單的**後續追蹤條列寫得更清楚**（網頁程式沒改，條列文字由本機工具產生，見 TOOLS_SPEC v1.57.2／v1.57.3）——生命徵象寫出時間點（「「生命徵象（到院後）量測時間」10:50 → 11:31」）、受傷部位與指派案號不再「未能判斷」；**勾選框寫出改了哪一個**（使用者 2026-11-07 指定，「「傷病患類別」取消勾選「創傷」」），只寫表上印好的選項，手寫內容不上網頁
 > v1.39：匯出解鎖修改紀錄改成**每個期間一個資料夾**：總表＋「未結案」「已結案」原表資料夾，總表點「編號」就開那一件的解鎖前／結案後原表（使用者 2026-11-03：要用資料夾分類，看總表時才好對照原表）；面板說明跟著改（見 2.8）
 > v1.38：解鎖工單頁分成兩個分頁（管理員才有第二頁）：「解鎖工單」只放鎖定時段、申請表單與工單清單；「比對與匯出」（`#revision`）放立即比對與新的**匯出解鎖修改紀錄**（選期間、預設上個月，可調到日；由救護科電腦產出含修改前後內容的 Excel，**不上雲、網頁不提供下載**）；新增 `unlockControl/revisionReport`（見 2.8、3）
@@ -331,7 +332,7 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 | `/holidays` | （v1.12.2 起併入屬性管理）自動導向 `/categories` | 同上 |
 | `/unlock` | **解鎖工單**（提出申請、查看結果）；管理員多「比對與匯出」分頁（`#revision` 直接開，v1.38） | 需登入且已核准（**三種角色都可以**） |
 | `/triage-tags` | **測試用傷票領取**（v1.21，輸入張數 → 下載 PDF） | 需登入且已核准（**三種角色都可以**） |
-| `/tools` | **小工具**：PDF 工作區（所有人）＋電腦端工具說明、使用紀錄（**僅管理員**，`#local`、`#usage` 直接開）；版面寬度與其他頁相同（1024px，v1.30.2 起） | 需登入且已核准（**三種角色都可以進**，v1.27 起） |
+| `/tools` | **小工具**：PDF 工作區（所有人）＋電腦端工具說明、使用紀錄、強平價計算機（**僅管理員**，`#local`、`#usage`、`#liq` 直接開）；版面寬度與其他頁相同（1024px，v1.30.2 起） | 需登入且已核准（**三種角色都可以進**，v1.27 起） |
 | `/pdf-tools` | （v1.26 的獨立 PDF 工具頁，v1.27 起併入小工具）自動導向 `/tools` | 同上 |
 | `/users` | 使用者管理 | 僅管理員 |
 
@@ -341,7 +342,7 @@ v1.34 起與解鎖專用一樣**只進得去 `/unlock`、`/triage-tags`、`/tool
 進任何路徑都會被導回 `/unlock`。導覽列只看得到「小工具」「解鎖工單」「測試用傷票領取」三個標題。
 守衛做法：`ProtectedRoute` 多一個 `requireTaskSystem` 參數（預設 true），
 `/unlock`、`/triage-tags`、`/tools` 三條路由設為 false，其餘全部沿用預設。
-小工具頁裡「電腦端工具說明」只給管理員，在 `ToolsPage` 內以 `isAdmin` 判斷（使用者 2026-10-27 指定）。
+小工具頁裡「電腦端工具說明」「使用紀錄」「強平價計算機」只給管理員，在 `ToolsPage` 內以 `isAdmin` 判斷（使用者 2026-10-27、2026-11-15 指定）。
 這只是畫面上不顯示：說明文字本身打包在網頁程式裡，GitHub 儲存庫也是公開的，**不可在說明裡寫帳密或個資**。
 前端擋下只是為了不讓人看到一頁載不出資料的畫面，真正的防線仍是 Firestore 規則。
 
@@ -574,11 +575,26 @@ QR code 與條碼的內容都是傷票號碼本身（例 `H00T010`）。
 因此三種角色都能用，可放心處理含個資的救護紀錄與公文。
 
 **小工具頁的分區。** 所有人都看到「PDF 工具」；管理員右上角多一個切換，
-可切到「電腦端工具說明」（即第 4 章的本機工具清單，`#local` 直接開）與「使用紀錄」（v1.29，`#usage` 直接開）。
-非管理員的畫面上完全不渲染那兩區，也沒有切換按鈕。各區同時掛載只切換顯示，
+可切到「電腦端工具說明」（即第 4 章的本機工具清單，`#local` 直接開）、「使用紀錄」（v1.29，`#usage` 直接開）
+與「強平價計算機」（v1.40，`#liq` 直接開）。
+非管理員的畫面上完全不渲染那三區，也沒有切換按鈕；直接打 `#local`、`#usage`、`#liq` 一樣只看到 PDF 工具。各區同時掛載只切換顯示，
 切去看說明或紀錄再回來，PDF 工作區裡的檔案不會消失。舊版的 `#merge` 等書籤一律顯示 PDF 工具。
 小工具頁的寬度與其他頁相同（1024px，左右留白；v1.29～v1.30.1 曾放寬到 1800px，v1.30.2 依使用者要求改回）。
 預覽面板掛在 `body` 上（不在分區容器內），所以切到其他分區時 `PdfToolbox` 收到 `active=false` 會把面板拿掉、還原網頁寬度；切回來面板維持原本開或關。
+
+**強平價計算機（v1.40，使用者 2026-11-15 指定「只有我自己（最高管理者）看得到」）。**
+幣安 USDⓈ-M 永續合約在**逐倉、單向持倉、單一倉位**時的估算工具。
+- **輸入**：方向（做多／做空切換）、開倉價 EP、數量 q、逐倉保證金 M（旁邊「依槓桿帶入」：輸入槓桿 L 自動填 M＝q×EP÷L；
+  槓桿欄有值時改 EP、q 也會重新帶入，自己改 M 就清掉槓桿欄）、目標強平價（選填）；「進階設定」（預設收起）放維持保證金率 MMR（預設 0.5%）與速算額 cum（預設 0）。
+- **公式**（N＝q×EP）：做多 LP＝(N−M−cum)÷(q×(1−MMR))，算出 ≤ 0 顯示「不會被強平」；做空 LP＝(N+M+cum)÷(q×(1+MMR))。
+  反推：做多 M_need＝N−LP×q×(1−MMR)−cum；做空 M_need＝LP×q×(1+MMR)−N−cum，≤ 0 顯示「不需保證金也不會到這個價位」。
+- **輸出**：大字強平價與強平距離（|EP−LP|÷EP）、名目價值與實際槓桿（N÷M）；有目標價時顯示最少保證金與可減少保證金（M−M_need，負數顯示「保證金不足，需再增加 X USDT」），
+  目標價落在開倉價錯的一側時提醒；槓桿 1、2、3、4、5、10、20 倍對照表，有目標價時強平價不會比目標價先到的列綠色、會先到的紅色。
+- 輸入即時計算、數字顯示到小數 2 位，底部提醒「估算值，未計入手續費與資金費率；MMR 依倉位名目價值分級，實際以幣安顯示為準」。
+- **只在瀏覽器計算，不讀寫 Firestore、沒有安全規則異動**；上次輸入存在本機 localStorage（`ems.tools.liquidationCalc.v1`，讀寫失敗不影響使用）。
+- **只有管理員看得到的做法**：分頁按鈕與內容都包在 `isAdmin` 判斷裡；元件以 `React.lazy` 延遲載入，**第一次切到這一區才下載程式**，
+  非管理員的瀏覽器不會下載。注意：網站打包檔與 GitHub 儲存庫是公開的，原始碼本身任何人都看得到（使用者 2026-11-15 知悉並同意），所以不可在程式裡寫任何個人數字。
+- 參數在 `src/config/liquidationCalc.ts`，計算是 `src/lib/liquidationCalc.ts` 的純函式，畫面是 `src/components/LiquidationCalculator.tsx`。
 
 **使用紀錄（v1.29，使用者 2026-10-27 指定「記錄有誰使用過，30 日內」；v1.30 起「有開啟的也記錄」）。**
 每次把檔案加進工作區（一次選多個檔算一筆，動作 `open`）、每按一次下載（四種方式皆是）各寫一筆 `pdfToolUsage`：
@@ -779,7 +795,7 @@ EMS_System/
 │  │                holidays.ts（內建 2026/2027 國定假日清單）、
 │  │                triageTag.ts（測試用傷票的號碼格式、單次上限、分隊名單與每週上限、版面尺寸、色碼）、
 │  │                pdfTools.ts（PDF 工作區的縮圖／大圖尺寸、A4、復原步數、來源色、標記參數、工具列、轉 PDF 小技巧）、
-│  │                localTools.ts（電腦端工具說明清單，僅管理員可見）
+│  │                localTools.ts（電腦端工具說明清單，僅管理員可見）、liquidationCalc.ts（強平價計算機的預設值與對照表倍數，v1.40）
 │  ├─ lib/          firebase.ts、taskLogic.ts、workday.ts（工作日計算）、holidayCsv.ts（日曆表解析）、
 │  │                recurrence.ts、checklistLogic.ts、permissions.ts、
 │  │                triageTagNumber.ts（號碼換算）、triageTagDraw.ts（傷票繪圖）、triageTagPdf.ts（排版成 PDF）、
@@ -787,14 +803,15 @@ EMS_System/
 │  │                pdfPageLogic.ts（頁碼與檔名）、pdfEngine.ts（讀檔、圖片轉 PDF、打包）、pdfRender.ts（繪圖）、
 │  │                pdfMarkPaint.ts（標記繪圖）、pdfWorkspaceExport.ts（輸出）、pdfUsageLogic.ts（使用紀錄彙總）、
 │  │                unlockLockLogic.ts（解鎖工單鎖定時段的月份換算與判斷，純函式，v1.32）、
-│  │                userGrouping.ts（使用者管理的分頁與角色分組，v1.36）、revisionCheckLogic.ts（立即比對／匯出的階段判斷與期間計算，v1.37、v1.38）
+│  │                userGrouping.ts（使用者管理的分頁與角色分組，v1.36）、revisionCheckLogic.ts（立即比對／匯出的階段判斷與期間計算，v1.37、v1.38）、
+│  │                liquidationCalc.ts（逐倉強平價與所需保證金，純函式，v1.40）
 │  ├─ services/     authService、taskService、categoryService、checklistTemplateService、
 │  │                userService、holidayService、unlockRequestService、unlockPolicyService（v1.32）、revisionCheckService（v1.37）、triageTagService、pdfToolUsageService
 │  ├─ hooks/        useAuth、useTasks、useCategories、useChecklistTemplates、useHolidays、usePdfWorkspace、usePdfToolUsage
 │  ├─ context/      authContext、AuthProvider
 │  ├─ components/   Layout、ProtectedRoute、ReminderPanel、TaskForm、HolidaySettings、
 │  │                ProgressSection、ChecklistSection、ChecklistTemplateBar、
-│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、UnlockLockPanel（v1.32）、RevisionCheckPanel（v1.37）、RevisionReportPanel（v1.38）、ui；
+│  │                CompletionSection、LocalToolsGuide、PdfUsageLog、UnlockLockPanel（v1.32）、RevisionCheckPanel（v1.37）、RevisionReportPanel（v1.38）、LiquidationCalculator（v1.40）、ui；
 │  │                pdf/（PdfToolbox 工作區與檔案列、工具列、頁面清單、側邊預覽面板、大圖、下載區、共用元件）
 │  └─ pages/        LoginPage、RegisterPage、PendingApprovalPage、HomePage、NewTaskPage、
 │                   TaskDetailPage、CategoriesPage、ChecklistTemplatesPage、ToolsPage、UsersPage、
