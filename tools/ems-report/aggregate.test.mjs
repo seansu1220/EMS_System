@@ -13,6 +13,7 @@ import {
   groupByBrigade,
   sortByRatioDesc,
   applyAdjustments,
+  includeAllSquads,
 } from './aggregate.mjs';
 import { findHeaderRowIndex } from './workbook.mjs';
 
@@ -208,4 +209,19 @@ test('applyAdjustments 不會產生負數分母', () => {
   const result = applyAdjustments(stats, new Map([['桃園分隊', 10]]));
   assert.equal(result.stats[0].totalCount, 0);
   assert.equal(result.stats[0].ratio, null, '分母為 0 時不做除法');
+});
+
+test('includeAllSquads：0 件的分隊也列出來，比率是 null、排在最後，不影響加總', () => {
+  // 使用者 2026-11-13：2026-10 心電圖報表沒有新坡、永安，以為是漏了。
+  const brigades = [{ name: '第三大隊', squads: ['大園分隊', '新坡分隊'] }];
+  const stats = [{ squad: '大園分隊', totalCount: 10, alertCount: 9, ratio: 0.9 }];
+  const listed = includeAllSquads(stats, brigades);
+  assert.equal(listed.length, 2);
+  assert.deepEqual(listed[1], { squad: '新坡分隊', totalCount: 0, alertCount: 0, ratio: null });
+  assert.equal(formatRatio(listed[1].ratio), '—');
+  assert.equal(sortByRatioDesc(listed).at(-1).squad, '新坡分隊');
+  const total = summarize(listed);
+  assert.equal(total.totalCount, 10);
+  assert.equal(total.alertCount, 9);
+  assert.equal(includeAllSquads(stats, brigades)[0], stats[0], '原本的資料不動');
 });

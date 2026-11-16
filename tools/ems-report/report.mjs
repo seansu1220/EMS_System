@@ -160,7 +160,8 @@ function buildSheet(workbook, sheetName, title, stats, profile) {
   applyGridStyle(headerRow, REPORT_FORMAT.fontSize, columnCount);
 
   for (const stat of stats) {
-    const row = sheet.addRow([stat.squad, stat.alertCount, stat.totalCount, stat.ratio]);
+    // 0 件的分隊比率是 null：寫「—」而不是留白，一看就知道是「沒有案件」不是漏填（2026-11-13）。
+    const row = sheet.addRow([stat.squad, stat.alertCount, stat.totalCount, stat.ratio ?? '—']);
     // 比率以數值寫入並套百分比格式，使用者可直接在 Excel 內再排序或製圖。
     row.getCell(columnCount).numFmt = REPORT_FORMAT.ratioNumberFormat;
     row.height = REPORT_FORMAT.rowHeight;

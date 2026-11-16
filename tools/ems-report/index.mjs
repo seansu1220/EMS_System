@@ -68,6 +68,7 @@ import {
   countUnionBySquad,
   rowsNotIn,
   buildComparison,
+  includeAllSquads,
   groupByBrigade,
   sortByRatioDesc,
   applyAdjustments,
@@ -377,14 +378,16 @@ async function runReportFlow(session, monthRange, keepRaw) {
     log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
   }
 
-  const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
+  // 0 件的分隊也列出來（使用者 2026-11-13 要求），讓大家知道不是漏掉。
+  const listedStats = includeAllSquads(stats, BRIGADES);
+  const { rows: groupedRows, unmapped } = groupByBrigade(listedStats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
   if (unmapped.length > 0) {
     log.warn(
       `有 ${unmapped.length} 個單位不在大隊對應表內，已歸入「${REPORT_FORMAT.unmappedGroupName}」：` +
         `${unmapped.join('、')}。若是新設或改隸分隊，請更新 config.mjs 的 BRIGADES。`,
     );
   }
-  const sortedStats = sortByRatioDesc(stats);
+  const sortedStats = sortByRatioDesc(listedStats);
 
   printReport(groupedRows, sortedStats, monthRange);
   await writeReport(groupedRows, sortedStats, monthRange);
@@ -930,7 +933,9 @@ async function runEkgFlow(session, monthRange, options) {
   warnIfNumeratorExceedsDenominator(denominatorCounts, verifiedCounts);
   if (stats.length === 0) log.warn('查詢結果沒有任何案件，請確認查詢期間是否正確。');
 
-  const { rows: groupedRows, unmapped } = groupByBrigade(stats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
+  // 0 件的分隊也列出來（使用者 2026-11-13 要求），讓大家知道不是漏掉。
+  const listedStats = includeAllSquads(stats, BRIGADES);
+  const { rows: groupedRows, unmapped } = groupByBrigade(listedStats, BRIGADES, REPORT_FORMAT.unmappedGroupName);
   if (unmapped.length > 0) {
     log.warn(
       `有 ${unmapped.length} 個單位不在大隊對應表內，已歸入「${REPORT_FORMAT.unmappedGroupName}」：`
@@ -938,7 +943,7 @@ async function runEkgFlow(session, monthRange, options) {
     );
   }
 
-  const sortedStats = sortByRatioDesc(stats);
+  const sortedStats = sortByRatioDesc(listedStats);
   printReport(groupedRows, sortedStats, monthRange, profile);
   // 分子不完整時**不寫檔**：一份每個分隊都是 0.0% 的 xlsx 看起來跟正式報表一模一樣，
   // 擺在 out/report/ 裡遲早會被誤當成真的寄出去。終端機上的表格照印，

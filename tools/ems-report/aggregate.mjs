@@ -326,6 +326,26 @@ export function groupByBrigade(stats, brigades, unmappedGroupName) {
 }
 
 /**
+ * 把大隊對照表裡有、但這個月**一件都沒有**的分隊補成 0 件（純函式，2026-11-13 加）。
+ *
+ * 使用者 2026-11-13 要求：「之後把零件的也列出來讓大家都知道」——
+ * 2026-10 心電圖報表沒有新坡、永安兩個分隊，使用者第一個反應是「為什麼漏了」。
+ * 0 件的比率是 `null`（顯示「—」），排序時排在最後；不影響任何加總。
+ *
+ * @param {SquadStat[]} stats
+ * @param {readonly {name: string, squads: readonly string[]}[]} brigades
+ * @returns {SquadStat[]} 新陣列（原本的在前，補上的 0 件在後）
+ */
+export function includeAllSquads(stats, brigades) {
+  const present = new Set(stats.map((item) => item.squad));
+  const zeros = brigades
+    .flatMap((brigade) => brigade.squads)
+    .filter((squad) => !present.has(squad))
+    .map((squad) => ({ squad, totalCount: 0, alertCount: 0, ratio: null }));
+  return [...stats, ...zeros];
+}
+
+/**
  * 依到院前預警率由高到低排序（比率相同時，案件多的在前，再相同則依名稱）。
  * @param {SquadStat[]} stats
  * @returns {SquadStat[]} 新陣列，不變動輸入
