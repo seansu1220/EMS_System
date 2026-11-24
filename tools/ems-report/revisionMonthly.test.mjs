@@ -96,8 +96,8 @@ test('判斷得出欄位時一個欄位一列，原內容與修改後都是完�
     option: null,
   }, 2000);
   assert.deepEqual(rows, [
-    { field: '傷病患姓名', before: '王小明', after: '王曉明' },
-    { field: '身分證字號', before: 'A123456789', after: 'A123456780' },
+    { field: '傷病患姓名', before: '王小明', after: '王曉明', detail: '' },
+    { field: '身分證字號', before: 'A123456789', after: 'A123456780', detail: '' },
   ]);
 });
 
@@ -105,14 +105,14 @@ test('判斷不出欄位時整段照列，欄位寫明', () => {
   const [row] = toChangeRows({
     kind: 'value', before: ['舊的'], after: ['新的'], fields: [], fieldSource: 'unknown', segments: [], option: null,
   }, 2000);
-  assert.deepEqual(row, { field: '未能判斷欄位', before: '舊的', after: '新的' });
+  assert.deepEqual(row, { field: '未能判斷欄位', before: '舊的', after: '新的', detail: '' });
 });
 
 test('勾選框寫出是哪一項；看不出勾沒勾時照原文、空白寫「（空白）」', () => {
   const [row] = toChangeRows({
     kind: 'checkbox', before: ['□'], after: [], fields: [], fieldSource: 'unknown', segments: [], option: '意識不清',
   }, 2000);
-  assert.deepEqual(row, { field: '更動勾選「意識不清」', before: '□', after: '（空白）' });
+  assert.deepEqual(row, { field: '更動勾選「意識不清」', before: '□', after: '（空白）', detail: '' });
 });
 
 test('太長的內容會截斷', () => {
@@ -130,7 +130,10 @@ test('每一件已結案在修改內容分頁至少一列：沒改動、讀不�
     { entry: entry({ temsis: 'C' }), rows: null, error: '找不到 after.pdf' },
   ]);
   assert.deepEqual(rows.map((row) => row.slice(0, 2)), [['01', 'A'], ['02', 'B'], ['03', 'C']]);
-  assert.deepEqual(rows[0].slice(4), [1, '血壓', '120/80', '130/85']);
+  assert.deepEqual(rows[0].slice(4), [1, '血壓', '120/80', '130/85', '']);
+  assert.equal(rows[0].length, 9);
+  assert.equal(rows[1].length, 9);
+  assert.equal(rows[2].length, 9);
   assert.equal(rows[1][5], '（解鎖後沒有改動任何內容）');
   assert.equal(rows[2][5], '（讀不到本機的紀錄表檔案，無法列出）');
 });
@@ -218,5 +221,48 @@ test('生命徵象的勾選寫出時間點與欄位', () => {
     kind: 'checkbox', before: ['■'], after: ['□'], fields: ['生命徵象（送醫途中）意識狀況'],
     fieldSource: 'inline', segments: [], option: '清', checkAction: 'unchecked', checkedBefore: true, checkedAfter: false,
   }, 2000);
-  assert.deepEqual(row, { field: '生命徵象（送醫途中）意識狀況：取消勾選「清」', before: '已勾選', after: '未勾選' });
+  assert.deepEqual(row, { field: '生命徵象（送醫途中）意識狀況：取消勾選「清」', before: '已勾選', after: '未勾選', detail: '' });
+});
+
+test('補述這類長文字只改一兩處：「改了哪裡」一處一行；原內容被截斷，後面改的地方照樣列得出', () => {
+  const unchanged = '患者自述騎機車自摔，'.repeat(10);
+  const [row] = toChangeRows({
+    kind: 'value',
+    before: [`${unchanged}左膝擦傷約3公分`],
+    after: [`${unchanged}右膝擦傷約12公分`],
+    fields: ['補述欄'],
+    fieldSource: 'inline',
+    segments: [{ label: '補述欄', before: `${unchanged}左膝擦傷約3公分`, after: `${unchanged}右膝擦傷約12公分` }],
+    option: null,
+  }, 60);
+  assert.equal(row.before, `${unchanged.slice(0, 60)}…（後面省略）`);
+  assert.equal(row.detail, ['‧ 在「騎機車自摔，」後面：「左」改成「右」', '‧ 在「膝擦傷約」後面：「3」改成「12」'].join('\n'));
+});
+
+test('判斷不出欄位的長文字也寫「改了哪裡」；整段重寫寫一句', () => {
+  const [edited] = toChangeRows({
+    kind: 'value', before: ['到院前已給予氧氣面罩', '10L/min 並保暖'], after: ['到院前已給予氧氣面罩', '15L/min 並保暖'],
+    fields: [], fieldSource: 'unknown', segments: [], option: null,
+  }, 2000);
+  assert.equal(edited.detail, '‧ 在「給予氧氣面罩」後面：「10L」改成「15L」');
+  const [rewritten] = toChangeRows({
+    kind: 'value', before: ['家屬代訴患者今日早上起床後即無法言語'], after: ['119 派遣後抵達現場發現患者倒臥在浴室地板'],
+    fields: ['補述欄'], fieldSource: 'nearby', segments: [], option: null,
+  }, 2000);
+  assert.equal(rewritten.detail, '整段改寫，請直接對照前後兩段內容');
+});
+
+test('修改內容分頁最後一欄是「改了哪裡」，自動換行', () => {
+  const workbook = buildRevisionReportWorkbook(OCTOBER, {
+    open: [],
+    closed: [{
+      entry: entry({ temsis: 'DONE1' }),
+      rows: [{ field: '補述欄', before: '舊', after: '新', detail: '‧ 在「車禍後」後面：「左」改成「右」' }],
+      error: null,
+    }],
+  }, null);
+  const sheet = workbook.getWorksheet('已結案-修改內容');
+  assert.equal(sheet.getCell('I2').value, '改了哪裡');
+  assert.equal(sheet.getCell('I3').value, '‧ 在「車禍後」後面：「左」改成「右」');
+  assert.equal(sheet.getColumn(9).alignment?.wrapText, true);
 });

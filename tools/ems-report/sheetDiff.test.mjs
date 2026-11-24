@@ -333,3 +333,31 @@ test('PDF 斷行切出的半句選項，網頁上換成顯示名稱', () => {
   const changes = describeChanges(build('□'), build('■'), CONFIG);
   assert.deepEqual(toCloudItems(changes, CONFIG).items, ['「拒絕送醫」勾選「拒醫療聲明」']);
 });
+
+test('本機報告：文字欄位只改一兩處時列出「改了哪裡」；雲端版照舊只寫欄位名，不帶任何內容', () => {
+  const label = at(170, 716, '補述欄');
+  const before = [label, at(179, 632, '患者自述騎機車自摔，左膝擦傷約3公分，意識清楚')];
+  const after = [label, at(179, 632, '患者自述騎機車自摔，右膝擦傷約12公分，意識清楚')];
+  const changes = describeChanges(before, after, CONFIG);
+  const report = formatLocalReport({
+    temsis: 'T', caseDate: null, vehicle: null, squad: null, remark: 'v1',
+    unlockedAt: 'a', comparedAt: 'b', backupFile: 'x', closedFile: 'y',
+  }, changes, CONFIG);
+  assert.match(report, /改了哪裡（共 2 處）：/);
+  assert.match(report, /‧ 在「騎機車自摔，」後面：「左」改成「右」/);
+  assert.match(report, /‧ 在「膝擦傷約」後面：「3」改成「12」/);
+  const cloud = toCloudItems(changes, CONFIG);
+  assert.deepEqual(cloud.items, ['更正「補述欄」']);
+  assert.doesNotMatch(JSON.stringify(cloud), /膝|擦傷|改成/);
+});
+
+test('本機報告：勾選框與短到一眼看得出的不寫「改了哪裡」', () => {
+  const meta = {
+    temsis: 'T', caseDate: null, vehicle: null, squad: null, remark: 'v1',
+    unlockedAt: 'a', comparedAt: 'b', backupFile: 'x', closedFile: 'y',
+  };
+  const checkbox = describeChanges(sheet([at(280, 517, '□ 保暖')]), sheet([at(280, 517, '■ 保暖')]), CONFIG);
+  assert.doesNotMatch(formatLocalReport(meta, checkbox, CONFIG), /改了哪裡/);
+  const name = describeChanges(sheet([at(155, 95, MEAN_NAME)]), sheet([at(155, 95, '王大明')]), CONFIG);
+  assert.doesNotMatch(formatLocalReport(meta, name, CONFIG), /改了哪裡/);
+});

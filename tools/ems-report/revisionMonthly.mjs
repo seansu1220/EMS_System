@@ -5,7 +5,8 @@
  *   1. 摘要：期間、解鎖件數、未結案／已結案件數、有改動的件數
  *   2. 未結案：哪幾件解鎖後還沒結案（含最近一次確認的救護狀態、申請事由）
  *   3. 已結案-申請事由：已結案的每一件，申請人輸入的事由與修改處數
- *   4. 已結案-修改內容：已結案的每一件改了哪裡（**原內容 → 修改後的內容**，一處一列）
+ *   4. 已結案-修改內容：已結案的每一件改了哪裡（**原內容 → 修改後的內容**，一處一列；
+ *      v1.59.0 起再加「改了哪裡」逐字差異，例如 `在「車禍後」後面：「左」改成「右」`）
  *
  * 期間以**解鎖時間**（追蹤清單的 `unlockedAt`，本機時區）判斷，起訖日都含。
  * 結案前又解鎖一次的（`superseded`）不列，以最後一次解鎖為準，免得同一件出現兩次。
@@ -35,6 +36,7 @@ import { readLocalSheetItems } from './revisionCheck.mjs';
 import { loadTracker, localDateKey } from './revisionTrack.mjs';
 import { TRACKER_FILE, organizeRevisionFiles, revisionFilePath } from './revisionFiles.mjs';
 import { checkActionText, describeChanges } from './sheetDiff.mjs';
+import { describeTextDiff, diffText } from './textDiff.mjs';
 import { maskCode } from './sheetFields.mjs';
 import {
   fetchRequestDetails,
@@ -50,7 +52,7 @@ export const OPEN_COLUMNS = [
 export const REASON_COLUMNS = [
   '編號', 'TEMSIS', '案件日期', '出勤車輛', '分隊', '申請人', '申請事由', '解鎖時間', '比對時間', '修改處數',
 ];
-export const CHANGE_COLUMNS = ['編號', 'TEMSIS', '案件日期', '出勤車輛', '項次', '欄位', '原內容', '修改後內容'];
+export const CHANGE_COLUMNS = ['編號', 'TEMSIS', '案件日期', '出勤車輛', '項次', '欄位', '原內容', '修改後內容', '改了哪裡'];
 
 /** 編號欄的超連結樣式（跟 Excel 內建的超連結一樣藍色底線）。 */
 const LINK_FONT = { color: { argb: 'FF0563C1' }, underline: true };
@@ -69,6 +71,7 @@ const OPEN_STATES = ['waiting', 'expired', 'gaveUp'];
  * @property {string} field 欄位（判斷不出時寫明）
  * @property {string} before 原內容
  * @property {string} after 修改後內容
+ * @property {string} detail 改了哪裡（逐字差異，v1.59.0）；勾選框、短到一眼看得出的寫空字串
  */
 
 /**
@@ -152,17 +155,37 @@ function clipCell(text, maxLength) {
 }
 
 /**
+ * 「改了哪裡」那一格（純函式，v1.59.0）：逐字差異一處一行，整段改寫、太長各一句；不必說明時空白。
+ * 用完整內容比（不是截斷過的那一格），原內容太長被截掉時，後面改的地方照樣列得出來。
+ *
+ * @param {string} beforeText
+ * @param {string} afterText
+ * @param {import('./textDiff.mjs').TextDiffConfig} textDiffConfig
+ * @param {number} maxLength 一格最多幾個字
+ * @returns {string}
+ */
+function describeDetail(beforeText, afterText, textDiffConfig, maxLength) {
+  const result = diffText(beforeText, afterText, textDiffConfig);
+  const sentences = describeTextDiff(result, textDiffConfig);
+  const text = result.kind === 'edits' ? sentences.map((sentence) => `‧ ${sentence}`).join('\n') : sentences[0] ?? '';
+  return clipCell(text, maxLength);
+}
+
+/**
  * 一處不同 → 報表上的列（純函式）。
  *
  * 判斷得出欄位（`inline`）而且有逐欄的改前改後時，一個欄位一列，最好讀；
  * 否則整段原文照列，欄位寫「附近」或「未能判斷欄位」，交給人判斷。
+ * 填值的列另外寫「改了哪裡」（逐字差異）；勾選框不寫（改的是勾沒勾）。
  *
  * @param {import('./sheetDiff.mjs').SheetChange} change
  * @param {number} maxLength 一格最多幾個字
+ * @param {import('./textDiff.mjs').TextDiffConfig} [textDiffConfig] 預設 `UNLOCK.revision.textDiff`
  * @returns {ChangeRow[]}
  */
-export function toChangeRows(change, maxLength) {
-  const show = (parts) => clipCell(parts.filter(Boolean).join(' ').trim(), maxLength) || '（空白）';
+export function toChangeRows(change, maxLength, textDiffConfig = UNLOCK.revision.textDiff) {
+  const joined = (parts) => parts.filter(Boolean).join(' ').trim();
+  const show = (parts) => clipCell(joined(parts), maxLength) || '（空白）';
   if (change.kind === 'checkbox') {
     // 區塊（非創傷、生命徵象（送醫途中）意識狀況…）判斷得出就寫在前面；看得出有沒有勾就寫「已勾選／未勾選」。
     const block = change.fields.length > 0 ? `${change.fields.join('、')}：` : '';
@@ -172,6 +195,7 @@ export function toChangeRows(change, maxLength) {
       field: `${block}${checkActionText(change.checkAction)}${option}`,
       before: state(change.checkedBefore, change.before),
       after: state(change.checkedAfter, change.after),
+      detail: '',
     }];
   }
   if (change.fieldSource === 'inline' && change.segments.length > 0) {
@@ -179,12 +203,18 @@ export function toChangeRows(change, maxLength) {
       field: segment.label,
       before: show([segment.before]),
       after: show([segment.after]),
+      detail: describeDetail(segment.before, segment.after, textDiffConfig, maxLength),
     }));
   }
   const field = change.fieldSource === 'unknown' || change.fields.length === 0
     ? '未能判斷欄位'
     : `${change.fields.join('、')}${change.fieldSource === 'nearby' ? '（附近）' : ''}`;
-  return [{ field, before: show(change.before), after: show(change.after) }];
+  return [{
+    field,
+    before: show(change.before),
+    after: show(change.after),
+    detail: describeDetail(joined(change.before), joined(change.after), textDiffConfig, maxLength),
+  }];
 }
 
 /** 申請人與事由（純函式）：線上工單從雲端補讀，本機手動解鎖的沒有事由。 */
@@ -241,9 +271,9 @@ export function buildReasonRows(closed, details) {
 export function buildChangeRows(closed) {
   return closed.flatMap(({ entry, rows, error }, index) => {
     const head = [caseNumber(index, closed.length), entry.temsis, entry.caseDate ?? '', entry.vehicle ?? ''];
-    if (!rows) return [[...head, '', '（讀不到本機的紀錄表檔案，無法列出）', error ?? '', '']];
-    if (rows.length === 0) return [[...head, '', '（解鎖後沒有改動任何內容）', '', '']];
-    return rows.map((row, index) => [...head, index + 1, row.field, row.before, row.after]);
+    if (!rows) return [[...head, '', '（讀不到本機的紀錄表檔案，無法列出）', error ?? '', '', '']];
+    if (rows.length === 0) return [[...head, '', '（解鎖後沒有改動任何內容）', '', '', '']];
+    return rows.map((row, index) => [...head, index + 1, row.field, row.before, row.after, row.detail ?? '']);
   });
 }
 
@@ -352,10 +382,10 @@ export function buildRevisionReportWorkbook(range, cases, details) {
   linkCaseNumbers(reasonSheet, caseFolders.closed);
   const changeSheet = buildListSheet(
     workbook, '已結案-修改內容', '已結案的修改內容（原內容 → 修改後的內容）',
-    CHANGE_COLUMNS, buildChangeRows(cases.closed), { wideColumns: ['原內容', '修改後內容'] },
+    CHANGE_COLUMNS, buildChangeRows(cases.closed), { wideColumns: ['原內容', '修改後內容', '改了哪裡'] },
   );
-  // 原內容可能很長，開自動換行才看得到全部。
-  for (const column of ['原內容', '修改後內容']) {
+  // 原內容可能很長、改了哪裡一處一行，開自動換行才看得到全部。
+  for (const column of ['原內容', '修改後內容', '改了哪裡']) {
     changeSheet.getColumn(CHANGE_COLUMNS.indexOf(column) + 1).alignment = { wrapText: true, vertical: 'top' };
   }
   linkCaseNumbers(changeSheet, caseFolders.closed);

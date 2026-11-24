@@ -24,12 +24,15 @@
  *      依位置對到區塊（`layout.checkboxGroups`），寫成「「傷病患類別」取消勾選「創傷」」
  *
  * 產出兩種版本：
- *   - **本機版**：完整的改前改後（含病患資料，只寫進 `out/internal/`）
+ *   - **本機版**：完整的改前改後（含病患資料，只寫進 `out/internal/`）；v1.59.0 起文字欄位再加逐字的
+ *     「改了哪裡」（`textDiff.mjs`）
  *   - **雲端版**：只寫欄位名；勾選框只有落在已知區塊、而且選項在印好的選項白名單（`checkboxPrintedOptions`）裡，
  *     才寫出選項與勾選／取消勾選（擋手寫內容靠白名單，不是區塊），
  *     其他勾選只寫「有 N 個勾選項目有更動」；
  *     只有白名單欄位（時間、檢傷、生命徵象）、而且值看起來只是數字或分級時，才寫改前改後
  */
+
+import { describeTextDiff, diffText } from './textDiff.mjs';
 
 /**
  * @typedef {import('./pdfText.mjs').PdfTextItem} PdfTextItem
@@ -644,12 +647,31 @@ export function toCloudItems(changes, config) {
 }
 
 /**
+ * 一處填值改動的「改了哪裡」幾行（本機報告用，**含病患資料**；v1.59.0）。
+ * 逐字差異用的是完整內容（不是截斷過的那一行），所以就算原文超過一行的上限被截掉，後面改的地方也列得出來。
+ * 勾選框不比（改的是勾沒勾，不是字）。
+ *
+ * @param {SheetChange} change
+ * @param {import('./textDiff.mjs').TextDiffConfig} textDiffConfig
+ * @returns {string[]} 不必說明時是空陣列
+ */
+function textDiffReportLines(change, textDiffConfig) {
+  if (change.kind === 'checkbox') return [];
+  const joined = (parts) => parts.filter(Boolean).join(' ');
+  const result = diffText(joined(change.before), joined(change.after), textDiffConfig);
+  const sentences = describeTextDiff(result, textDiffConfig);
+  if (sentences.length === 0) return [];
+  if (result.kind !== 'edits') return [`   改了哪裡：${sentences[0]}`];
+  return [`   改了哪裡（共 ${result.edits.length} 處）：`, ...sentences.map((sentence) => `     ‧ ${sentence}`)];
+}
+
+/**
  * 本機版的差異報告（**含病患資料**，只能寫進 `out/internal/`）。
  *
  * @param {{temsis: string, caseDate: string|null, vehicle: string|null, squad: string|null,
  *   remark: string, unlockedAt: string, comparedAt: string, backupFile: string, closedFile: string}} meta
  * @param {SheetChange[]} changes
- * @param {{reportMaxLineLength: number}} config
+ * @param {{reportMaxLineLength: number, textDiff: import('./textDiff.mjs').TextDiffConfig}} config
  * @returns {string}
  */
 export function formatLocalReport(meta, changes, config) {
@@ -686,6 +708,7 @@ export function formatLocalReport(meta, changes, config) {
     }
     lines.push(`   解鎖前：${show(change.before)}`);
     lines.push(`   結案後：${show(change.after)}`);
+    lines.push(...textDiffReportLines(change, config.textDiff));
     lines.push('');
   }
   return `${lines.join('\n')}\n`;
